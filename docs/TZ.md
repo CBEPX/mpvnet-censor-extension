@@ -810,6 +810,7 @@ CensorPlayer\
 P0 имеет presets:
 
 - `Strong`: `sigma = 30`, `steps = 2`;
+- `Balanced`: `sigma = 40`, `steps = 2`;
 - `Maximum`: `sigma = 50`, `steps = 3`.
 
 ---

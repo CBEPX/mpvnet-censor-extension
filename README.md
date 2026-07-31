@@ -36,8 +36,10 @@ mpv.net requires the directory and primary DLL to have the same
 `CensorExtension` name. Merge [examples/input.conf](examples/input.conf) into
 your mpv.net `input.conf`, then press `Ctrl+Alt+c`.
 
-The tool window supports file picking, drag-and-drop, reload, and disabling the
-current session. You can also use:
+The tool window supports file picking, drag-and-drop, reload, disabling the
+current session, and live selection between `Strong (30/2)`,
+`Balanced (40/2)`, and `Maximum (50/3)` blur presets. `Balanced` is the
+default. You can also use:
 
 ```text
 script-message-to censor censor-open

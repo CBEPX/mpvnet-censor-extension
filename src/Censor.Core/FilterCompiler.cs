@@ -3,7 +3,14 @@ using System.Text;
 
 namespace Censor.Core;
 
-public sealed record BlurSettings(double Sigma = 50, int Steps = 3);
+public sealed record BlurSettings(double Sigma = 40, int Steps = 2)
+{
+    public static BlurSettings Strong { get; } = new(30, 2);
+
+    public static BlurSettings Balanced { get; } = new();
+
+    public static BlurSettings Maximum { get; } = new(50, 3);
+}
 
 public sealed record FilterChunk(string Label, string Filter);
 

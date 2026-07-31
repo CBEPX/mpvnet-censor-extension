@@ -4,9 +4,22 @@ namespace Censor.MpvNet.Extension;
 
 internal sealed class CensorWindow : Form
 {
+    private static readonly (string Label, BlurSettings Settings)[] BlurPresets =
+    [
+        ("Strong (30 / 2)", BlurSettings.Strong),
+        ("Balanced (40 / 2)", BlurSettings.Balanced),
+        ("Maximum (50 / 3)", BlurSettings.Maximum),
+    ];
+
     private readonly Label _media = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
     private readonly Label _schedule = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
     private readonly Label _status = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
+    private readonly ComboBox _blurPreset = new()
+    {
+        AccessibleName = "Blur preset",
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 170,
+    };
     private readonly DataGridView _intervals = new()
     {
         AllowUserToAddRows = false,
@@ -38,6 +51,10 @@ internal sealed class CensorWindow : Form
         load.Click += (_, _) => SelectSchedule();
         reload.Click += (_, _) => ReloadRequested?.Invoke();
         disable.Click += (_, _) => DisableRequested?.Invoke();
+        _blurPreset.Items.AddRange(BlurPresets.Select(preset => preset.Label).ToArray());
+        _blurPreset.SelectedIndex = 1;
+        _blurPreset.SelectedIndexChanged += (_, _) =>
+            BlurPresetSelected?.Invoke(BlurPresets[_blurPreset.SelectedIndex].Settings);
 
         var buttons = new FlowLayoutPanel
         {
@@ -45,7 +62,14 @@ internal sealed class CensorWindow : Form
             Dock = DockStyle.Fill,
             FlowDirection = FlowDirection.LeftToRight,
         };
-        buttons.Controls.AddRange([load, reload, disable]);
+        buttons.Controls.AddRange(
+        [
+            load,
+            reload,
+            disable,
+            new Label { AutoSize = true, Margin = new(12, 8, 3, 0), Text = "Blur:" },
+            _blurPreset,
+        ]);
 
         var layout = new TableLayoutPanel
         {
@@ -82,6 +106,8 @@ internal sealed class CensorWindow : Form
     public event Action? ReloadRequested;
 
     public event Action? DisableRequested;
+
+    public event Action<BlurSettings>? BlurPresetSelected;
 
     public void UpdateState(
         string? mediaPath,

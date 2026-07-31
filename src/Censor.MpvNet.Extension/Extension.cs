@@ -24,6 +24,7 @@ public sealed class Extension : IExtension, IDisposable
     private readonly System.Threading.Timer _watchdog;
     private CancellationTokenSource _sessionCancellation = new();
     private ActiveSchedule? _activeSchedule;
+    private BlurSettings _blurSettings = BlurSettings.Balanced;
     private string? _currentMediaPath;
     private CensorWindow? _window;
     private Thread? _windowThread;
@@ -281,7 +282,10 @@ public sealed class Extension : IExtension, IDisposable
                     document.Metadata.LeadOutMs ?? defaults.LeadOutMs,
                     document.Metadata.OffsetMs ?? defaults.OffsetMs,
                     defaults.MergeGapMs));
-            var plan = FilterCompiler.Compile(normalized, new());
+            BlurSettings blurSettings;
+            lock (_stateLock)
+                blurSettings = _blurSettings;
+            var plan = FilterCompiler.Compile(normalized, blurSettings);
             token.ThrowIfCancellationRequested();
             if (plan.Chunks.Count == 0)
             {
@@ -420,6 +424,20 @@ public sealed class Extension : IExtension, IDisposable
         LoadManualSchedule(path);
     }
 
+    private void ChangeBlurPreset(BlurSettings settings)
+    {
+        lock (_stateLock)
+        {
+            if (_blurSettings == settings)
+                return;
+
+            _blurSettings = settings;
+        }
+
+        if (_activeSchedule is not null)
+            ReloadSchedule();
+    }
+
     private void DisableSchedule()
     {
         if (StartNewOperation() is null)
@@ -525,6 +543,12 @@ public sealed class Extension : IExtension, IDisposable
                                 var extension = (Extension)state!;
                                 extension.RunSafely(extension.DisableSchedule);
                             }, this);
+                        window.BlurPresetSelected += settings =>
+                            ThreadPool.QueueUserWorkItem(static state =>
+                            {
+                                var (extension, selectedSettings) = ((Extension, BlurSettings))state!;
+                                extension.RunSafely(() => extension.ChangeBlurPreset(selectedSettings));
+                            }, (this, settings));
                         window.Shown += (_, _) =>
                         {
                             if (Volatile.Read(ref _stopping) != 0)

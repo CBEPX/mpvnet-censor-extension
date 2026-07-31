@@ -17,8 +17,11 @@ Actions cannot provide.
 
 - [ ] `Ctrl+Alt+c` opens one responsive tool window.
 - [ ] Picker and drag-and-drop load TXT, SRT, and WebVTT.
-- [ ] A labeled `@censor_blur_000` filter with `gblur=sigma=50:steps=3`
+- [ ] A labeled `@censor_blur_000` filter with the default
+  `gblur=sigma=40:steps=2`
   appears in `vf` readback.
+- [ ] The blur selector re-applies the active schedule as `Strong (30/2)`,
+  `Balanced (40/2)`, and `Maximum (50/3)` without removing user filters.
 - [ ] A pre-existing user video filter survives apply, disable, and recovery.
 - [ ] Blur starts at `start_ms` and is absent at exact `end_ms`.
 - [ ] FFmpeg `t` matches mpv `time-pos` for normal media and non-zero start time.
@@ -36,7 +39,8 @@ Actions cannot provide.
 
 - [ ] 1,000 intervals parse, normalize, and compile within 250 ms.
 - [ ] Warm picker-to-summary flow completes within 500 ms.
-- [ ] Blur is usable at 1080p30, 1080p60, and 4K30 on target GPUs.
+- [ ] Default `Balanced` blur is usable at 1080p30, 1080p60, and 4K30;
+  dropped frames are recorded for all three presets.
 - [ ] Software decoding fallback is documented.
 - [ ] OBS Window Capture receives the already blurred frame.
 

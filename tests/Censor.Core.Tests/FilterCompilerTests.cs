@@ -15,7 +15,7 @@ public sealed class FilterCompilerTests
 
             var plan = FilterCompiler.Compile(
                 [new(1_250, 2_500), new(4_000, 5_001)],
-                new(Sigma: 30, Steps: 2));
+                BlurSettings.Strong);
 
             var chunk = Assert.Single(plan.Chunks);
             Assert.Equal("@censor_blur_000", chunk.Label);
@@ -40,8 +40,16 @@ public sealed class FilterCompilerTests
 
         Assert.Equal(2, plan.Chunks.Count);
         Assert.Equal("@censor_blur_001", plan.Chunks[1].Label);
-        Assert.Contains("gblur=sigma=50:steps=3", plan.Chunks[0].Filter, StringComparison.Ordinal);
+        Assert.Contains("gblur=sigma=40:steps=2", plan.Chunks[0].Filter, StringComparison.Ordinal);
         Assert.Contains("gte(t,1000.000)", plan.Chunks[1].Filter, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExposesNamedBlurPresets()
+    {
+        Assert.Equal(new(30, 2), BlurSettings.Strong);
+        Assert.Equal(new(40, 2), BlurSettings.Balanced);
+        Assert.Equal(new(50, 3), BlurSettings.Maximum);
     }
 
     [Fact]
