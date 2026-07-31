@@ -46,7 +46,7 @@ jobs:
         shell: pwsh
         run: |
           $version = (Get-Content deps.lock.json -Raw | ConvertFrom-Json).tools.innoSetup.version
-          choco install innosetup --version $version --no-progress --yes
+          choco install innosetup --version $version --allow-downgrade --no-progress --yes
 
       - name: Build portable, installer, project source, checksums, and SBOM
         shell: pwsh
