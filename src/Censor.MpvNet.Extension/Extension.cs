@@ -145,6 +145,7 @@ public sealed class Extension : IExtension, IDisposable
         }
         else if (args[0].Equals("censor-pick", StringComparison.OrdinalIgnoreCase))
         {
+            ShowToolWindow();
             QueueWindowAction(window => window.OpenSchedulePicker());
         }
         else if (args[0].Equals("censor-load", StringComparison.OrdinalIgnoreCase))
@@ -230,8 +231,8 @@ public sealed class Extension : IExtension, IDisposable
                 _pendingSchedule = null;
             }
             RemoveFilters(active?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
-            _recoveryFailures = 0;
-            _vfReadFailures = 0;
+            Interlocked.Exchange(ref _recoveryFailures, 0);
+            Interlocked.Exchange(ref _vfReadFailures, 0);
         }
         finally
         {
@@ -253,6 +254,8 @@ public sealed class Extension : IExtension, IDisposable
         CancellationToken token;
         lock (_stateLock)
         {
+            if (Volatile.Read(ref _stopping) != 0)
+                return;
             ticket = _revisions.Snapshot();
             token = _operationCancellation.Token;
         }
@@ -508,6 +511,7 @@ public sealed class Extension : IExtension, IDisposable
                 document,
                 plan,
                 normalized,
+                diagnostics,
                 token).ConfigureAwait(false);
             if (UpdateWindow("ACTIVE", ticket, token))
             {
@@ -539,6 +543,7 @@ public sealed class Extension : IExtension, IDisposable
         ScheduleDocument document,
         FilterPlan plan,
         IReadOnlyList<NormalizedInterval> intervals,
+        IReadOnlyList<ParseDiagnostic> diagnostics,
         CancellationToken token)
     {
         Task sessionCleanup;
@@ -580,11 +585,18 @@ public sealed class Extension : IExtension, IDisposable
                 token.ThrowIfCancellationRequested();
                 if (!IsCurrent(ticket))
                     throw new OperationCanceledException(token);
-                _activeSchedule = new(ticket, schedulePath, sourceHash, document, plan, intervals);
+                _activeSchedule = new(
+                    ticket,
+                    schedulePath,
+                    sourceHash,
+                    document,
+                    plan,
+                    intervals,
+                    diagnostics);
                 _pendingSchedule = null;
             }
-            _recoveryFailures = 0;
-            _vfReadFailures = 0;
+            Interlocked.Exchange(ref _recoveryFailures, 0);
+            Interlocked.Exchange(ref _vfReadFailures, 0);
             _log.Write(
                 "apply-verified",
                 ticket,
@@ -754,6 +766,7 @@ public sealed class Extension : IExtension, IDisposable
                 pending.Document,
                 pending.Plan,
                 pending.Intervals,
+                pending.Diagnostics,
                 token).ConfigureAwait(false);
             if (UpdateWindow("ACTIVE", pending.Ticket, token))
                 Show($"Расписание применено. Интервалов: {pending.Plan.IntervalCount}.", pending.Ticket, token);
@@ -855,8 +868,8 @@ public sealed class Extension : IExtension, IDisposable
                 _settings = settings;
                 if (watchdogChanged)
                 {
-                    _recoveryFailures = 0;
-                    _vfReadFailures = 0;
+                    Interlocked.Exchange(ref _recoveryFailures, 0);
+                    Interlocked.Exchange(ref _vfReadFailures, 0);
                 }
             }
         }
@@ -940,32 +953,34 @@ public sealed class Extension : IExtension, IDisposable
             }
         }
 
+        var subtitleFormat = path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase)
+            ? SubtitleFormat.Srt
+            : path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase)
+                ? SubtitleFormat.WebVtt
+                : (SubtitleFormat?)null;
+        if (subtitleFormat is { } exportFormat)
+        {
+            if (!ConfirmSubtitleExport())
+                return;
+            AtomicFile.WriteUtf8Text(
+                path,
+                SubtitleScheduleText.Export(document, exportFormat),
+                Path.GetFullPath(path) + ".bak");
+            Show(
+                $"Файл {Path.GetFileName(path)} экспортирован. Черновик не отмечен как сохранённый.",
+                saveTicket);
+            return;
+        }
+
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
             settings.ResolveNormalizationOptions(document.Metadata));
         var plan = FilterCompiler.Compile(normalized, blur);
-        if (path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
-        {
-            AtomicFile.WriteUtf8Text(
-                path,
-                SubtitleScheduleText.Export(document, SubtitleFormat.Srt),
-                Path.GetFullPath(path) + ".bak");
-        }
-        else if (path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase))
-        {
-            AtomicFile.WriteUtf8Text(
-                path,
-                SubtitleScheduleText.Export(document, SubtitleFormat.WebVtt),
-                Path.GetFullPath(path) + ".bak");
-        }
-        else
-        {
-            AtomicScheduleWriter.Write(
-                path,
-                document,
-                settings.Limits.MaxIntervals,
-                settings.Limits.MaxTextFileBytes);
-        }
+        AtomicScheduleWriter.Write(
+            path,
+            document,
+            settings.Limits.MaxIntervals,
+            settings.Limits.MaxTextFileBytes);
         var savedHash = ComputeHash(File.ReadAllBytes(path));
 
         var markWindowSaved = false;
@@ -1145,7 +1160,9 @@ public sealed class Extension : IExtension, IDisposable
                 createdAtUtc = DateTimeOffset.UtcNow,
             }, jsonOptions),
             JsonSerializer.Serialize(sanitizedSettings, jsonOptions),
-            JsonSerializer.Serialize(pending?.Diagnostics ?? [], jsonOptions),
+            JsonSerializer.Serialize(
+                pending?.Diagnostics ?? active?.Diagnostics ?? [],
+                jsonOptions),
             JsonSerializer.Serialize(new
             {
                 path = ExtensionLog.ProtectPath(mediaPath, includePath: false),
@@ -1202,34 +1219,49 @@ public sealed class Extension : IExtension, IDisposable
         CancellationToken token;
         OperationTicket ticket;
         CancellationTokenSource previousCancellation;
-        lock (_stateLock)
+        while (true)
         {
-            if (_blurSettings == settings)
-                return;
-
-            var pendingPlan = _pendingSchedule is null
-                ? null
-                : FilterCompiler.Compile(_pendingSchedule.Intervals, settings);
-            _blurSettings = settings;
-            _settings = _settings with { Blur = settings };
-            ticket = _revisions.BeginOperation();
-            previousCancellation = _operationCancellation;
-            _operationCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    _revisions.SessionToken);
-            token = _operationCancellation.Token;
-            if (_activeSchedule is not null)
-                _activeSchedule = _activeSchedule with { Ticket = ticket };
-            active = _activeSchedule;
-            if (_pendingSchedule is not null)
+            PendingSchedule? observedPending;
+            lock (_stateLock)
             {
-                _pendingSchedule = _pendingSchedule with
-                {
-                    Ticket = ticket,
-                    Plan = pendingPlan!,
-                };
+                if (Volatile.Read(ref _stopping) != 0 || _blurSettings == settings)
+                    return;
+                observedPending = _pendingSchedule;
             }
-            pending = _pendingSchedule;
+
+            var pendingPlan = observedPending is null
+                ? null
+                : FilterCompiler.Compile(observedPending.Intervals, settings);
+
+            lock (_stateLock)
+            {
+                if (Volatile.Read(ref _stopping) != 0 || _blurSettings == settings)
+                    return;
+                if (!ReferenceEquals(_pendingSchedule, observedPending))
+                    continue;
+
+                _blurSettings = settings;
+                _settings = _settings with { Blur = settings };
+                ticket = _revisions.BeginOperation();
+                previousCancellation = _operationCancellation;
+                _operationCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        _revisions.SessionToken);
+                token = _operationCancellation.Token;
+                if (_activeSchedule is not null)
+                    _activeSchedule = _activeSchedule with { Ticket = ticket };
+                active = _activeSchedule;
+                if (_pendingSchedule is not null)
+                {
+                    _pendingSchedule = _pendingSchedule with
+                    {
+                        Ticket = ticket,
+                        Plan = pendingPlan!,
+                    };
+                }
+                pending = _pendingSchedule;
+            }
+            break;
         }
 
         previousCancellation.Cancel();
@@ -1276,6 +1308,7 @@ public sealed class Extension : IExtension, IDisposable
                 active.Document,
                 plan,
                 active.Intervals,
+                active.Diagnostics,
                 token).ConfigureAwait(false);
             UpdateWindow("ACTIVE", ticket, token);
         }
@@ -1556,6 +1589,23 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
+    private bool ConfirmSubtitleExport()
+    {
+        CensorWindow? window;
+        lock (_windowLock)
+            window = _window;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+            return false;
+        try
+        {
+            return (bool)window.Invoke(new Func<bool>(window.ConfirmSubtitleExport));
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
     private void ShowToolWindow()
     {
         if (Volatile.Read(ref _stopping) != 0)
@@ -1744,7 +1794,7 @@ public sealed class Extension : IExtension, IDisposable
             status,
             mediaDurationMs,
             pending?.Document ?? active?.Document,
-            pending?.Diagnostics ?? [],
+            pending?.Diagnostics ?? active?.Diagnostics ?? [],
             active is not null);
     }
 
@@ -1870,19 +1920,28 @@ public sealed class Extension : IExtension, IDisposable
 
     private ParseResult Parse(string path, string text)
     {
+        var limits = _settings.Limits;
         ParseResult result;
         if (path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
-            result = SubtitleScheduleText.Import(text, SubtitleFormat.Srt);
+            result = SubtitleScheduleText.Import(
+                text,
+                SubtitleFormat.Srt,
+                limits.MaxTextFileBytes,
+                limits.MaxIntervals);
         else if (path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase))
-            result = SubtitleScheduleText.Import(text, SubtitleFormat.WebVtt);
+            result = SubtitleScheduleText.Import(
+                text,
+                SubtitleFormat.WebVtt,
+                limits.MaxTextFileBytes,
+                limits.MaxIntervals);
         else
             result = ScheduleText.Parse(
                 text,
-                _settings.Limits.MaxTextFileBytes,
-                _settings.Limits.MaxIntervals);
+                limits.MaxTextFileBytes,
+                limits.MaxIntervals);
 
         if (result.IsSuccess &&
-            result.Document!.Intervals.Count > _settings.Limits.MaxIntervals)
+            result.Document!.Intervals.Count > limits.MaxIntervals)
         {
             return new(null,
             [
@@ -1890,7 +1949,7 @@ public sealed class Extension : IExtension, IDisposable
                     DiagnosticSeverity.Error,
                     1,
                     1,
-                    $"В расписании больше {_settings.Limits.MaxIntervals} интервалов."),
+                    $"В расписании больше {limits.MaxIntervals} интервалов."),
             ]);
         }
 
@@ -1997,19 +2056,19 @@ public sealed class Extension : IExtension, IDisposable
 
             if (!TryGetPropertyString("vf", out var filters))
             {
-                _vfReadFailures++;
-                if (_vfReadFailures == 1)
+                var readFailures = Interlocked.Increment(ref _vfReadFailures);
+                if (readFailures == 1)
                     Terminal.WriteError("Не удалось прочитать vf и определить состояние автовосстановления.", LogModule);
-                if (_vfReadFailures == MaxRecoveryFailures)
+                if (readFailures == MaxRecoveryFailures)
                     QueueShow(
                         "Не удалось прочитать цепочку видеофильтров. Автовосстановление остановлено.");
                 return;
             }
 
-            _vfReadFailures = 0;
+            Interlocked.Exchange(ref _vfReadFailures, 0);
             if (active.Plan.Chunks.All(chunk => ContainsLabel(filters, chunk.Label)))
             {
-                _recoveryFailures = 0;
+                Interlocked.Exchange(ref _recoveryFailures, 0);
                 return;
             }
 
@@ -2019,30 +2078,30 @@ public sealed class Extension : IExtension, IDisposable
                 watchdogEnabled = _settings.WatchdogEnabled;
             if (!watchdogEnabled)
                 return;
-            if (_recoveryFailures >= MaxRecoveryFailures)
+            if (Volatile.Read(ref _recoveryFailures) >= MaxRecoveryFailures)
                 return;
 
             try
             {
                 if (!RecoverFilters(active))
                     return;
-                _recoveryFailures = 0;
+                Interlocked.Exchange(ref _recoveryFailures, 0);
                 UpdateWindow("ACTIVE", active.Ticket);
                 _log.Write("watchdog-recovered", active.Ticket);
             }
             catch (Exception exception)
             {
-                _recoveryFailures++;
+                var recoveryFailures = Interlocked.Increment(ref _recoveryFailures);
                 Terminal.WriteError(exception, LogModule);
                 _log.Write(
                     "watchdog-recovery-error",
                     active.Ticket,
                     new Dictionary<string, object?>
                     {
-                        ["consecutiveFailures"] = _recoveryFailures,
+                        ["consecutiveFailures"] = recoveryFailures,
                         ["error"] = ProtectError(exception, active.SchedulePath),
                     });
-                if (_recoveryFailures == MaxRecoveryFailures)
+                if (recoveryFailures == MaxRecoveryFailures)
                     QueueShow("Не удалось восстановить фильтры. Автовосстановление остановлено.");
             }
         }
@@ -2309,7 +2368,8 @@ public sealed class Extension : IExtension, IDisposable
         string? SourceHash,
         ScheduleDocument Document,
         FilterPlan Plan,
-        IReadOnlyList<NormalizedInterval> Intervals);
+        IReadOnlyList<NormalizedInterval> Intervals,
+        IReadOnlyList<ParseDiagnostic> Diagnostics);
 
     private sealed record PendingSchedule(
         OperationTicket Ticket,

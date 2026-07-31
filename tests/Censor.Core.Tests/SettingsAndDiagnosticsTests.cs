@@ -31,15 +31,14 @@ public sealed class SettingsAndDiagnosticsTests
         File.WriteAllText(path, InvalidSettings);
         var invalid = ExtensionSettingsStore.Load(path);
         Assert.NotEmpty(invalid.Warnings);
+        Assert.Equal(2, invalid.Settings.Schema);
         Assert.Equal(BlurSettings.Balanced, invalid.Settings.Blur);
         Assert.Equal(AudioCompressionPresets.OffId, invalid.Settings.AudioCompressionPreset);
         Assert.Equal(InvalidSettings, File.ReadAllText(path));
 
-        var fallbackPath = Path.Combine(directory.Path, "fallback.json");
-        ExtensionSettingsStore.Save(fallbackPath, invalid.Settings);
-        var fallbackJson = File.ReadAllText(fallbackPath);
-        Assert.Contains("\"futureRoot\"", fallbackJson, StringComparison.Ordinal);
-        Assert.Contains("\"futureLimit\"", fallbackJson, StringComparison.Ordinal);
+        Assert.Throws<ArgumentException>(() =>
+            ExtensionSettingsStore.Save(path, invalid.Settings));
+        Assert.Equal(InvalidSettings, File.ReadAllText(path));
     }
 
     [Fact]
@@ -359,6 +358,7 @@ public sealed class SettingsAndDiagnosticsTests
                 ["schedulePath"] = privatePath,
                 ["error"] = $"Unable to open {privatePath}",
                 ["rollbackError"] = "Audio filter rollback failed",
+                ["ratio"] = "ratio 3 / 4",
             },
         });
         File.WriteAllLines(logPath, [line, $"invalid raw entry {privatePath}"]);
@@ -377,6 +377,7 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.Contains("sha256:", exported, StringComparison.Ordinal);
         Assert.Contains("Unable to open", exported, StringComparison.Ordinal);
         Assert.Contains("Audio filter rollback failed", exported, StringComparison.Ordinal);
+        Assert.Contains("ratio 3 / 4", exported, StringComparison.Ordinal);
         Assert.Contains("log-entry-redacted", exported, StringComparison.Ordinal);
     }
 

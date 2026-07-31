@@ -189,7 +189,6 @@ public static class ExtensionSettingsStore
         var logging = settings.Logging;
         return settings with
         {
-            Schema = 1,
             LeadInMs = ValidMilliseconds(settings.LeadInMs) ? settings.LeadInMs : defaults.LeadInMs,
             LeadOutMs = ValidMilliseconds(settings.LeadOutMs) ? settings.LeadOutMs : defaults.LeadOutMs,
             MergeGapMs = ValidMilliseconds(settings.MergeGapMs) ? settings.MergeGapMs : defaults.MergeGapMs,

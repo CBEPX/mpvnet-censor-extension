@@ -2,6 +2,21 @@
 
 ## 2026-08-01
 
+- Пятый полный `cc review` на `claude-opus-5` подтвердил runtime/package
+  архитектуру и нашёл два риска потери данных: lossy SRT/VTT считался обычным
+  сохранением, а future-schema настроек незаметно понижалась до schema 1.
+- SRT/VTT теперь экспортируются только после предупреждения и не меняют
+  dirty/recovery state. Future-schema сохраняется в памяти без понижения, а
+  общий validator запрещает перезапись неизвестного формата.
+- Merge ограничен соседними строками; subtitle import получает настроенные
+  лимиты, active schedule хранит parse diagnostics, а `/` в записи `3 / 4`
+  больше не принимается за Unix-путь.
+- Watchdog counters переведены на `Interlocked`; поздний `FileLoaded` не читает
+  disposed token, blur plan компилируется вне state lock, picker сначала
+  показывает окно. Лишний validation cache удалён.
+- PowerShell больше не загружает .NET 10 assembly: каталог аудиопресетов
+  выдаёт существующий `Censor.LoaderSmoke` helper. Локально Release build без
+  предупреждений и 67/67 core-тестов — PASS; Windows runtime smoke ожидает CI.
 - Push CI `30671776521` и PR CI `30671778545` на `1383ca9` полностью прошли:
   build, 64 теста, stock loader, package, аудиофильтры, local-safety guard и
   настоящий installer smoke зелёные.

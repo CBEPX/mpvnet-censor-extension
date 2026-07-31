@@ -249,6 +249,15 @@ internal sealed class CensorWindow : Form
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button3);
 
+    public bool ConfirmSubtitleExport() =>
+        MessageBox.Show(
+            this,
+            "SRT и WebVTT сохраняют только интервалы и текст. Название, смещение, запас до и после интервала и служебные строки в экспорт не попадут.\n\nЭкспортировать копию? Черновик не будет помечен как сохранённый.",
+            "CensorPlayer",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+
     public void MarkSaved(
         string path,
         ScheduleDocument savedDocument,

@@ -205,7 +205,7 @@ public static class DiagnosticsExporter
             return false;
 
         if (value[index] == '/')
-            return true;
+            return index + 1 < value.Length && !char.IsWhiteSpace(value[index + 1]);
         if (value[index] == '\\')
             return index + 1 < value.Length && value[index + 1] == '\\';
         return index + 2 < value.Length &&

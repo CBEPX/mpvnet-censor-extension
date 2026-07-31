@@ -216,6 +216,23 @@ build/tests зелёные, оба Windows CI подтверждают installer
 зелёные, итоговый `cc review` на `claude-opus-5` не оставляет findings перед
 merge.
 
+### 13. Исправления после пятого Claude Opus 5 review
+
+- Считать SRT/WebVTT явным lossy-export: предупреждать о потере metadata,
+  сохранять только копию и не очищать dirty/recovery state.
+- Сохранять неизвестную будущую версию `settings.json` и запрещать её
+  перезапись текущей схемой.
+- Разрешать merge только соседних строк; применять пользовательские лимиты к
+  импорту субтитров и сохранять parse diagnostics в active schedule.
+- Синхронизировать watchdog counters через `Interlocked`, не читать disposed
+  token при позднем `FileLoaded` и компилировать pending blur plan вне lock.
+- Всегда показывать окно перед picker, не считать одиночный `/` в дроби путём,
+  убрать validation cache и читать аудиопресеты через .NET 10 helper.
+
+**Выход:** регрессии data-loss, schema, merge, limits и redaction закреплены
+тестами, оба Windows CI зелёные, полный `cc review` на `claude-opus-5` не
+оставляет actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

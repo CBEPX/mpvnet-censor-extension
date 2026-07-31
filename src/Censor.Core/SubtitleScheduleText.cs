@@ -11,10 +11,18 @@ public enum SubtitleFormat
 
 public static class SubtitleScheduleText
 {
-    public static ParseResult Import(string text, SubtitleFormat format)
+    public static ParseResult Import(
+        string text,
+        SubtitleFormat format,
+        int maxTextFileBytes = ScheduleText.MaxTextFileBytes,
+        int maxIntervals = ScheduleText.MaxIntervals)
     {
         ArgumentNullException.ThrowIfNull(text);
-        if (Encoding.UTF8.GetByteCount(text) > ScheduleText.MaxTextFileBytes)
+        if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
+        if (maxIntervals is < 1 or > ScheduleText.MaxIntervals)
+            throw new ArgumentOutOfRangeException(nameof(maxIntervals));
+        if (Encoding.UTF8.GetByteCount(text) > maxTextFileBytes)
         {
             return new(null,
             [
@@ -22,7 +30,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     1,
                     1,
-                    $"Файл субтитров превышает ограничение в {ScheduleText.MaxTextFileBytes} байт."),
+                    $"Файл субтитров превышает ограничение в {maxTextFileBytes} байт."),
             ]);
         }
 
@@ -87,13 +95,13 @@ public static class SubtitleScheduleText
                 continue;
             }
 
-            if (intervals.Count >= ScheduleText.MaxIntervals)
+            if (intervals.Count >= maxIntervals)
             {
                 diagnostics.Add(new(
                     DiagnosticSeverity.Error,
                     blockStart + 1,
                     1,
-                    $"В файле субтитров больше {ScheduleText.MaxIntervals} интервалов."));
+                    $"В файле субтитров больше {maxIntervals} интервалов."));
                 break;
             }
 

@@ -4,28 +4,38 @@
 param(
     [Parameter(Mandatory)]
     [string]$MpvNetPath,
-    [string]$CoreAssemblyPath = "src/Censor.Core/bin/Release/net10.0/Censor.Core.dll"
+    [string]$ExtensionAssemblyPath
 )
 
 $ErrorActionPreference = "Stop"
 $MpvNetPath = [IO.Path]::GetFullPath($MpvNetPath)
 $RepoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$CoreAssemblyPath = if ([IO.Path]::IsPathRooted($CoreAssemblyPath)) {
-    [IO.Path]::GetFullPath($CoreAssemblyPath)
+$ExtensionAssemblyPath = if ([string]::IsNullOrWhiteSpace($ExtensionAssemblyPath)) {
+    [IO.Path]::GetFullPath((Join-Path (Split-Path -Parent $MpvNetPath) "portable_config/extensions/CensorExtension/CensorExtension.dll"))
+} elseif ([IO.Path]::IsPathRooted($ExtensionAssemblyPath)) {
+    [IO.Path]::GetFullPath($ExtensionAssemblyPath)
 } else {
-    [IO.Path]::GetFullPath((Join-Path $RepoRoot $CoreAssemblyPath))
+    [IO.Path]::GetFullPath((Join-Path $RepoRoot $ExtensionAssemblyPath))
 }
 if (-not (Test-Path $MpvNetPath -PathType Leaf)) {
     throw "mpv.net console launcher is missing: $MpvNetPath"
 }
-if (-not (Test-Path $CoreAssemblyPath -PathType Leaf)) {
-    throw "Censor.Core assembly is missing: $CoreAssemblyPath"
+if (-not (Test-Path $ExtensionAssemblyPath -PathType Leaf)) {
+    throw "CensorExtension assembly is missing: $ExtensionAssemblyPath"
 }
 
-$Assembly = [Reflection.Assembly]::LoadFrom($CoreAssemblyPath)
-$CatalogType = $Assembly.GetType("Censor.Core.AudioCompressionPresets", $true)
-$Presets = $CatalogType.GetProperty("All").GetValue($null) |
-    Where-Object { $null -ne $_.Filter }
+$PresetJson = & dotnet run `
+    --project (Join-Path $RepoRoot "tests/Censor.LoaderSmoke/Censor.LoaderSmoke.csproj") `
+    --configuration Release `
+    --no-build `
+    --no-restore `
+    -- `
+    --audio-presets `
+    $ExtensionAssemblyPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Could not read audio presets from CensorExtension.dll."
+}
+$Presets = $PresetJson | ConvertFrom-Json
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("censor-audio-smoke-" + [Guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory $TempRoot | Out-Null
 

@@ -27,6 +27,22 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void MergeRejectsNonAdjacentRowsWithoutChangingDraft()
+    {
+        var draft = new ScheduleDraft(Document(
+            new(1_000, 2_000, "one"),
+            new(3_000, 4_000, "two"),
+            new(5_000, 6_000, "three")));
+        var before = draft.Document;
+
+        var error = Assert.Throws<ArgumentException>(() => draft.Merge([0, 2]));
+
+        Assert.Contains("соседние", error.Message, StringComparison.Ordinal);
+        Assert.Same(before, draft.Document);
+        Assert.False(draft.CanUndo);
+    }
+
+    [Fact]
     public void InvalidDraftCanBeCorrectedButCannotBeConsideredValid()
     {
         var draft = new ScheduleDraft(Document(new CensorInterval(1_000, 2_000)));
@@ -99,18 +115,15 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
-    public void DocumentAndValidationSnapshotsAreReusedUntilAnEdit()
+    public void DocumentSnapshotIsImmutableAndReusedUntilAnEdit()
     {
         CensorInterval[] source = [new(0, 1_000)];
         var draft = new ScheduleDraft(Document(source));
         var firstDocument = draft.Document;
-        var firstValidation = draft.Validate(checkSerializedSize: false);
-
         source[0] = new(10_000, 11_000);
 
         Assert.Equal(new CensorInterval(0, 1_000), firstDocument.Intervals[0]);
         Assert.Same(firstDocument, draft.Document);
-        Assert.Same(firstValidation, draft.Validate(checkSerializedSize: false));
         Assert.Throws<NotSupportedException>(() =>
             ((IList<CensorInterval>)firstDocument.Intervals)[0] = new(20_000, 21_000));
 
@@ -118,7 +131,6 @@ public sealed class ScheduleDraftTests
 
         Assert.NotSame(firstDocument, draft.Document);
         var changedValidation = draft.Validate(checkSerializedSize: false);
-        Assert.NotSame(firstValidation, changedValidation);
         Assert.Contains(changedValidation, item => item.Severity == DiagnosticSeverity.Error);
     }
 

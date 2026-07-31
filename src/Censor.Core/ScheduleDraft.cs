@@ -11,9 +11,7 @@ public sealed class ScheduleDraft
     private readonly List<ScheduleDocument> _undo = [];
     private ScheduleDocument _document;
     private ScheduleDocument _savedDocument;
-    private ValidationCache? _validationCache;
     private bool _forceDirty;
-    private long _revision;
 
     public ScheduleDraft(ScheduleDocument document)
     {
@@ -39,21 +37,6 @@ public sealed class ScheduleDraft
             throw new ArgumentOutOfRangeException(nameof(maxIntervals));
         if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
             throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
-        if (_validationCache is
-            {
-                Revision: var revision,
-                MaxIntervals: var cachedMaxIntervals,
-                MaxTextFileBytes: var cachedMaxTextFileBytes,
-                CheckSerializedSize: var cachedCheckSerializedSize,
-            } cache &&
-            revision == _revision &&
-            cachedMaxIntervals == maxIntervals &&
-            cachedMaxTextFileBytes == maxTextFileBytes &&
-            cachedCheckSerializedSize == checkSerializedSize)
-        {
-            return cache.Diagnostics;
-        }
-
         var diagnostics = new List<ParseDiagnostic>();
         if (_document.Intervals.Count > maxIntervals)
         {
@@ -106,14 +89,7 @@ public sealed class ScheduleDraft
             }
         }
 
-        var result = Array.AsReadOnly(diagnostics.ToArray());
-        _validationCache = new(
-            _revision,
-            maxIntervals,
-            maxTextFileBytes,
-            checkSerializedSize,
-            result);
-        return result;
+        return Array.AsReadOnly(diagnostics.ToArray());
     }
 
     public void Add(long startMs, long endMs, string? note = null) =>
@@ -170,6 +146,10 @@ public sealed class ScheduleDraft
             throw new ArgumentException("Выберите хотя бы два интервала.", nameof(indices));
         foreach (var index in selected)
             EnsureIndex(index);
+        if (selected[^1] - selected[0] + 1 != selected.Length)
+            throw new ArgumentException(
+                "Для объединения выберите соседние интервалы.",
+                nameof(indices));
 
         Change(document =>
         {
@@ -249,7 +229,6 @@ public sealed class ScheduleDraft
 
         Push(_redo, _document);
         _document = Pop(_undo);
-        InvalidateValidation();
         return true;
     }
 
@@ -260,7 +239,6 @@ public sealed class ScheduleDraft
 
         Push(_undo, _document);
         _document = Pop(_redo);
-        InvalidateValidation();
         return true;
     }
 
@@ -294,7 +272,6 @@ public sealed class ScheduleDraft
         Push(_undo, _document);
         _document = changed;
         _redo.Clear();
-        InvalidateValidation();
     }
 
     private void EnsureIndex(int index)
@@ -341,12 +318,6 @@ public sealed class ScheduleDraft
             _ => Array.AsReadOnly(values.ToArray()),
         };
 
-    private void InvalidateValidation()
-    {
-        _revision++;
-        _validationCache = null;
-    }
-
     private static bool DocumentsEqual(ScheduleDocument left, ScheduleDocument right) =>
         left.Metadata == right.Metadata &&
         left.Intervals.SequenceEqual(right.Intervals) &&
@@ -358,10 +329,4 @@ public sealed class ScheduleDraft
     private static ParseDiagnostic Error(int intervalIndex, string message) =>
         new(DiagnosticSeverity.Error, intervalIndex + 1, 1, message);
 
-    private sealed record ValidationCache(
-        long Revision,
-        int MaxIntervals,
-        int MaxTextFileBytes,
-        bool CheckSerializedSize,
-        IReadOnlyList<ParseDiagnostic> Diagnostics);
 }

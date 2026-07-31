@@ -76,4 +76,34 @@ public sealed class SubtitleScheduleTextTests
 
         Assert.False(result.IsSuccess);
     }
+
+    [Fact]
+    public void ImportHonorsConfiguredByteAndIntervalLimits()
+    {
+        const string text = """
+            1
+            00:00:01,000 --> 00:00:02,000
+            one
+
+            2
+            00:00:03,000 --> 00:00:04,000
+            two
+            """;
+
+        var tooMany = SubtitleScheduleText.Import(
+            text,
+            SubtitleFormat.Srt,
+            maxIntervals: 1);
+        var tooLarge = SubtitleScheduleText.Import(
+            text,
+            SubtitleFormat.Srt,
+            maxTextFileBytes: 10);
+
+        Assert.False(tooMany.IsSuccess);
+        Assert.Contains(tooMany.Diagnostics, item =>
+            item.Message.Contains("больше 1 интервалов", StringComparison.Ordinal));
+        Assert.False(tooLarge.IsSuccess);
+        Assert.Contains(tooLarge.Diagnostics, item =>
+            item.Message.Contains("10 байт", StringComparison.Ordinal));
+    }
 }
