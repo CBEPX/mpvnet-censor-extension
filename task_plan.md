@@ -1,11 +1,10 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** полный код Windows P0 реализован локально в
-`codex/implement-censor-p0`: runtime, редактор, настройки, recovery, логи,
-диагностика, portable, installer и package-validation CI. Windows CI для
-`194fe60` прошёл полностью. До публикации остаётся доказать полный
-соответствующий исходный код штатного `libmpv`, повторить post-fix
-Fable-review и физически проверить итоговый пакет.
+**Статус:** post-review wave и аудиокомпрессия реализованы локально в
+`codex/implement-censor-p0`. Core-тесты и Release-сборка зелёные. Осталось
+подтвердить Windows runtime/installer smoke в CI, пройти итоговый review через
+Claude Opus 5 и физически проверить новый DLL. Полный portable/installer
+по-прежнему нельзя публиковать до закрытия source-provenance gate.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения
@@ -118,6 +117,24 @@ Fable-review и физически проверить итоговый паке�
 
 **Выход:** выполнены все 15 acceptance criteria ТЗ; нет `BLOCKER/HIGH`, есть Windows evidence для mpv interaction и rollback artifact.
 
+### 8. Post-review fixes и аудиокомпрессия
+
+- Закрыть installer update, stale settings, disabled-watchdog, draft-limit,
+  atomic-write, recovery, UTC-log, hotkey timestamp и truthful-status findings
+  итогового Fable-review без изменения `MediaSessionCoordinator`.
+- Добавить глобальную аудиокомпрессию с default `off` и пресетами Film,
+  Anime, Night и Adaptive через единственную метку
+  `@censor_audio_compression`; пользовательский `af` не менять.
+- Применять аудиопресет сразу, подтверждать через readback `af` и показывать
+  русский OSD только после успешного применения; при ошибке откатывать
+  прежний пресет.
+- Доказать точные графы на закреплённом Windows runtime, усилить installer
+  update/uninstall smoke и повторить полный Claude Opus 5 review через `cc`.
+
+**Выход:** локальные проверки и точный Windows CI зелёные, Claude Opus 5 не
+оставил actionable findings, пользователю передан один итоговый DLL для
+физического теста.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.
@@ -139,3 +156,4 @@ Fable-review и физически проверить итоговый паке�
 |---|---|---|
 | Serena C# LSP reports `.NET runtime version 10.0 not found` | Installed SDK 10.0.302 locally, exposed it as `/opt/homebrew/bin/dotnet`, reactivated upstream project | Restart Codex/MCP so Serena inherits the new PATH; do not bypass semantic tooling |
 | `mpvnet.dll` absent from portable release ZIP | Tried to extract a compile-time assembly after verifying the portable archive SHA-256 | Build only pinned upstream `MpvNet.csproj` and reference its `libmpvnet.dll` with `Private=false` |
+| `CS8752` in new draft-limit test | Used target-typed `new()` as the sole argument of a `params` call | Named `CensorInterval` explicitly; production code was unaffected |

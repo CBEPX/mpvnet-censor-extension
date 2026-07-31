@@ -76,7 +76,44 @@ function Get-LockedDownload {
     if ($Actual -ne $Entry.sha256) {
         throw "SHA-256 mismatch for $FileName. Expected $($Entry.sha256), got $Actual."
     }
+    if ($Entry.PSObject.Properties.Name -contains "size" -and
+        (Get-Item $Path).Length -ne $Entry.size) {
+        throw "Size mismatch for $FileName. Expected $($Entry.size) bytes."
+    }
     return $Path
+}
+
+function Install-PinnedInnoSetup {
+    $Entry = $Lock.tools.innoSetup
+    $Installer = Get-LockedDownload `
+        -Entry $Entry `
+        -FileName "innosetup-$($Entry.version).exe"
+    $ToolRoot = Join-Path $RepoRoot ".deps/tools/inno-setup-$($Entry.version)"
+    $Iscc = Join-Path $ToolRoot "ISCC.exe"
+    $Marker = Join-Path $ToolRoot ".installer-sha256"
+    $Ready = (Test-Path $Iscc -PathType Leaf) -and
+        (Test-Path $Marker -PathType Leaf) -and
+        ((Get-Content $Marker -Raw).Trim() -eq $Entry.sha256)
+    if (-not $Ready) {
+        if (Test-Path $ToolRoot) {
+            Remove-Item $ToolRoot -Recurse -Force
+        }
+        New-Item -ItemType Directory -Force $ToolRoot | Out-Null
+        $Install = Start-Process $Installer `
+            -ArgumentList @(
+                "/VERYSILENT",
+                "/SUPPRESSMSGBOXES",
+                "/NORESTART",
+                "/CURRENTUSER",
+                "/DIR=`"$ToolRoot`""
+            ) `
+            -Wait -PassThru
+        if ($Install.ExitCode -ne 0 -or -not (Test-Path $Iscc -PathType Leaf)) {
+            throw "Pinned Inno Setup installation failed with exit code $($Install.ExitCode)."
+        }
+        $Entry.sha256 | Set-Content $Marker -Encoding ascii
+    }
+    return $Iscc
 }
 
 function Add-SpdxFile {
@@ -265,22 +302,7 @@ $SbomPath = Join-Path $ArtifactRoot "CensorPlayer-$Version.spdx.json"
 $Sbom | ConvertTo-Json -Depth 10 | Set-Content $SbomPath -Encoding utf8NoBOM
 
 if (-not $SkipInstaller) {
-    $Iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6/ISCC.exe"
-    if (-not (Test-Path $Iscc -PathType Leaf)) {
-        throw "Inno Setup compiler is missing: $Iscc"
-    }
-    $InstalledInno = @(
-        choco list --exact innosetup --limit-output |
-            Where-Object { $_ -like "innosetup|*" }
-    )
-    $ActualIsccVersion = if ($InstalledInno.Count -eq 1) {
-        ($InstalledInno[0] -split "\|", 2)[1]
-    } else {
-        ""
-    }
-    if ($ActualIsccVersion -ne $Lock.tools.innoSetup.version) {
-        throw "Expected Inno Setup $($Lock.tools.innoSetup.version), found $ActualIsccVersion."
-    }
+    $Iscc = Install-PinnedInnoSetup
     & $Iscc `
         "/DAppVersion=$Version" `
         "/DStageDir=$StageRoot" `

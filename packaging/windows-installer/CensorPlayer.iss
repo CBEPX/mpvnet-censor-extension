@@ -34,10 +34,14 @@ SetupLogging=yes
 
 [Files]
 Source: "{#StageDir}\*"; DestDir: "{app}"; Excludes: "portable_config\*"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#StageDir}\portable_config\*"; DestDir: "{app}\portable_config"; Flags: ignoreversion recursesubdirs createallsubdirs onlyifdoesntexist
+Source: "{#StageDir}\portable_config\input.conf"; DestDir: "{app}\portable_config"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "{#StageDir}\portable_config\mpv.conf"; DestDir: "{app}\portable_config"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "{#StageDir}\portable_config\mpvnet.conf"; DestDir: "{app}\portable_config"; Flags: ignoreversion onlyifdoesntexist uninsneveruninstall
+Source: "{#StageDir}\portable_config\extensions\CensorExtension\CensorExtension.dll"; DestDir: "{app}\portable_config\extensions\CensorExtension"; Flags: ignoreversion
 
-[UninstallDelete]
-Type: filesandordirs; Name: "{app}\portable_config"
+[InstallDelete]
+Type: files; Name: "{app}\portable_config\extensions\CensorExtension\Censor.Core.dll"
+Type: files; Name: "{app}\portable_config\extensions\CensorExtension\CensorExtension.deps.json"
 
 [Icons]
 Name: "{group}\CensorPlayer"; Filename: "{app}\mpvnet.exe"
@@ -53,18 +57,38 @@ Filename: "{app}\mpvnet.exe"; Description: "Запустить CensorPlayer"; Fl
 var
   DeleteUserData: Boolean;
 
+function DeleteUserDataRequested(): Boolean;
+var
+  Index: Integer;
+begin
+  Result := False;
+  for Index := 1 to ParamCount do
+  begin
+    if CompareText(ParamStr(Index), '/DELETEUSERDATA=1') = 0 then
+    begin
+      Result := True;
+      Exit;
+    end;
+  end;
+end;
+
 function InitializeUninstall(): Boolean;
 begin
   Result := True;
-  DeleteUserData := SuppressibleMsgBox(
-    'Удалить настройки, данные восстановления, журналы и диагностику?',
-    mbConfirmation, MB_YESNO, IDNO) = IDYES;
+  DeleteUserData := DeleteUserDataRequested();
+  if not DeleteUserData then
+  begin
+    DeleteUserData := SuppressibleMsgBox(
+      'Удалить настройки рядом с программой, данные восстановления, журналы и диагностику?',
+      mbConfirmation, MB_YESNO, IDNO) = IDYES;
+  end;
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if (CurUninstallStep = usPostUninstall) and DeleteUserData then
   begin
+    DelTree(ExpandConstant('{app}\portable_config'), True, True, True);
     DelTree(ExpandConstant('{localappdata}\CensorPlayer'), True, True, True);
   end;
 end;

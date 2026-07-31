@@ -9,6 +9,7 @@ public sealed record DiagnosticsSnapshot(
     string ParseReportJson,
     string MediaJson,
     string FiltersJson,
+    string AudioFiltersJson,
     string EnvironmentJson,
     IReadOnlyList<string> LogFiles,
     string? ScheduleText);
@@ -40,6 +41,7 @@ public static class DiagnosticsExporter
                 AddText(archive, "parse-report.json", snapshot.ParseReportJson);
                 AddText(archive, "media.sanitized.json", snapshot.MediaJson);
                 AddText(archive, "vf.json", snapshot.FiltersJson);
+                AddText(archive, "af.json", snapshot.AudioFiltersJson);
                 AddText(archive, "environment.json", snapshot.EnvironmentJson);
                 foreach (var logPath in snapshot.LogFiles.Where(File.Exists))
                 {

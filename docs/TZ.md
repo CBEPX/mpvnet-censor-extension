@@ -510,6 +510,7 @@ Ctrl+Alt+C     — открыть окно extension
     "sigma": 40.0,
     "steps": 2
   },
+  "audioCompressionPreset": "off",
   "limits": {
     "maxIntervals": 10000,
     "maxTextFileBytes": 2097152
@@ -597,6 +598,18 @@ Compiler должен:
 - переход по главам корректен;
 - возобновление с watch-later позиции корректно после применения schedule.
 
+### 10.6. Компрессия звука
+
+Компрессия глобальна и не связана с расписанием текущего фильма. По умолчанию
+она выключена. Доступны пресеты `film-balanced`, `anime-dialogue`,
+`action-night` и `mixed-adaptive`.
+
+Расширение управляет только меткой `@censor_audio_compression`. При смене
+пресета оно удаляет прежний фильтр с этой меткой, добавляет новый и проверяет
+`af`. Настройка сохраняется и OSD появляется только после успешной проверки.
+Если mpv отвергает граф, расширение восстанавливает предыдущий пресет.
+Пользовательские аудиофильтры не удаляются.
+
 ---
 
 ## 11. Жизненный цикл media session
@@ -619,7 +632,7 @@ ERROR
 
 - увеличить `media_session_id`;
 - отменить операции прошлого фильма;
-- удалить прежние `@censor_*` filters;
+- удалить прежние `@censor_blur_*` filters;
 - очистить session-scoped schedule;
 - перейти в `NO_SCHEDULE` или `LOADING`, если найден sidecar.
 
@@ -627,6 +640,7 @@ ERROR
 
 - получить `path` и `duration`;
 - завершить sidecar lookup;
+- применить сохранённый пресет компрессии звука независимо от sidecar;
 - при наличии sidecar загрузить и проверить его;
 - при отсутствии sidecar оставить `NO_SCHEDULE`;
 - не применять schedule предыдущей сессии.
@@ -641,7 +655,7 @@ ERROR
 ### 11.5. `EndFile`
 
 - отменить операции;
-- удалить `@censor_*` filters;
+- удалить `@censor_blur_*` filters;
 - очистить schedule model;
 - очистить UI текущего фильма;
 - перейти в `IDLE`.
@@ -855,6 +869,7 @@ Diagnostics bundle содержит:
 - current media metadata без самого фильма;
 - current schedule либо его sanitized copy с согласия пользователя;
 - список `vf`;
+- состояние `af` и выбранный пресет компрессии;
 - environment information.
 
 ---

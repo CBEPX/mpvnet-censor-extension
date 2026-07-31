@@ -29,12 +29,18 @@ internal sealed class CensorWindow : Form
         DropDownStyle = ComboBoxStyle.DropDownList,
         Width = 230,
     };
+    private readonly ComboBox _audioCompressionPreset = new()
+    {
+        AccessibleName = T("Компрессия звука"),
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 230,
+    };
     private readonly CheckBox _autoSidecar = new()
     {
         AutoSize = true,
         Text = T("Автозагрузка расписания рядом с фильмом"),
     };
-    private readonly CheckBox _watchdog = new() { AutoSize = true, Text = T("Автоматически восстанавливать фильтр") };
+    private readonly CheckBox _watchdog = new() { AutoSize = true, Text = T("Автоматически восстанавливать фильтры цензуры") };
     private readonly NumericUpDown _watchdogInterval = Milliseconds(250, 60_000);
     private readonly NumericUpDown _leadIn = Milliseconds(0, 86_400_000);
     private readonly NumericUpDown _leadOut = Milliseconds(0, 86_400_000);
@@ -103,7 +109,23 @@ internal sealed class CensorWindow : Form
         {
             if (_rendering)
                 return;
-            BlurPresetSelected?.Invoke(_blurPresets[_blurPreset.SelectedIndex].Settings);
+            var blur = _blurPresets[_blurPreset.SelectedIndex].Settings;
+            _settings = _settings with { Blur = blur };
+            BlurPresetSelected?.Invoke(blur);
+        };
+        _audioCompressionPreset.Items.AddRange(
+            AudioCompressionPresets.All.Select(item => item.DisplayName).ToArray());
+        _audioCompressionPreset.SelectedIndex = AudioCompressionPresets.All
+            .Select((item, index) => (item, index))
+            .First(pair => pair.item.Id == settings.AudioCompressionPreset)
+            .index;
+        _audioCompressionPreset.SelectedIndexChanged += (_, _) =>
+        {
+            if (_rendering)
+                return;
+            var preset = AudioCompressionPresets.All[_audioCompressionPreset.SelectedIndex];
+            _settings = _settings with { AudioCompressionPreset = preset.Id };
+            AudioCompressionPresetSelected?.Invoke(preset.Id);
         };
         PopulateSettings(settings);
 
@@ -138,7 +160,8 @@ internal sealed class CensorWindow : Form
     public event Action? ReloadRequested;
     public event Action? DisableRequested;
     public event Action<BlurSettings>? BlurPresetSelected;
-    public event Action<ExtensionSettings>? SettingsChanged;
+    public event Action<string>? AudioCompressionPresetSelected;
+    public event Action<SettingsFormValues>? SettingsChanged;
     public event Action<long>? SeekRequested;
     public event Action<long>? PreviewRequested;
     public event Action<bool>? DiagnosticsRequested;
@@ -151,7 +174,8 @@ internal sealed class CensorWindow : Form
         string status,
         long? mediaDurationMs,
         ScheduleDocument? document,
-        IReadOnlyList<ParseDiagnostic> diagnostics)
+        IReadOnlyList<ParseDiagnostic> diagnostics,
+        bool hasActiveSchedule)
     {
         var intervals = document?.Intervals ?? [];
         if (!string.Equals(_mediaPath, mediaPath, StringComparison.OrdinalIgnoreCase))
@@ -166,9 +190,11 @@ internal sealed class CensorWindow : Form
         _duration.Text = mediaDurationMs.HasValue
             ? FormatTimestamp(mediaDurationMs.Value)
             : T("Неизвестна");
-        _filterState.Text = status is "ACTIVE" or "WARNING"
+        _filterState.Text = status == "WARNING"
             ? localizedStatus
-            : T("Нет активной цепочки фильтров");
+            : hasActiveSchedule
+                ? T("Активна")
+                : T("Нет активной цепочки фильтров");
         _diagnostics.Text =
             $"{T("Статус:")} {localizedStatus}{Environment.NewLine}" +
             $"{T("Фильм:")} {_media.Text}{Environment.NewLine}" +
@@ -220,11 +246,11 @@ internal sealed class CensorWindow : Form
     public void MarkSaved(
         string path,
         ScheduleDocument savedDocument,
-        ExtensionSettings settings)
+        string? lastScheduleDirectory)
     {
         _sourcePath = path;
         _schedule.Text = path;
-        _settings = settings;
+        _settings = _settings with { LastScheduleDirectory = lastScheduleDirectory };
         if (_draft?.MarkSaved(savedDocument) == true)
             DraftRecoveryStore.Delete(_recoveryPath);
         else
@@ -239,19 +265,37 @@ internal sealed class CensorWindow : Form
 
     public void OpenSchedulePicker() => SelectSchedule();
 
-    public void HandleAuthoringCommand(string command)
+    public void SetAudioCompressionPreset(string presetId)
+    {
+        var index = AudioCompressionPresets.All
+            .Select((item, itemIndex) => (item, itemIndex))
+            .First(pair => pair.item.Id == presetId)
+            .itemIndex;
+        _rendering = true;
+        try
+        {
+            _settings = _settings with { AudioCompressionPreset = presetId };
+            _audioCompressionPreset.SelectedIndex = index;
+        }
+        finally
+        {
+            _rendering = false;
+        }
+    }
+
+    public void HandleAuthoringCommand(string command, long? capturedTimeMs = null)
     {
         switch (command)
         {
             case "mark-start":
-                _pendingStartMs = CurrentTimeRequested?.Invoke();
+                _pendingStartMs = capturedTimeMs ?? CurrentTimeRequested?.Invoke();
                 _draftState.Text = _pendingStartMs.HasValue
                     ? $"{T("Начало отмечено:")} {FormatTimestamp(_pendingStartMs.Value)}"
                     : T("Текущая позиция воспроизведения недоступна");
                 break;
             case "mark-end":
                 if (_pendingStartMs is { } start &&
-                    CurrentTimeRequested?.Invoke() is { } end &&
+                    (capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is { } end &&
                     end > start)
                 {
                     EnsureDraft();
@@ -265,10 +309,10 @@ internal sealed class CensorWindow : Form
                 }
                 break;
             case "set-start":
-                CaptureBoundary(start: true);
+                CaptureBoundary(start: true, capturedTimeMs);
                 break;
             case "set-end":
-                CaptureBoundary(start: false);
+                CaptureBoundary(start: false, capturedTimeMs);
                 break;
             case "previous":
                 NavigateInterval(-1);
@@ -502,15 +546,16 @@ internal sealed class CensorWindow : Form
             AutoSize = true,
         };
         AddRow(layout, 0, T("Размытие:"), _blurPreset);
-        AddRow(layout, 1, T("Запас перед началом, мс:"), _leadIn);
-        AddRow(layout, 2, T("Запас после конца, мс:"), _leadOut);
-        AddRow(layout, 3, T("Порог объединения, мс:"), _mergeGap);
-        AddRow(layout, 4, T("Допуск длительности, мс:"), _durationTolerance);
-        AddRow(layout, 5, T("Защитный запас до интервала, мс:"), _earlyGuard);
-        AddRow(layout, 6, T("Период проверки фильтра, мс:"), _watchdogInterval);
-        layout.Controls.Add(_autoSidecar, 1, 7);
-        layout.Controls.Add(_watchdog, 1, 8);
-        layout.Controls.Add(Button(T("Сохранить настройки"), SaveSettings), 1, 9);
+        AddRow(layout, 1, T("Компрессия звука:"), _audioCompressionPreset);
+        AddRow(layout, 2, T("Запас перед началом, мс:"), _leadIn);
+        AddRow(layout, 3, T("Запас после конца, мс:"), _leadOut);
+        AddRow(layout, 4, T("Порог объединения, мс:"), _mergeGap);
+        AddRow(layout, 5, T("Допуск длительности, мс:"), _durationTolerance);
+        AddRow(layout, 6, T("Защитный запас до интервала, мс:"), _earlyGuard);
+        AddRow(layout, 7, T("Период проверки фильтра, мс:"), _watchdogInterval);
+        layout.Controls.Add(_autoSidecar, 1, 8);
+        layout.Controls.Add(_watchdog, 1, 9);
+        layout.Controls.Add(Button(T("Сохранить настройки"), SaveSettings), 1, 10);
         return layout;
     }
 
@@ -592,10 +637,10 @@ internal sealed class CensorWindow : Form
         }
     }
 
-    private void CaptureBoundary(bool start)
+    private void CaptureBoundary(bool start, long? capturedTimeMs = null)
     {
         if (_draft is null || SelectedIndex() is not { } index ||
-            CurrentTimeRequested?.Invoke() is not { } position)
+            (capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
         {
             return;
         }
@@ -675,7 +720,9 @@ internal sealed class CensorWindow : Form
             Warn(T("Сначала загрузите или создайте расписание."));
             return false;
         }
-        var diagnostics = _draft.Validate();
+        var diagnostics = _draft.Validate(
+            _settings.Limits.MaxIntervals,
+            _settings.Limits.MaxTextFileBytes);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
             Warn(T("Исправьте ошибки черновика перед применением или сохранением."));
@@ -774,7 +821,9 @@ internal sealed class CensorWindow : Form
                 return;
             }
 
-            var draftDiagnostics = _draft.Validate();
+            var draftDiagnostics = _draft.Validate(
+                _settings.Limits.MaxIntervals,
+                _settings.Limits.MaxTextFileBytes);
             var errors = draftDiagnostics
                 .Where(item => item.Line > 0)
                 .GroupBy(item => item.Line - 1)
@@ -850,20 +899,15 @@ internal sealed class CensorWindow : Form
 
     private void SaveSettings()
     {
-        var selectedBlur = _blurPresets[_blurPreset.SelectedIndex].Settings;
-        _settings = _settings with
-        {
-            AutoLoadSidecar = _autoSidecar.Checked,
-            WatchdogEnabled = _watchdog.Checked,
-            WatchdogIntervalMs = (int)_watchdogInterval.Value,
-            LeadInMs = (long)_leadIn.Value,
-            LeadOutMs = (long)_leadOut.Value,
-            MergeGapMs = (long)_mergeGap.Value,
-            DurationToleranceMs = (long)_durationTolerance.Value,
-            EarlyIntervalGuardMs = (long)_earlyGuard.Value,
-            Blur = selectedBlur,
-        };
-        SettingsChanged?.Invoke(_settings);
+        SettingsChanged?.Invoke(new(
+            _autoSidecar.Checked,
+            _watchdog.Checked,
+            (int)_watchdogInterval.Value,
+            (long)_leadIn.Value,
+            (long)_leadOut.Value,
+            (long)_mergeGap.Value,
+            (long)_durationTolerance.Value,
+            (long)_earlyGuard.Value));
     }
 
     private void PopulateSettings(ExtensionSettings settings)
@@ -919,8 +963,13 @@ internal sealed class CensorWindow : Form
     private void OfferRecovery()
     {
         var recovered = DraftRecoveryStore.Load(_recoveryPath);
-        if (recovered is null)
+        if (recovered.Status == DraftRecoveryStatus.NotFound)
             return;
+        if (recovered.Status == DraftRecoveryStatus.Unreadable)
+        {
+            Warn(recovered.Warning ?? T("Не удалось прочитать несохранённый черновик."));
+            return;
+        }
         var restore = MessageBox.Show(
             this,
             T("Найден несохранённый черновик. Восстановить его?"),
@@ -929,7 +978,7 @@ internal sealed class CensorWindow : Form
             MessageBoxIcon.Question) == DialogResult.Yes;
         if (restore)
         {
-            _draft = new(recovered);
+            _draft = new(recovered.Document!);
             _draft.MarkDirty();
             _draftState.Text = T("Восстановлен несохранённый черновик");
             RenderDraft();
@@ -970,7 +1019,6 @@ internal sealed class CensorWindow : Form
             {
                 LastScheduleDirectory = Path.GetDirectoryName(dialog.FileName),
             };
-            SettingsChanged?.Invoke(_settings);
         }
         ScheduleSelected?.Invoke(dialog.FileName);
     }
@@ -1134,7 +1182,7 @@ internal sealed class CensorWindow : Form
             "ACTIVE" => T("Активно"),
             "APPLYING" => T("Применение"),
             "DISABLED" => T("Отключено"),
-            "DURATION MISMATCH" => T("Не совпадает длительность"),
+            "DURATION MISMATCH" => T("Длительность не совпадает"),
             "EMPTY SCHEDULE" => T("Расписание пусто"),
             "ERROR" => T("Ошибка"),
             "IDLE" => T("Ожидание"),

@@ -17,6 +17,10 @@ $UninstallLog = Join-Path $TempRoot "censorplayer-uninstall.log"
 $PortableConfig = Join-Path $InstallRoot "portable_config"
 $InputConfig = Join-Path $PortableConfig "input.conf"
 $RuntimeState = Join-Path $PortableConfig "installer-runtime-state.txt"
+$ExtensionDirectory = Join-Path $PortableConfig "extensions/CensorExtension"
+$InstalledDll = Join-Path $ExtensionDirectory "CensorExtension.dll"
+$LegacyCore = Join-Path $ExtensionDirectory "Censor.Core.dll"
+$LegacyDeps = Join-Path $ExtensionDirectory "CensorExtension.deps.json"
 
 New-Item -ItemType Directory -Force $DataRoot | Out-Null
 "retain me" | Set-Content $Marker
@@ -28,25 +32,31 @@ if ($Setup.ExitCode -ne 0) {
     throw "Installer failed with exit code $($Setup.ExitCode)."
 }
 if (-not (Test-Path (Join-Path $InstallRoot "mpvnet.exe") -PathType Leaf) -or
-    -not (Test-Path (
-        Join-Path $InstallRoot "portable_config/extensions/CensorExtension/CensorExtension.dll"
-    ) -PathType Leaf)) {
+    -not (Test-Path $InstalledDll -PathType Leaf)) {
     throw "Installed payload is incomplete."
 }
+$ExpectedDllHash = (Get-FileHash $InstalledDll -Algorithm SHA256).Hash
 Add-Content $InputConfig "# installer-update-preservation-smoke"
 "runtime state" | Set-Content $RuntimeState
+[IO.File]::WriteAllBytes($InstalledDll, [byte[]](1..32))
+"legacy" | Set-Content $LegacyCore
+"legacy" | Set-Content $LegacyDeps
 
-# A second silent install must preserve extension data and the live portable config.
+# A second silent install must replace the extension and preserve the live config.
 $Update = Start-Process $InstallerPath `
     -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$SetupLog`"" `
     -Wait -PassThru
 if ($Update.ExitCode -ne 0 -or
     -not (Test-Path $Marker -PathType Leaf) -or
     -not (Test-Path $RuntimeState -PathType Leaf) -or
+    -not (Test-Path $InstalledDll -PathType Leaf) -or
+    (Get-FileHash $InstalledDll -Algorithm SHA256).Hash -ne $ExpectedDllHash -or
+    (Test-Path $LegacyCore) -or
+    (Test-Path $LegacyDeps) -or
     -not ((Get-Content $InputConfig -Raw).Contains(
         "# installer-update-preservation-smoke",
         [StringComparison]::Ordinal))) {
-    throw "Update install failed or removed user data."
+    throw "Update did not replace the extension cleanly or removed user data."
 }
 
 $Uninstaller = Join-Path $InstallRoot "unins000.exe"
@@ -60,15 +70,44 @@ if ($Uninstall.ExitCode -ne 0) {
     throw "Uninstaller failed with exit code $($Uninstall.ExitCode)."
 }
 $UninstallDeadline = [DateTime]::UtcNow.AddSeconds(15)
-while ((Test-Path $InstallRoot) -and [DateTime]::UtcNow -lt $UninstallDeadline) {
+while (((Test-Path (Join-Path $InstallRoot "mpvnet.exe")) -or
+        (Test-Path $InstalledDll)) -and
+       [DateTime]::UtcNow -lt $UninstallDeadline) {
     Start-Sleep -Milliseconds 200
 }
-if (Test-Path $InstallRoot) {
+if ((Test-Path (Join-Path $InstallRoot "mpvnet.exe")) -or
+    (Test-Path $InstalledDll)) {
     throw "Program payload remained after uninstall."
 }
-if (-not (Test-Path $Marker -PathType Leaf)) {
+if (-not (Test-Path $Marker -PathType Leaf) -or
+    -not (Test-Path $InputConfig -PathType Leaf) -or
+    -not (Test-Path $RuntimeState -PathType Leaf)) {
     throw "Uninstall removed user data without explicit opt-in."
 }
-Remove-Item $Marker -Force
 
-Write-Host "Installer install/update/uninstall smoke passed."
+$Reinstall = Start-Process $InstallerPath `
+    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$SetupLog`"" `
+    -Wait -PassThru
+if ($Reinstall.ExitCode -ne 0 -or
+    -not (Test-Path $InstalledDll -PathType Leaf) -or
+    -not (Test-Path $Marker -PathType Leaf)) {
+    throw "Reinstall before opt-in cleanup failed."
+}
+
+$OptInUninstaller = Join-Path $InstallRoot "unins000.exe"
+$OptInUninstall = Start-Process $OptInUninstaller `
+    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DELETEUSERDATA=1", "/LOG=`"$UninstallLog`"" `
+    -Wait -PassThru
+if ($OptInUninstall.ExitCode -ne 0) {
+    throw "Opt-in uninstall failed with exit code $($OptInUninstall.ExitCode)."
+}
+$CleanupDeadline = [DateTime]::UtcNow.AddSeconds(15)
+while (((Test-Path $PortableConfig) -or (Test-Path $DataRoot)) -and
+       [DateTime]::UtcNow -lt $CleanupDeadline) {
+    Start-Sleep -Milliseconds 200
+}
+if ((Test-Path $PortableConfig) -or (Test-Path $DataRoot)) {
+    throw "Opt-in uninstall did not remove all user data."
+}
+
+Write-Host "Installer install/update/default-retention/opt-in-cleanup smoke passed."

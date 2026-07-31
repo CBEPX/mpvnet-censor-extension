@@ -68,6 +68,28 @@
 | Stock loader не разрешает sibling dependency | Single `CensorExtension.dll` + Windows `LoadFile/GetTypes` smoke |
 | Неполный соответствующий исходный код bundled `libmpv` | Полный пакет не публикуется; CI отдаёт только extension DLL и project source до фиксации всей статической dependency closure |
 
+## Post-review wave
+
+- `CensorWindow` отправляет устаревший полный `ExtensionSettings`; выбор файла
+  создаёт отдельный settings work item и может отменить последующую загрузку.
+  Исправление: узкий payload формы и один work item для выбранного пути.
+- Выключенный timer watchdog не запрещает observer-driven recovery. Проверка
+  `WatchdogEnabled` нужна непосредственно перед восстановлением.
+- Installer сохраняет старый `CensorExtension.dll`, потому что весь
+  `portable_config` установлен с `onlyifdoesntexist`; same-build smoke этого не
+  замечает.
+- mpv поддерживает именованные `af`; выбранная метка
+  `@censor_audio_compression`. Применяются только Film, Anime, Night и
+  Adaptive, default `off`; Music и Noisy Source в эту волну не входят.
+- `MpvClient.CommandV` только журналирует отрицательный `mpv_error`, поэтому
+  success определяется обязательным readback `af`; смена пресета выполняется
+  remove/add/verify с восстановлением прежнего графа при ошибке.
+- Пользователь переключил итоговый review с Fable на Claude Opus 5 через
+  `cc`; post-implementation verdict Opus 5 остаётся обязательным gate.
+- Официальный immutable asset Inno Setup 6.7.1 имеет размер 10 619 024 байта
+  и SHA-256 `4d11e8050b6185e0d49bd9e8cc661a7a59f44959a621d31d11033124c4e8a7b0`.
+  CI больше не зависит от изменяемого Chocolatey-состояния Windows runner.
+
 ## Граница доказательств
 
 - Физический Windows smoke на `440269a` доказал extension API, filter timeline,

@@ -100,6 +100,7 @@ public sealed class Extension : IExtension, IDisposable
         {
             var extension = (Extension)state!;
             extension.RunSafely(extension.LoadCurrentSidecar);
+            extension.RunSafely(extension.EnsureSavedAudioCompression);
         }, this);
 
     private void OnEndFile(mpv_end_file_reason _) => RunSafely(() => BeginSession("IDLE"));
@@ -161,7 +162,12 @@ public sealed class Extension : IExtension, IDisposable
                      "previous" or "next" or "save")
         {
             var command = args[0]["censor-".Length..].ToLowerInvariant();
-            QueueWindowAction(window => window.HandleAuthoringCommand(command));
+            var capturedTimeMs = command is
+                "mark-start" or "mark-end" or "set-start" or "set-end"
+                    ? GetCurrentTimeMs()
+                    : null;
+            QueueWindowAction(window =>
+                window.HandleAuthoringCommand(command, capturedTimeMs));
         }
         else if (args[0].Equals("censor-diagnostics", StringComparison.OrdinalIgnoreCase))
         {
@@ -500,7 +506,7 @@ public sealed class Extension : IExtension, IDisposable
             if (UpdateWindow("ACTIVE", ticket, token))
             {
                 Show(
-                    $"Применено {plan.IntervalCount} интервалов из файла {Path.GetFileName(schedulePath)}.",
+                    $"Расписание из файла {Path.GetFileName(schedulePath)} применено. Интервалов: {plan.IntervalCount}.",
                     ticket,
                     token);
             }
@@ -675,6 +681,21 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
+        bool rememberDirectory;
+        lock (_stateLock)
+        {
+            rememberDirectory = _settings.RememberLastScheduleDirectory;
+            if (rememberDirectory)
+            {
+                _settings = _settings with
+                {
+                    LastScheduleDirectory = Path.GetDirectoryName(schedulePath),
+                };
+            }
+        }
+        if (rememberDirectory)
+            SaveSettings();
+
         var operation = StartNewOperation();
         if (operation is null)
         {
@@ -726,7 +747,7 @@ public sealed class Extension : IExtension, IDisposable
                 pending.Intervals,
                 token).ConfigureAwait(false);
             if (UpdateWindow("ACTIVE", pending.Ticket, token))
-                Show($"Применено интервалов: {pending.Plan.IntervalCount}.", pending.Ticket, token);
+                Show($"Расписание применено. Интервалов: {pending.Plan.IntervalCount}.", pending.Ticket, token);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -742,7 +763,9 @@ public sealed class Extension : IExtension, IDisposable
     private void ApplyDraftDocument(ScheduleDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var validation = new ScheduleDraft(document).Validate();
+        var validation = new ScheduleDraft(document).Validate(
+            _settings.Limits.MaxIntervals,
+            _settings.Limits.MaxTextFileBytes);
         if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
             UpdateWindow("INVALID DRAFT");
@@ -794,32 +817,49 @@ public sealed class Extension : IExtension, IDisposable
         _ = ApplyPendingScheduleAsync(pending, operation.Value.Token);
     }
 
-    private void ChangeSettings(ExtensionSettings settings)
+    private void ChangeSettings(SettingsFormValues values)
     {
-        var warnings = ExtensionSettingsStore.Validate(settings);
+        ExtensionSettings settings;
+        bool watchdogChanged;
+        IReadOnlyList<string> warnings;
+        lock (_stateLock)
+        {
+            settings = _settings with
+            {
+                AutoLoadSidecar = values.AutoLoadSidecar,
+                WatchdogEnabled = values.WatchdogEnabled,
+                WatchdogIntervalMs = values.WatchdogIntervalMs,
+                LeadInMs = values.LeadInMs,
+                LeadOutMs = values.LeadOutMs,
+                MergeGapMs = values.MergeGapMs,
+                DurationToleranceMs = values.DurationToleranceMs,
+                EarlyIntervalGuardMs = values.EarlyIntervalGuardMs,
+            };
+            watchdogChanged =
+                _settings.WatchdogEnabled != settings.WatchdogEnabled ||
+                _settings.WatchdogIntervalMs != settings.WatchdogIntervalMs;
+            warnings = ExtensionSettingsStore.Validate(settings);
+            if (warnings.Count == 0)
+            {
+                _settings = settings;
+                if (watchdogChanged)
+                {
+                    _recoveryFailures = 0;
+                    _vfReadFailures = 0;
+                }
+            }
+        }
         if (warnings.Count > 0)
         {
-            UpdateWindow("SETTINGS ERROR");
             Show(warnings[0]);
             return;
         }
 
-        bool blurChanged;
-        lock (_stateLock)
-        {
-            blurChanged = settings.Blur != _blurSettings;
-            _settings = settings;
-        }
         _watchdog.Change(
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite,
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite);
-        if (blurChanged)
-            ChangeBlurPreset(settings.Blur);
-        else
-        {
-            SaveSettings();
-            UpdateWindow("SETTINGS SAVED");
-        }
+        SaveSettings();
+        Show("Настройки сохранены.");
     }
 
     private void SaveDraft(
@@ -888,7 +928,11 @@ public sealed class Extension : IExtension, IDisposable
         else if (path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase))
             WriteTextAtomically(path, SubtitleScheduleText.Export(document, SubtitleFormat.WebVtt));
         else
-            AtomicScheduleWriter.Write(path, document);
+            AtomicScheduleWriter.Write(
+                path,
+                document,
+                settings.Limits.MaxIntervals,
+                settings.Limits.MaxTextFileBytes);
         var savedHash = ComputeHash(File.ReadAllBytes(path));
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
@@ -897,7 +941,7 @@ public sealed class Extension : IExtension, IDisposable
 
         var markWindowSaved = false;
         var updateRuntime = false;
-        ExtensionSettings savedSettings;
+        string? savedScheduleDirectory;
         _filterGate.Wait();
         try
         {
@@ -952,7 +996,7 @@ public sealed class Extension : IExtension, IDisposable
                         LastScheduleDirectory = Path.GetDirectoryName(path),
                     };
                 }
-                savedSettings = _settings;
+                savedScheduleDirectory = _settings.LastScheduleDirectory;
             }
         }
         finally
@@ -962,7 +1006,8 @@ public sealed class Extension : IExtension, IDisposable
         SaveSettings();
         if (markWindowSaved)
         {
-            InvokeWindow(window => window.MarkSaved(path, document, savedSettings));
+            InvokeWindow(window =>
+                window.MarkSaved(path, document, savedScheduleDirectory));
             if (updateRuntime)
                 UpdateWindow("SAVED", saveTicket);
             Show($"Файл {Path.GetFileName(path)} сохранён.", saveTicket);
@@ -1014,12 +1059,15 @@ public sealed class Extension : IExtension, IDisposable
         if (string.IsNullOrWhiteSpace(path))
             return;
 
-        string filters;
+        string videoFilters;
+        string audioFilters;
         _filterGate.Wait();
         try
         {
-            if (!TryGetPropertyString("vf", out filters))
-                filters = "";
+            if (!TryGetPropertyString("vf", out videoFilters))
+                videoFilters = "";
+            if (!TryGetPropertyString("af", out audioFilters))
+                audioFilters = "";
         }
         finally
         {
@@ -1075,11 +1123,18 @@ public sealed class Extension : IExtension, IDisposable
             }, jsonOptions),
             JsonSerializer.Serialize(new
             {
-                sha256 = ComputeHash(Encoding.UTF8.GetBytes(filters)),
+                sha256 = ComputeHash(Encoding.UTF8.GetBytes(videoFilters)),
                 expectedLabels = active?.Plan.Chunks.Select(chunk => chunk.Label) ?? [],
                 presentExpectedLabels = active?.Plan.Chunks
-                    .Where(chunk => ContainsLabel(filters, chunk.Label))
+                    .Where(chunk => ContainsLabel(videoFilters, chunk.Label))
                     .Select(chunk => chunk.Label) ?? [],
+            }, jsonOptions),
+            JsonSerializer.Serialize(new
+            {
+                sha256 = ComputeHash(Encoding.UTF8.GetBytes(audioFilters)),
+                presetId = settings.AudioCompressionPreset,
+                expectedLabel = AudioCompressionPresets.FilterLabel,
+                present = ContainsLabel(audioFilters, AudioCompressionPresets.FilterLabel),
             }, jsonOptions),
             JsonSerializer.Serialize(new
             {
@@ -1185,6 +1240,159 @@ public sealed class Extension : IExtension, IDisposable
             Terminal.WriteError(exception, LogModule);
             if (UpdateWindow("ERROR", ticket, token))
                 Show("Не удалось изменить степень размытия. Проверьте состояние фильтра.", ticket, token);
+        }
+    }
+
+    private void ChangeAudioCompressionPreset(string presetId)
+    {
+        var preset = AudioCompressionPresets.Find(presetId) ??
+            throw new ArgumentException("Неизвестный пресет компрессии звука.", nameof(presetId));
+        AudioCompressionPresetDefinition previousPreset;
+        bool hasMedia;
+        Exception? applyError = null;
+        Exception? rollbackError = null;
+        _filterGate.Wait();
+        try
+        {
+            lock (_stateLock)
+            {
+                if (_settings.AudioCompressionPreset == preset.Id)
+                    return;
+                previousPreset = AudioCompressionPresets.Find(
+                    _settings.AudioCompressionPreset)!;
+                hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
+                if (!hasMedia)
+                    _settings = _settings with { AudioCompressionPreset = preset.Id };
+            }
+
+            if (hasMedia)
+            {
+                try
+                {
+                    ApplyAudioCompressionPreset(preset);
+                    lock (_stateLock)
+                        _settings = _settings with { AudioCompressionPreset = preset.Id };
+                }
+                catch (Exception exception)
+                {
+                    applyError = exception;
+                    try
+                    {
+                        ApplyAudioCompressionPreset(previousPreset);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        rollbackError = rollbackException;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _filterGate.Release();
+        }
+
+        if (!hasMedia)
+        {
+            SaveSettings();
+            _log.Write(
+                "audio-preset-saved",
+                _revisions.Snapshot(),
+                new Dictionary<string, object?> { ["presetId"] = preset.Id });
+            Show($"Пресет «{preset.DisplayName}» будет применён после открытия фильма.");
+            return;
+        }
+
+        if (applyError is null)
+        {
+            SaveSettings();
+            _log.Write(
+                "audio-preset-applied",
+                _revisions.Snapshot(),
+                new Dictionary<string, object?> { ["presetId"] = preset.Id });
+            Show($"Компрессия звука: {preset.DisplayName}.");
+            return;
+        }
+
+        InvokeWindow(window => window.SetAudioCompressionPreset(previousPreset.Id));
+        Terminal.WriteError(applyError, LogModule);
+        if (rollbackError is not null)
+            Terminal.WriteError(rollbackError, LogModule);
+        _log.Write(
+            "audio-preset-error",
+            _revisions.Snapshot(),
+            new Dictionary<string, object?>
+            {
+                ["presetId"] = preset.Id,
+                ["error"] = ProtectError(applyError),
+                ["rollbackError"] = rollbackError is null ? null : ProtectError(rollbackError),
+            });
+        Show(rollbackError is null
+            ? $"Не удалось применить компрессию звука. Возвращён пресет «{previousPreset.DisplayName}»."
+            : "Не удалось применить или восстановить компрессию звука. Проверьте аудиофильтры.");
+    }
+
+    private void EnsureSavedAudioCompression()
+    {
+        AudioCompressionPresetDefinition? preset = null;
+        try
+        {
+            _filterGate.Wait();
+            try
+            {
+                lock (_stateLock)
+                {
+                    if (string.IsNullOrWhiteSpace(_currentMediaPath))
+                        return;
+                    preset = AudioCompressionPresets.Find(
+                        _settings.AudioCompressionPreset)!;
+                }
+                ApplyAudioCompressionPreset(preset);
+            }
+            finally
+            {
+                _filterGate.Release();
+            }
+            _log.Write(
+                "audio-preset-restored",
+                _revisions.Snapshot(),
+                new Dictionary<string, object?> { ["presetId"] = preset!.Id });
+        }
+        catch (Exception exception)
+        {
+            Terminal.WriteError(exception, LogModule);
+            _log.Write(
+                "audio-preset-restore-error",
+                _revisions.Snapshot(),
+                new Dictionary<string, object?>
+                {
+                    ["presetId"] = preset?.Id,
+                    ["error"] = ProtectError(exception),
+                });
+            Show(preset is null
+                ? "Не удалось применить сохранённый пресет компрессии звука."
+                : $"Не удалось применить пресет компрессии звука «{preset.DisplayName}».");
+        }
+    }
+
+    private void ApplyAudioCompressionPreset(AudioCompressionPresetDefinition preset)
+    {
+        Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
+        if (!TryGetPropertyString("af", out var filters) ||
+            ContainsLabel(filters, AudioCompressionPresets.FilterLabel))
+        {
+            throw new InvalidOperationException(
+                "mpv не подтвердил удаление прежнего фильтра компрессии звука.");
+        }
+        if (preset.Filter is null)
+            return;
+
+        Player.CommandV("af", "add", preset.Filter);
+        if (!TryGetPropertyString("af", out filters) ||
+            !ContainsLabel(filters, AudioCompressionPresets.FilterLabel))
+        {
+            throw new InvalidOperationException(
+                "mpv не подтвердил применение фильтра компрессии звука.");
         }
     }
 
@@ -1343,10 +1551,17 @@ public sealed class Extension : IExtension, IDisposable
                                 var (extension, selectedSettings) = ((Extension, BlurSettings))state!;
                                 extension.RunSafely(() => extension.ChangeBlurPreset(selectedSettings));
                             }, (this, settings));
+                        window.AudioCompressionPresetSelected += presetId =>
+                            ThreadPool.QueueUserWorkItem(static state =>
+                            {
+                                var (extension, selectedPresetId) = ((Extension, string))state!;
+                                extension.RunSafely(() =>
+                                    extension.ChangeAudioCompressionPreset(selectedPresetId));
+                            }, (this, presetId));
                         window.SettingsChanged += settings =>
                             ThreadPool.QueueUserWorkItem(static state =>
                             {
-                                var (extension, changed) = ((Extension, ExtensionSettings))state!;
+                                var (extension, changed) = ((Extension, SettingsFormValues))state!;
                                 extension.RunSafely(() => extension.ChangeSettings(changed));
                             }, (this, settings));
                         window.SaveRequested += (document, sourcePath, saveAs) =>
@@ -1391,7 +1606,8 @@ public sealed class Extension : IExtension, IDisposable
                                 current.Status,
                                 current.MediaDurationMs,
                                 current.Document,
-                                current.Diagnostics);
+                                current.Diagnostics,
+                                current.HasActiveSchedule);
                             DrainWindowActions(window);
                         };
 
@@ -1405,7 +1621,8 @@ public sealed class Extension : IExtension, IDisposable
                             snapshot.Status,
                             snapshot.MediaDurationMs,
                             snapshot.Document,
-                            snapshot.Diagnostics);
+                            snapshot.Diagnostics,
+                            snapshot.HasActiveSchedule);
 
                         if (Volatile.Read(ref _stopping) == 0)
                             Application.Run(window);
@@ -1484,7 +1701,8 @@ public sealed class Extension : IExtension, IDisposable
                     snapshot.Status,
                     snapshot.MediaDurationMs,
                     snapshot.Document,
-                    snapshot.Diagnostics)));
+                    snapshot.Diagnostics,
+                    snapshot.HasActiveSchedule)));
         }
         catch (InvalidOperationException)
         {
@@ -1499,7 +1717,8 @@ public sealed class Extension : IExtension, IDisposable
         string Status,
         long? MediaDurationMs,
         ScheduleDocument? Document,
-        IReadOnlyList<ParseDiagnostic> Diagnostics) SnapshotWindow()
+        IReadOnlyList<ParseDiagnostic> Diagnostics,
+        bool HasActiveSchedule) SnapshotWindow()
     {
         string? mediaPath;
         long? mediaDurationMs;
@@ -1521,7 +1740,8 @@ public sealed class Extension : IExtension, IDisposable
             status,
             mediaDurationMs,
             pending?.Document ?? active?.Document,
-            pending?.Diagnostics ?? []);
+            pending?.Diagnostics ?? [],
+            active is not null);
     }
 
     private string? ChooseSavePath(string? currentPath)
@@ -1699,10 +1919,8 @@ public sealed class Extension : IExtension, IDisposable
     {
         try
         {
-            ExtensionSettings settings;
             lock (_stateLock)
-                settings = _settings;
-            ExtensionSettingsStore.Save(_settingsPath, settings);
+                ExtensionSettingsStore.Save(_settingsPath, _settings);
         }
         catch (Exception exception)
         {
@@ -1790,10 +2008,10 @@ public sealed class Extension : IExtension, IDisposable
             {
                 _vfReadFailures++;
                 if (_vfReadFailures == 1)
-                    Terminal.WriteError("Не удалось прочитать vf и определить состояние watchdog.", LogModule);
+                    Terminal.WriteError("Не удалось прочитать vf и определить состояние автовосстановления.", LogModule);
                 if (_vfReadFailures == MaxRecoveryFailures)
                     QueueShow(
-                        "Не удалось прочитать цепочку видеофильтров. Автоматическое восстановление остановлено.");
+                        "Не удалось прочитать цепочку видеофильтров. Автовосстановление остановлено.");
                 return;
             }
 
@@ -1805,6 +2023,11 @@ public sealed class Extension : IExtension, IDisposable
             }
 
             UpdateWindow("WARNING", active.Ticket);
+            bool watchdogEnabled;
+            lock (_stateLock)
+                watchdogEnabled = _settings.WatchdogEnabled;
+            if (!watchdogEnabled)
+                return;
             if (_recoveryFailures >= MaxRecoveryFailures)
                 return;
 
@@ -1828,7 +2051,7 @@ public sealed class Extension : IExtension, IDisposable
                         ["error"] = ProtectError(exception, active.SchedulePath),
                     });
                 if (_recoveryFailures == MaxRecoveryFailures)
-                    QueueShow("Не удалось восстановить фильтры. Автоматическое восстановление остановлено.");
+                    QueueShow("Не удалось восстановить фильтры. Автовосстановление остановлено.");
             }
         }
         catch (Exception exception)
@@ -1992,7 +2215,10 @@ public sealed class Extension : IExtension, IDisposable
                     _pendingSchedule = null;
                 }
                 if (removeFilters)
+                {
                     RemoveFilters(active?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
+                    Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
+                }
             }
             finally
             {

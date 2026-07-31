@@ -16,6 +16,7 @@ public sealed record ExtensionSettings
     public bool WatchdogEnabled { get; init; } = true;
     public int WatchdogIntervalMs { get; init; } = 1_000;
     public BlurSettings Blur { get; init; } = BlurSettings.Balanced;
+    public string AudioCompressionPreset { get; init; } = AudioCompressionPresets.OffId;
     public SettingsLimits Limits { get; init; } = new();
     public LoggingSettings Logging { get; init; } = new();
     public string? LastScheduleDirectory { get; init; }
@@ -65,18 +66,33 @@ public static class ExtensionSettingsStore
 
         try
         {
-            var settings = JsonSerializer.Deserialize<ExtensionSettings>(
-                File.ReadAllText(path),
-                JsonOptions) ?? throw new JsonException("Файл настроек пуст.");
-            var warnings = Validate(settings);
-            return warnings.Count == 0
-                ? new(settings, [])
-                : new(Normalize(settings), warnings);
+            return LoadFile(path);
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException)
         {
-            return new(new(), [$"Файл settings.json пропущен: {exception.Message}"]);
+            var primaryWarning = $"Не удалось прочитать settings.json: {exception.Message}";
+            var backupPath = Path.GetFullPath(path) + ".bak";
+            if (!File.Exists(backupPath))
+                return new(new(), [primaryWarning]);
+
+            try
+            {
+                var backup = LoadFile(backupPath);
+                return new(
+                    backup.Settings,
+                    [$"Основной settings.json повреждён. Загружена резервная копия.", .. backup.Warnings]);
+            }
+            catch (Exception backupException) when (
+                backupException is IOException or UnauthorizedAccessException or JsonException)
+            {
+                return new(
+                    new(),
+                    [
+                        primaryWarning,
+                        $"Не удалось прочитать резервную копию settings.json: {backupException.Message}",
+                    ]);
+            }
         }
     }
 
@@ -95,7 +111,18 @@ public static class ExtensionSettingsStore
         var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
-            File.WriteAllText(tempPath, JsonSerializer.Serialize(settings, JsonOptions));
+            var bytes = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
+            using (var stream = new FileStream(
+                tempPath,
+                FileMode.CreateNew,
+                FileAccess.Write,
+                FileShare.None,
+                4_096,
+                FileOptions.WriteThrough))
+            {
+                stream.Write(bytes);
+                stream.Flush(flushToDisk: true);
+            }
             if (File.Exists(fullPath))
                 File.Replace(tempPath, fullPath, fullPath + ".bak");
             else
@@ -128,6 +155,8 @@ public static class ExtensionSettingsStore
         ValidateMilliseconds(settings.EarlyIntervalGuardMs, nameof(settings.EarlyIntervalGuardMs), warnings);
         if (settings.WatchdogIntervalMs is < 250 or > 60_000)
             warnings.Add("Значение watchdogIntervalMs должно быть от 250 до 60000.");
+        if (!AudioCompressionPresets.IsValid(settings.AudioCompressionPreset))
+            warnings.Add("Неизвестный пресет audioCompressionPreset.");
         if (settings.Blur is null)
         {
             warnings.Add("Поле blur должно быть объектом.");
@@ -156,13 +185,12 @@ public static class ExtensionSettingsStore
         {
             warnings.Add("Поле logging должно быть объектом.");
         }
-        else if (settings.Logging.RetentionDays is < 1 or > 365)
+        else
         {
-            warnings.Add("Значение logging.retentionDays должно быть от 1 до 365.");
-        }
-        else if (!IsLogLevelValid(settings.Logging.Level))
-        {
-            warnings.Add("Значение logging.level: debug, info, warning или error.");
+            if (settings.Logging.RetentionDays is < 1 or > 365)
+                warnings.Add("Значение logging.retentionDays должно быть от 1 до 365.");
+            if (!IsLogLevelValid(settings.Logging.Level))
+                warnings.Add("Допустимые значения logging.level: debug, info, warning, error.");
         }
 
         return warnings;
@@ -196,6 +224,9 @@ public static class ExtensionSettingsStore
             WatchdogIntervalMs = settings.WatchdogIntervalMs is >= 250 and <= 60_000
                 ? settings.WatchdogIntervalMs
                 : defaults.WatchdogIntervalMs,
+            AudioCompressionPreset = AudioCompressionPresets.IsValid(settings.AudioCompressionPreset)
+                ? settings.AudioCompressionPreset
+                : defaults.AudioCompressionPreset,
             Blur = settings.Blur is not null &&
                 double.IsFinite(settings.Blur.Sigma) &&
                 settings.Blur.Sigma is >= 0.01 and <= 1_024 &&
@@ -223,6 +254,17 @@ public static class ExtensionSettingsStore
                         : defaultLogging.RetentionDays,
                 },
         };
+    }
+
+    private static SettingsLoadResult LoadFile(string path)
+    {
+        var settings = JsonSerializer.Deserialize<ExtensionSettings>(
+            File.ReadAllText(path),
+            JsonOptions) ?? throw new JsonException("Файл настроек пуст.");
+        var warnings = Validate(settings);
+        return warnings.Count == 0
+            ? new(settings, [])
+            : new(Normalize(settings), warnings);
     }
 
     private static bool ValidMilliseconds(long value) =>

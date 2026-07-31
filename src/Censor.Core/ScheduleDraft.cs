@@ -1,3 +1,5 @@
+using System.Text;
+
 namespace Censor.Core;
 
 public sealed class ScheduleDraft
@@ -25,9 +27,24 @@ public sealed class ScheduleDraft
 
     public bool CanRedo => _redo.Count > 0;
 
-    public IReadOnlyList<ParseDiagnostic> Validate()
+    public IReadOnlyList<ParseDiagnostic> Validate(
+        int maxIntervals = ScheduleText.MaxIntervals,
+        int maxTextFileBytes = ScheduleText.MaxTextFileBytes)
     {
+        if (maxIntervals is < 1 or > ScheduleText.MaxIntervals)
+            throw new ArgumentOutOfRangeException(nameof(maxIntervals));
+        if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
+
         var diagnostics = new List<ParseDiagnostic>();
+        if (_document.Intervals.Count > maxIntervals)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                0,
+                1,
+                $"В расписании больше {maxIntervals} интервалов."));
+        }
         for (var index = 0; index < _document.Intervals.Count; index++)
         {
             var interval = _document.Intervals[index];
@@ -45,6 +62,28 @@ public sealed class ScheduleDraft
                 0,
                 1,
                 "Смещение выходит за допустимый диапазон."));
+
+        try
+        {
+            var serializedBytes = Encoding.UTF8.GetByteCount(ScheduleText.Serialize(_document));
+            if (serializedBytes > maxTextFileBytes)
+            {
+                diagnostics.Add(new(
+                    DiagnosticSeverity.Error,
+                    0,
+                    1,
+                    $"Расписание превышает ограничение в {maxTextFileBytes} байт."));
+            }
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or OverflowException)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                0,
+                1,
+                $"Черновик нельзя сохранить: {exception.Message}"));
+        }
 
         return diagnostics;
     }

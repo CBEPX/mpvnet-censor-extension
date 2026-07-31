@@ -2,6 +2,30 @@
 
 ## 2026-07-31
 
+- Принят post-review план: исправления runtime/data/installer и четыре
+  аудиопресета с немедленным применением и OSD.
+- Начата реализация на чистом `eb606d4`; `MediaSessionCoordinator` решено не
+  менять.
+- Локально подтверждены mpv `v0.41.0-60-g85bf9f4ff`, FFmpeg
+  `N-122394-g272c273d3` и наличие выбранных audio filters.
+- Итоговый review по указанию пользователя будет выполнен Claude Opus 5 через
+  `cc`; Fable больше не является gate этой волны.
+- Core post-review wave реализован: 60/60 Release-тестов проходят. Добавлены
+  audio preset IDs/graphs, лимиты draft/writer, settings backup + durable
+  writes, recovery statuses, durable UiState и UTC invariant logs.
+- Runtime/UI wave реализован: узкий payload настроек, точный hotkey timestamp,
+  честное состояние активной `vf`, disabled-watchdog guard и независимая
+  транзакция `af` с readback, rollback и русским OSD.
+- Installer теперь отдельно обновляет DLL, сохраняет пользовательские конфиги
+  при update/default uninstall и удаляет данные только по явному согласию или
+  `/DELETEUSERDATA=1`. Smoke проверяет stale DLL и оба сценария удаления.
+- Inno Setup 6.7.1 закреплён официальными URL, размером и SHA-256; GitHub
+  Actions закреплены полными commit SHA. Добавлен Windows smoke всех четырёх
+  аудиографов на штатном mpv.net.
+- README, ТЗ и Windows checklist синхронизированы; строки интерфейса проверены
+  через `humanizer-ru`. Локально: 60/60, extension build без предупреждений,
+  `dotnet format --verify-no-changes`, JSON/YAML и shell syntax — PASS.
+
 - Прочитаны ТЗ v1.3, пример schedule и ADR-003.
 - Инициализирован пустой Git-репозиторий с веткой `main`; исходные документы оставлены untracked.
 - Выполнен foreground Claude Code Fable review всего working tree.
@@ -72,6 +96,7 @@
 
 ## Следующий шаг
 
-После 13:00 МСК повторить Fable-review полного branch diff и разобрать все
-замечания. Затем физически проверить точный SHA на Windows. PR остаётся draft;
-полный portable/installer не публикуется до закрытия issue #4.
+Зафиксировать и отправить post-review wave, дождаться Windows CI, затем
+выполнить полный review Claude Opus 5 через `cc`. После зелёного verdict
+физически проверить точный SHA DLL на Windows. PR остаётся draft; полный
+portable/installer не публикуется до закрытия issue #4.

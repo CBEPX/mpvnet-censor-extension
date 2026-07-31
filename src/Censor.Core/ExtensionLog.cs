@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -56,7 +57,7 @@ public sealed class ExtensionLog : IDisposable
         if (Volatile.Read(ref _disposed) != 0)
             return;
         _channel.Writer.TryWrite(new(
-            DateTimeOffset.Now,
+            DateTimeOffset.UtcNow,
             eventName,
             ticket.MediaSessionId,
             ticket.OperationRevision,
@@ -103,7 +104,9 @@ public sealed class ExtensionLog : IDisposable
                 }
                 var path = Path.Combine(
                     _directory,
-                    $"censor-extension-{entry.Timestamp:yyyyMMdd}.log");
+                    "censor-extension-" +
+                    entry.Timestamp.UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+                    ".log");
                 var bytes = Encoding.UTF8.GetBytes(
                     JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
                 await using var stream = new FileStream(

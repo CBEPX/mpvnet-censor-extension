@@ -110,6 +110,60 @@ public sealed class ScheduleDraftTests
         Assert.Equal(DiagnosticSeverity.Error, diagnostic.Severity);
     }
 
+    [Fact]
+    public void EnforcesConfiguredIntervalAndUtf8SizeLimits()
+    {
+        var tooMany = new ScheduleDraft(Document(
+            Enumerable.Range(0, ScheduleText.MaxIntervals + 1)
+                .Select(index => new CensorInterval(index * 2L, index * 2L + 1))
+                .ToArray()));
+        var customCount = new ScheduleDraft(Document(
+            new(0, 1_000),
+            new(2_000, 3_000),
+            new(4_000, 5_000)));
+        var oversized = new ScheduleDraft(Document(
+            new CensorInterval(0, 1_000, new string('я', 100))));
+
+        Assert.Contains(
+            tooMany.Validate(),
+            item => item.Message.Contains("10000", StringComparison.Ordinal));
+        Assert.Contains(
+            customCount.Validate(maxIntervals: 2),
+            item => item.Message.Contains("2 интервалов", StringComparison.Ordinal));
+        Assert.Contains(
+            oversized.Validate(maxTextFileBytes: 100),
+            item => item.Message.Contains("100 байт", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WriterRejectsConfiguredLimitsWithoutChangingExistingFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "schedule.censor.txt");
+        File.WriteAllText(path, "old");
+        var document = Document(new(0, 1_000), new(2_000, 3_000));
+
+        Assert.Throws<InvalidOperationException>(() =>
+            AtomicScheduleWriter.Write(path, document, maxIntervals: 1));
+
+        Assert.Equal("old", File.ReadAllText(path));
+    }
+
     private static ScheduleDocument Document(params CensorInterval[] intervals) =>
         new(new(), intervals, []);
+
+    private sealed class TemporaryDirectory : IDisposable
+    {
+        public TemporaryDirectory()
+        {
+            Path = System.IO.Path.Combine(
+                System.IO.Path.GetTempPath(),
+                $"censor-tests-{Guid.NewGuid():N}");
+            Directory.CreateDirectory(Path);
+        }
+
+        public string Path { get; }
+
+        public void Dispose() => Directory.Delete(Path, recursive: true);
+    }
 }

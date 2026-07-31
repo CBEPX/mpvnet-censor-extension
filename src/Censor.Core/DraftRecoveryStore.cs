@@ -3,6 +3,18 @@ using System.Text.Json;
 
 namespace Censor.Core;
 
+public enum DraftRecoveryStatus
+{
+    NotFound,
+    Loaded,
+    Unreadable,
+}
+
+public sealed record DraftRecoveryLoadResult(
+    DraftRecoveryStatus Status,
+    ScheduleDocument? Document = null,
+    string? Warning = null);
+
 public static class DraftRecoveryStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -53,11 +65,11 @@ public static class DraftRecoveryStore
         }
     }
 
-    public static ScheduleDocument? Load(string path)
+    public static DraftRecoveryLoadResult Load(string path)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         if (!File.Exists(path))
-            return null;
+            return new(DraftRecoveryStatus.NotFound);
 
         try
         {
@@ -73,17 +85,23 @@ public static class DraftRecoveryStore
                 document.PreservedHeaderLines is null ||
                 document.Intervals.Any(interval => interval is null))
             {
-                return null;
+                return new(
+                    DraftRecoveryStatus.Unreadable,
+                    Warning: "Файл восстановления повреждён. Он оставлен без изменений.");
             }
             return new(
-                document.Metadata with { },
-                document.Intervals.Select(interval => interval with { }).ToArray(),
-                document.PreservedHeaderLines.ToArray());
+                DraftRecoveryStatus.Loaded,
+                new(
+                    document.Metadata with { },
+                    document.Intervals.Select(interval => interval with { }).ToArray(),
+                    document.PreservedHeaderLines.ToArray()));
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException)
         {
-            return null;
+            return new(
+                DraftRecoveryStatus.Unreadable,
+                Warning: $"Не удалось прочитать файл восстановления: {exception.Message}");
         }
     }
 

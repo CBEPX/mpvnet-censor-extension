@@ -12,9 +12,9 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@v6
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: 10.0.302
           cache: true
@@ -42,33 +42,18 @@ jobs:
           --
           src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
 
-      - name: Verify pinned Inno Setup
-        shell: pwsh
-        run: |
-          $expected = (Get-Content deps.lock.json -Raw | ConvertFrom-Json).tools.innoSetup.version
-          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6/ISCC.exe"
-          if (-not (Test-Path $iscc -PathType Leaf)) {
-            throw "Inno Setup compiler is missing: $iscc"
-          }
-          $installed = @(
-            choco list --exact innosetup --limit-output |
-              Where-Object { $_ -like "innosetup|*" }
-          )
-          $actual = if ($installed.Count -eq 1) {
-            ($installed[0] -split "\|", 2)[1]
-          } else {
-            ""
-          }
-          if ($actual -ne $expected) {
-            throw "Expected Inno Setup $expected, found $actual."
-          }
-
       - name: Build portable, installer, project source, checksums, and SBOM
         shell: pwsh
         run: >-
           ./scripts/package-windows.ps1
           -Commit $env:GITHUB_SHA
           -RunId $env:GITHUB_RUN_ID
+
+      - name: Verify audio filters on pinned mpv.net
+        shell: pwsh
+        run: >-
+          ./scripts/smoke-audio-filters.ps1
+          -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
 
       - name: Verify release artifacts
         shell: pwsh
@@ -81,7 +66,7 @@ jobs:
           -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
 
       - name: Upload extension build evidence
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: CensorExtension-windows-x64
           if-no-files-found: error
