@@ -1,0 +1,372 @@
+using System.Globalization;
+using System.Text;
+
+namespace Censor.Core;
+
+public static class ScheduleText
+{
+    public const int MaxTextFileBytes = 2 * 1024 * 1024;
+    public const int MaxIntervals = 10_000;
+    public const long MaxOffsetMs = 86_400_000;
+
+    private static readonly HashSet<string> KnownMetadataKeys =
+    [
+        "censor-timeline",
+        "title",
+        "media-duration-ms",
+        "lead-in-ms",
+        "lead-out-ms",
+        "offset-ms",
+    ];
+
+    public static ParseResult Parse(
+        string text,
+        int maxTextFileBytes = MaxTextFileBytes,
+        int maxIntervals = MaxIntervals)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+
+        var diagnostics = new List<ParseDiagnostic>();
+        if (Encoding.UTF8.GetByteCount(text) > maxTextFileBytes)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                1,
+                1,
+                $"Schedule exceeds the {maxTextFileBytes}-byte limit."));
+            return new(null, diagnostics);
+        }
+
+        if (text.Length > 0 && text[0] == '\uFEFF')
+            text = text[1..];
+
+        var lines = text.Replace("\r\n", "\n", StringComparison.Ordinal)
+            .Replace('\r', '\n')
+            .Split('\n');
+        var intervals = new List<CensorInterval>();
+        var preservedHeaderLines = new List<string>();
+        var seenMetadata = new HashSet<string>(StringComparer.Ordinal);
+
+        var schemaVersion = 1;
+        string? title = null;
+        long? mediaDurationMs = null;
+        long? leadInMs = null;
+        long? leadOutMs = null;
+        long? offsetMs = null;
+
+        for (var index = 0; index < lines.Length; index++)
+        {
+            var lineNumber = index + 1;
+            var rawLine = lines[index];
+            var line = rawLine.Trim();
+
+            if (line.Length == 0)
+                continue;
+
+            if (line[0] == '#')
+            {
+                var body = line[1..].TrimStart();
+                var colon = body.IndexOf(':');
+                if (colon <= 0)
+                {
+                    preservedHeaderLines.Add(rawLine);
+                    continue;
+                }
+
+                var key = body[..colon].Trim();
+                var value = body[(colon + 1)..].Trim();
+                if (!KnownMetadataKeys.Contains(key))
+                {
+                    preservedHeaderLines.Add(rawLine);
+                    continue;
+                }
+
+                if (!seenMetadata.Add(key))
+                {
+                    diagnostics.Add(new(
+                        DiagnosticSeverity.Error,
+                        lineNumber,
+                        1,
+                        $"Metadata key '{key}' is duplicated."));
+                    continue;
+                }
+
+                switch (key)
+                {
+                    case "censor-timeline":
+                        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out schemaVersion) ||
+                            schemaVersion != 1)
+                        {
+                            diagnostics.Add(new(
+                                DiagnosticSeverity.Error,
+                                lineNumber,
+                                colon + 3,
+                                "Only censor-timeline schema 1 is supported."));
+                        }
+                        break;
+                    case "title":
+                        title = value;
+                        break;
+                    case "media-duration-ms":
+                        mediaDurationMs = ParsePositiveLong(value, key, lineNumber, colon + 3, diagnostics);
+                        break;
+                    case "lead-in-ms":
+                        leadInMs = ParseNonNegativeLong(value, key, lineNumber, colon + 3, diagnostics);
+                        break;
+                    case "lead-out-ms":
+                        leadOutMs = ParseNonNegativeLong(value, key, lineNumber, colon + 3, diagnostics);
+                        break;
+                    case "offset-ms":
+                        offsetMs = ParseOffset(value, lineNumber, colon + 3, diagnostics);
+                        break;
+                }
+
+                continue;
+            }
+
+            if (intervals.Count >= maxIntervals)
+            {
+                diagnostics.Add(new(
+                    DiagnosticSeverity.Error,
+                    lineNumber,
+                    1,
+                    $"Schedule exceeds the {maxIntervals}-interval limit."));
+                break;
+            }
+
+            ParseInterval(line, lineNumber, intervals, diagnostics);
+        }
+
+        if (mediaDurationMs is null)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Warning,
+                1,
+                1,
+                "media-duration-ms is absent; media matching cannot be verified."));
+        }
+
+        if (diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
+            return new(null, diagnostics);
+
+        var metadata = new ScheduleMetadata(
+            schemaVersion,
+            title,
+            mediaDurationMs,
+            leadInMs,
+            leadOutMs,
+            offsetMs);
+        return new(
+            new ScheduleDocument(metadata, intervals, preservedHeaderLines),
+            diagnostics);
+    }
+
+    public static string Serialize(ScheduleDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (document.Metadata.Title?.Contains('\r') == true ||
+            document.Metadata.Title?.Contains('\n') == true)
+        {
+            throw new ArgumentException("Title must fit on one line.", nameof(document));
+        }
+
+        var builder = new StringBuilder();
+        builder.Append("# censor-timeline: ")
+            .Append(document.Metadata.SchemaVersion)
+            .Append('\n');
+        AppendMetadata(builder, "title", document.Metadata.Title);
+        AppendMetadata(builder, "media-duration-ms", document.Metadata.MediaDurationMs);
+        AppendMetadata(builder, "lead-in-ms", document.Metadata.LeadInMs);
+        AppendMetadata(builder, "lead-out-ms", document.Metadata.LeadOutMs);
+        AppendMetadata(builder, "offset-ms", document.Metadata.OffsetMs);
+
+        foreach (var line in document.PreservedHeaderLines)
+        {
+            if (!line.TrimStart().StartsWith('#') || line.Contains('\r') || line.Contains('\n'))
+                throw new ArgumentException("Preserved header lines must be single-line comments.", nameof(document));
+            builder.Append(line).Append('\n');
+        }
+
+        if (document.Intervals.Count > 0)
+            builder.Append('\n');
+
+        foreach (var interval in document.Intervals)
+        {
+            builder.Append(FormatTimestamp(interval.StartMs))
+                .Append(" --> ")
+                .Append(FormatTimestamp(interval.EndMs));
+
+            if (!string.IsNullOrWhiteSpace(interval.Note))
+            {
+                builder.Append(" | ")
+                    .Append(interval.Note.Replace('\r', ' ').Replace('\n', ' '));
+            }
+
+            builder.Append('\n');
+        }
+
+        return builder.ToString();
+    }
+
+    internal static bool TryParseTimestamp(ReadOnlySpan<char> value, out long milliseconds)
+    {
+        milliseconds = 0;
+        if (value.Length != 12 ||
+            value[2] != ':' ||
+            value[5] != ':' ||
+            (value[8] != '.' && value[8] != ',') ||
+            !int.TryParse(value[..2], NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
+            !int.TryParse(value.Slice(3, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
+            !int.TryParse(value.Slice(6, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            !int.TryParse(value.Slice(9, 3), NumberStyles.None, CultureInfo.InvariantCulture, out var millis) ||
+            minutes > 59 ||
+            seconds > 59)
+        {
+            return false;
+        }
+
+        milliseconds = checked(
+            ((long)hours * 3_600_000) +
+            ((long)minutes * 60_000) +
+            ((long)seconds * 1_000) +
+            millis);
+        return true;
+    }
+
+    internal static string FormatTimestamp(long milliseconds)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        if (milliseconds >= 360_000_000)
+            throw new ArgumentOutOfRangeException(nameof(milliseconds), "Timestamps cannot exceed 99:59:59.999.");
+
+        var hours = milliseconds / 3_600_000;
+        var minutes = (milliseconds / 60_000) % 60;
+        var seconds = (milliseconds / 1_000) % 60;
+        var millis = milliseconds % 1_000;
+        return FormattableString.Invariant($"{hours:D2}:{minutes:D2}:{seconds:D2}.{millis:D3}");
+    }
+
+    private static void ParseInterval(
+        string line,
+        int lineNumber,
+        List<CensorInterval> intervals,
+        List<ParseDiagnostic> diagnostics)
+    {
+        var separator = line.IndexOf("-->", StringComparison.Ordinal);
+        if (separator < 0)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                lineNumber,
+                1,
+                "Interval separator '-->' is missing."));
+            return;
+        }
+
+        var startText = line[..separator].Trim();
+        var remainder = line[(separator + 3)..].Trim();
+        var noteSeparator = remainder.IndexOf('|');
+        var endText = noteSeparator >= 0 ? remainder[..noteSeparator].Trim() : remainder;
+        var note = noteSeparator >= 0 ? remainder[(noteSeparator + 1)..].Trim() : null;
+
+        if (!TryParseTimestamp(startText, out var startMs))
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                lineNumber,
+                1,
+                $"Invalid start timestamp '{startText}'."));
+            return;
+        }
+
+        if (!TryParseTimestamp(endText, out var endMs))
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                lineNumber,
+                separator + 4,
+                $"Invalid end timestamp '{endText}'."));
+            return;
+        }
+
+        if (startMs >= endMs)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                lineNumber,
+                1,
+                "Interval start must be earlier than end."));
+            return;
+        }
+
+        intervals.Add(new CensorInterval(startMs, endMs, note));
+    }
+
+    private static long? ParsePositiveLong(
+        string value,
+        string key,
+        int line,
+        int column,
+        List<ParseDiagnostic> diagnostics)
+    {
+        if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var result) && result > 0)
+            return result;
+
+        diagnostics.Add(new(
+            DiagnosticSeverity.Error,
+            line,
+            column,
+            $"Metadata '{key}' must be a positive integer."));
+        return null;
+    }
+
+    private static long? ParseNonNegativeLong(
+        string value,
+        string key,
+        int line,
+        int column,
+        List<ParseDiagnostic> diagnostics)
+    {
+        if (long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var result) && result >= 0)
+            return result;
+
+        diagnostics.Add(new(
+            DiagnosticSeverity.Error,
+            line,
+            column,
+            $"Metadata '{key}' must be a non-negative integer."));
+        return null;
+    }
+
+    private static long? ParseOffset(
+        string value,
+        int line,
+        int column,
+        List<ParseDiagnostic> diagnostics)
+    {
+        if (long.TryParse(value, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var result) &&
+            result is >= -MaxOffsetMs and <= MaxOffsetMs)
+        {
+            return result;
+        }
+
+        diagnostics.Add(new(
+            DiagnosticSeverity.Error,
+            line,
+            column,
+            $"offset-ms must be between {-MaxOffsetMs} and {MaxOffsetMs}."));
+        return null;
+    }
+
+    private static void AppendMetadata(StringBuilder builder, string key, object? value)
+    {
+        if (value is not null)
+        {
+            builder.Append("# ")
+                .Append(key)
+                .Append(": ")
+                .Append(Convert.ToString(value, CultureInfo.InvariantCulture))
+                .Append('\n');
+        }
+    }
+}

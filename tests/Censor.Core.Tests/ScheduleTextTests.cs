@@ -1,0 +1,186 @@
+using System.Text;
+using Censor.Core;
+using FsCheck;
+using FsCheck.Xunit;
+
+namespace Censor.Core.Tests;
+
+public sealed class ScheduleTextTests
+{
+    [Fact]
+    public void ParsesCanonicalFixture()
+    {
+        var text = File.ReadAllText(Path.Combine(AppContext.BaseDirectory, "fixtures", "example.censor.txt"));
+
+        var result = ScheduleText.Parse(text);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal("Example Film", result.Document!.Metadata.Title);
+        Assert.Equal(7_200_123, result.Document.Metadata.MediaDurationMs);
+        Assert.Equal(3, result.Document.Intervals.Count);
+        Assert.Equal(new CensorInterval(723_250, 727_900, "Сцена 1"), result.Document.Intervals[0]);
+    }
+
+    [Fact]
+    public void SaveAndReloadKeepsRawTimestampsAndOffsetSeparate()
+    {
+        const string text = """
+            # censor-timeline: 1
+            # offset-ms: -250
+            # future-key: keep me
+            # a comment
+
+            00:00:01.000 --> 00:00:02.000 | sample
+            """;
+
+        var parsed = ScheduleText.Parse(text);
+        var serialized = ScheduleText.Serialize(parsed.Document!);
+        var reloaded = ScheduleText.Parse(serialized);
+
+        Assert.True(reloaded.IsSuccess);
+        Assert.Equal(-250, reloaded.Document!.Metadata.OffsetMs);
+        Assert.Equal(new CensorInterval(1_000, 2_000, "sample"), reloaded.Document.Intervals.Single());
+        Assert.Equal(["# future-key: keep me", "# a comment"], reloaded.Document.PreservedHeaderLines);
+    }
+
+    [Theory]
+    [InlineData("# offset-ms: -86400001")]
+    [InlineData("# offset-ms: 86400001")]
+    [InlineData("# censor-timeline: 2")]
+    [InlineData("00:00:02.000 --> 00:00:01.000")]
+    public void RejectsInvalidInput(string line)
+    {
+        var result = ScheduleText.Parse(line);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void RejectsDuplicateKnownMetadata()
+    {
+        const string text = """
+            # offset-ms: 10
+            # offset-ms: 20
+            00:00:01.000 --> 00:00:02.000
+            """;
+
+        var result = ScheduleText.Parse(text);
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("duplicated", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WritesUtf8WithoutBomAtomicallyAndKeepsBackup()
+    {
+        var directory = Directory.CreateTempSubdirectory("censor-core-tests-");
+        try
+        {
+            var path = Path.Combine(directory.FullName, "sample.censor.txt");
+            File.WriteAllText(path, "old");
+            var document = new ScheduleDocument(
+                new ScheduleMetadata(Title: "Фильм"),
+                [new CensorInterval(1_000, 2_000)],
+                []);
+
+            AtomicScheduleWriter.Write(path, document);
+
+            Assert.Equal("old", File.ReadAllText(path + ".bak"));
+            var bytes = File.ReadAllBytes(path);
+            Assert.False(bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble));
+            Assert.True(ScheduleText.Parse(Encoding.UTF8.GetString(bytes)).IsSuccess);
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SerializesCanonicalLfBytes()
+    {
+        var document = new ScheduleDocument(
+            new ScheduleMetadata(Title: "Film", OffsetMs: -5),
+            [new CensorInterval(1_000, 2_000, "note")],
+            ["# future-key: value"]);
+
+        var text = ScheduleText.Serialize(document);
+
+        Assert.Equal(
+            "# censor-timeline: 1\n# title: Film\n# offset-ms: -5\n# future-key: value\n\n00:00:01.000 --> 00:00:02.000 | note\n",
+            text);
+        Assert.DoesNotContain('\r', text);
+    }
+
+    [Theory]
+    [InlineData("line one\nline two")]
+    [InlineData("line one\rline two")]
+    public void RejectsMultilineTitle(string title)
+    {
+        var document = new ScheduleDocument(new ScheduleMetadata(Title: title), [], []);
+
+        Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
+    }
+
+    [Fact]
+    public void RejectsTimestampAtOneHundredHours()
+    {
+        var document = new ScheduleDocument(
+            new ScheduleMetadata(),
+            [new CensorInterval(359_999_999, 360_000_000)],
+            []);
+
+        Assert.Throws<ArgumentOutOfRangeException>(() => ScheduleText.Serialize(document));
+    }
+
+    [Fact]
+    public void FailedReplaceKeepsOriginalAndCleansTemporaryFile()
+    {
+        var directory = Directory.CreateTempSubdirectory("censor-core-tests-");
+        try
+        {
+            var path = Path.Combine(directory.FullName, "sample.censor.txt");
+            File.WriteAllText(path, "old");
+            Directory.CreateDirectory(path + ".bak");
+            var document = new ScheduleDocument(
+                new ScheduleMetadata(),
+                [new CensorInterval(1_000, 2_000)],
+                []);
+
+            var exception = Record.Exception(() => AtomicScheduleWriter.Write(path, document));
+
+            Assert.True(exception is IOException or UnauthorizedAccessException);
+            Assert.Equal("old", File.ReadAllText(path));
+            Assert.Empty(Directory.EnumerateFiles(directory.FullName, ".sample.censor.txt.*.tmp"));
+        }
+        finally
+        {
+            directory.Delete(recursive: true);
+        }
+    }
+
+    [Property(MaxTest = 100)]
+    public bool SerializeThenParsePreservesGeneratedInterval(
+        NonNegativeInt startValue,
+        PositiveInt lengthValue,
+        string? note)
+    {
+        var start = startValue.Get % 359_000_000;
+        var length = (lengthValue.Get % 999_999) + 1L;
+        var end = Math.Min(start + length, 359_999_999);
+        var document = new ScheduleDocument(
+            new ScheduleMetadata(Title: "Фильм"),
+            [new CensorInterval(start, end, note)],
+            ["# future-key: keep"]);
+
+        var parsed = ScheduleText.Parse(ScheduleText.Serialize(document));
+        var expectedNote = string.IsNullOrWhiteSpace(note)
+            ? null
+            : note.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+        return parsed.IsSuccess &&
+            parsed.Document!.Intervals.Single() == new CensorInterval(start, end, expectedNote) &&
+            parsed.Document.PreservedHeaderLines.SequenceEqual(["# future-key: keep"]);
+    }
+}

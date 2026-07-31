@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.302
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore pinned mpv.net reference
+        run: bash scripts/restore-mpvnet.sh
+
+      - name: Restore
+        run: dotnet restore CensorPlayer.sln --locked-mode
+
+      - name: Build
+        run: dotnet build CensorPlayer.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
+
+      - name: Upload extension
+        uses: actions/upload-artifact@v4
+        with:
+          name: CensorExtension-windows
+          if-no-files-found: error
+          path: |
+            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
+            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.deps.json
+            src/Censor.MpvNet.Extension/bin/Release/Censor.Core.dll
