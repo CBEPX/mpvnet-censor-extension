@@ -43,7 +43,7 @@ try {
             -RedirectStandardOutput $StdOut `
             -RedirectStandardError $StdErr `
             -PassThru
-        if (-not $Process.WaitForExit(15_000)) {
+        if (-not $Process.WaitForExit(15000)) {
             Stop-Process -Id $Process.Id -Force
             throw "Audio filter smoke timed out for preset $($Preset.Id)."
         }

@@ -22,6 +22,9 @@
 - Inno Setup 6.7.1 закреплён официальными URL, размером и SHA-256; GitHub
   Actions закреплены полными commit SHA. Добавлен Windows smoke всех четырёх
   аудиографов на штатном mpv.net.
+- Первый Windows run `30661245085` подтвердил build/tests/loader/package и
+  закреплённый Inno, затем нашёл синтаксическую ошибку `15_000` в новом
+  PowerShell smoke. Литерал исправлен на `15000`; требуется повторный run.
 - README, ТЗ и Windows checklist синхронизированы; строки интерфейса проверены
   через `humanizer-ru`. Локально: 60/60, extension build без предупреждений,
   `dotnet format --verify-no-changes`, JSON/YAML и shell syntax — PASS.
