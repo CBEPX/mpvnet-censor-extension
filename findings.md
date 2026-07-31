@@ -31,6 +31,9 @@
 - `File.Copy + File.Move` заменены на `File.Replace(temp, target, backup)`; failure simulation доказывает сохранность старого файла и cleanup temp.
 - `gblur` ограничен `sigma 0.01..1024`, `steps 1..6`; числовое форматирование invariant и round-trip.
 - Locator больше не рекламирует неподдерживаемые форматы: SRT/WebVTT adapters реализованы и протестированы.
+- Lifecycle review обнаружил и закрыл teardown UAF: оба shutdown caller теперь ждут общий completion barrier после drain всех native calls.
+- Watchdog ограничен тремя успешными и тремя неудачными recovery/read attempts на сессию; persistent `vf clr` не создаёт бесконечный 1 Hz storm.
+- Финальный Fable lifecycle verdict: `approve`; остался только Low residual risk, если synchronous mpv filter call зависнет дольше upstream 10-second shutdown timeout.
 
 ## Главные риски
 

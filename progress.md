@@ -19,9 +19,12 @@
 - Реализованы TXT parser/serializer, атомарная запись через `File.Replace`, exact sidecar lookup, SRT/WebVTT import/export, нормализация и filter compiler.
 - После adversarial Claude Code Fable review устранены mixed-EOL, parse-after-save, timestamp >99h, failure simulation и `gblur` range gaps.
 - Реализован session-scoped mpv.net host: lifecycle invalidation, cancellation, serialized `vf` mutations, duration gate и label readback.
-- Локальный Release build проходит без warnings; 31/31 Core tests проходят.
-- Добавлен Windows GitHub Actions workflow; создание публичного репозитория и первый run выполняются далее.
+- Реализован watchdog: push + polling detection, pause-near-interval, bounded recovery и main-player shutdown barrier до `mpv_destroy`.
+- После нескольких узких Fable lifecycle review устранён native teardown UAF; финальный verdict `approve`, `BLOCKER/HIGH/MEDIUM` нет.
+- Локальный Release build проходит без warnings; 36/36 Core tests проходят.
+- Создан публичный репозиторий `CBEPX/mpvnet-censor-extension`; первый Windows CI run `30596392355` зелёный.
+- GitHub Actions обновлены до подтверждённых актуальных major tags; feature-branch CI выполняется далее.
 
 ## Следующий шаг
 
-Опубликовать `CBEPX/mpvnet-censor-extension`, дождаться зелёного Windows CI, затем добавить watchdog/manual UI и выполнить обязательный Windows runtime Phase 0.
+Дождаться зелёного feature-branch Windows CI, затем добавить manual tool window и выполнить обязательный Windows runtime Phase 0.
