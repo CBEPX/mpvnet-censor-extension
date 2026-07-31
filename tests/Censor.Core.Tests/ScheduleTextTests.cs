@@ -77,6 +77,24 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void PreservesCommentWithColonWithoutMetadataWarning()
+    {
+        const string text = """
+            # media-duration-ms: 2000
+            # см. https://example.com
+            00:00:01.000 --> 00:00:02.000
+            """;
+
+        var result = ScheduleText.Parse(text);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(["# см. https://example.com"], result.Document!.PreservedHeaderLines);
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("Неизвестное необязательное поле metadata", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void WritesUtf8WithoutBomAtomicallyAndKeepsBackup()
     {
         var directory = Directory.CreateTempSubdirectory("censor-core-tests-");

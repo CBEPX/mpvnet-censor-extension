@@ -78,11 +78,14 @@ public static class ScheduleText
                 if (!KnownMetadataKeys.Contains(key))
                 {
                     preservedHeaderLines.Add(rawLine);
-                    diagnostics.Add(new(
-                        DiagnosticSeverity.Warning,
-                        lineNumber,
-                        1,
-                        $"Неизвестное необязательное поле metadata «{key}» сохранено без изменений."));
+                    if (LooksLikeMetadataKey(key))
+                    {
+                        diagnostics.Add(new(
+                            DiagnosticSeverity.Warning,
+                            lineNumber,
+                            1,
+                            $"Неизвестное необязательное поле metadata «{key}» сохранено без изменений."));
+                    }
                     continue;
                 }
 
@@ -164,6 +167,24 @@ public static class ScheduleText
         return new(
             new ScheduleDocument(metadata, intervals, preservedHeaderLines),
             diagnostics);
+    }
+
+    private static bool LooksLikeMetadataKey(string key)
+    {
+        if (key.Length == 0 || key[0] is < 'a' or > 'z')
+            return false;
+
+        foreach (var character in key.AsSpan(1))
+        {
+            if ((character >= 'a' && character <= 'z') ||
+                (character >= '0' && character <= '9') ||
+                character == '-')
+            {
+                continue;
+            }
+            return false;
+        }
+        return true;
     }
 
     public static string Serialize(ScheduleDocument document)

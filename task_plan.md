@@ -1,7 +1,7 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** замечания третьего Claude Opus 5 review исправлены локально в
-`codex/implement-censor-p0`. Проходят 64 Core-теста и Release-сборка без
+**Статус:** замечания четвёртого Claude Opus 5 review исправлены локально в
+`codex/implement-censor-p0`. Проходят 65 Core-тестов и Release-сборка без
 предупреждений. Осталось подтвердить Windows runtime/installer smoke в CI,
 получить чистый review через Claude Opus 5 и физически проверить новый DLL.
 Полный portable/installer по-прежнему нельзя публиковать до закрытия
@@ -197,6 +197,24 @@ actionable findings.
 **Выход:** destructive smoke имеет исполняемый safety gate, локальные
 build/tests зелёные, оба Windows CI подтверждают installer/runtime, итоговый
 `cc review` на `claude-opus-5` не оставляет actionable findings.
+
+### 12. Исправления после четвёртого Claude Opus 5 review
+
+- При смене blur пересобирать и сохранять загруженное, но ещё не применённое
+  расписание. Пока оно ожидает применения, не запускать конкурирующий reapply
+  прежнего active schedule.
+- Развести identity последнего runtime document и интервалы, с которыми
+  синхронизирован draft. Повторный `WARNING` должен обновлять только сообщения,
+  не перестраивая dirty grid.
+- Считать неизвестной metadata только ключ вида `[a-z][a-z0-9-]*`; остальные
+  строки с двоеточием сохранять как обычные комментарии без предупреждения.
+- Публиковать immutable `_settings` и `_blurSettings` через `volatile`, не читать
+  disposed operation token после stop и убрать дешёвые неоднозначности UI.
+
+**Выход:** staged schedule и dirty draft сохраняются при смене настроек и
+повторных watchdog events, parser regression закреплена тестом, оба Windows CI
+зелёные, итоговый `cc review` на `claude-opus-5` не оставляет findings перед
+merge.
 
 ## Обязательные проверки и review gates
 

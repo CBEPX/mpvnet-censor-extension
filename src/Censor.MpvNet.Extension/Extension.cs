@@ -37,8 +37,8 @@ public sealed class Extension : IExtension, IDisposable
     private Task _sessionCleanup = Task.CompletedTask;
     private ActiveSchedule? _activeSchedule;
     private PendingSchedule? _pendingSchedule;
-    private BlurSettings _blurSettings = BlurSettings.Balanced;
-    private ExtensionSettings _settings;
+    private volatile BlurSettings _blurSettings = BlurSettings.Balanced;
+    private volatile ExtensionSettings _settings;
     private long? _currentDurationMs;
     private string? _currentMediaPath;
     private CensorWindow? _window;
@@ -641,6 +641,7 @@ public sealed class Extension : IExtension, IDisposable
         {
             try
             {
+                // Fail closed until either the new graph or its rollback is verified.
                 if (filtersReady || !_revisions.IsCurrentMediaSession(ticket))
                     ReleasePauseIfHeld();
             }
@@ -724,6 +725,8 @@ public sealed class Extension : IExtension, IDisposable
         CancellationToken token;
         lock (_stateLock)
         {
+            if (Volatile.Read(ref _stopping) != 0)
+                return;
             pending = _pendingSchedule;
             token = _operationCancellation.Token;
         }
@@ -1195,6 +1198,7 @@ public sealed class Extension : IExtension, IDisposable
     private void ChangeBlurPreset(BlurSettings settings)
     {
         ActiveSchedule? active;
+        PendingSchedule? pending;
         CancellationToken token;
         OperationTicket ticket;
         CancellationTokenSource previousCancellation;
@@ -1203,6 +1207,9 @@ public sealed class Extension : IExtension, IDisposable
             if (_blurSettings == settings)
                 return;
 
+            var pendingPlan = _pendingSchedule is null
+                ? null
+                : FilterCompiler.Compile(_pendingSchedule.Intervals, settings);
             _blurSettings = settings;
             _settings = _settings with { Blur = settings };
             ticket = _revisions.BeginOperation();
@@ -1214,12 +1221,26 @@ public sealed class Extension : IExtension, IDisposable
             if (_activeSchedule is not null)
                 _activeSchedule = _activeSchedule with { Ticket = ticket };
             active = _activeSchedule;
-            _pendingSchedule = null;
+            if (_pendingSchedule is not null)
+            {
+                _pendingSchedule = _pendingSchedule with
+                {
+                    Ticket = ticket,
+                    Plan = pendingPlan!,
+                };
+            }
+            pending = _pendingSchedule;
         }
 
         previousCancellation.Cancel();
         previousCancellation.Dispose();
         SaveSettings();
+
+        if (pending is not null)
+        {
+            UpdateWindow("READY TO APPLY", ticket, token);
+            return;
+        }
 
         if (active is null)
         {
@@ -2098,6 +2119,7 @@ public sealed class Extension : IExtension, IDisposable
         }
         finally
         {
+            // Fail closed until either the recovered graph or its rollback is verified.
             if (filtersReady || !_revisions.IsCurrentMediaSession(active.Ticket))
                 ReleasePauseIfHeld();
         }

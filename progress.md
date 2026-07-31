@@ -2,6 +2,26 @@
 
 ## 2026-08-01
 
+- Push CI `30671776521` и PR CI `30671778545` на `1383ca9` полностью прошли:
+  build, 64 теста, stock loader, package, аудиофильтры, local-safety guard и
+  настоящий installer smoke зелёные.
+- Четвёртый полный `cc review` на `claude-opus-5` одобрил concurrency,
+  filter transactions и packaging, но нашёл четыре merge findings: потерю
+  pending schedule при смене blur, повторную перерисовку dirty grid, ложное
+  metadata-warning для комментариев с двоеточием и off-lock reads настроек.
+- Pending schedule теперь получает новый ticket и blur plan, оставаясь
+  `READY TO APPLY`; при staged schedule прежний active graph не запускает
+  конкурирующий reapply.
+- Окно отдельно помнит последний runtime interval identity и draft source.
+  Повторный watchdog warning обновляет сообщения, не очищая таблицу и текущую
+  ячейку.
+- Parser предупреждает только о metadata-подобных неизвестных ключах. Тест
+  закрепляет сохранение `# см. https://example.com` без ложного warning.
+- `_settings` и `_blurSettings` публикуются как volatile immutable snapshots;
+  Apply после stop не читает disposed token. Убраны dead note fallback и
+  неочевидный nullable pattern, добавлены комментарии к fail-closed pause и
+  внутренним Core helpers в single-DLL.
+- Локально: Release build без предупреждений, 65/65 тестов и format — PASS.
 - Третий полный `cc review` на `claude-opus-5` нашёл один блокирующий риск:
   installer smoke мог удалить настоящую локальную установку и данные. Скрипт
   теперь работает только в GitHub Actions, отказывается идти поверх
@@ -162,7 +182,7 @@
 
 ## Следующий шаг
 
-Зафиксировать и отправить исправления третьего Opus-review, дождаться двух
+Зафиксировать и отправить исправления четвёртого Opus-review, дождаться двух
 Windows CI, затем снова выполнить полный review Claude Opus 5 через `cc`.
 После зелёного verdict физически проверить точный SHA DLL на Windows. PR
 остаётся draft; полный portable/installer не публикуется до закрытия issue #4.

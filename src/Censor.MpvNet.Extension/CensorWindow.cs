@@ -65,6 +65,7 @@ internal sealed class CensorWindow : Form
     private ExtensionSettings _settings;
     private ScheduleDraft? _draft;
     private IReadOnlyList<CensorInterval>? _sourceIntervals;
+    private IReadOnlyList<CensorInterval>? _runtimeIntervals;
     private IReadOnlyList<ParseDiagnostic> _draftDiagnostics = [];
     private IReadOnlyList<ParseDiagnostic> _runtimeDiagnostics = [];
     private bool _allowClose;
@@ -201,17 +202,12 @@ internal sealed class CensorWindow : Form
             $"Интервалов: {intervals.Count}";
         _runtimeDiagnostics = diagnostics;
 
-        if (ReferenceEquals(_sourceIntervals, intervals))
+        var runtimeIntervalsUnchanged = ReferenceEquals(_runtimeIntervals, intervals);
+        _runtimeIntervals = intervals;
+        if (runtimeIntervalsUnchanged &&
+            (_draft?.IsDirty == true || ReferenceEquals(_sourceIntervals, intervals)))
         {
-            if (_draft is null)
-            {
-                _warnings.Items.Clear();
-                RenderDiagnostics(_runtimeDiagnostics);
-            }
-            else
-            {
-                RenderDraftSummary(_draftDiagnostics);
-            }
+            RenderWarnings(_draft is null ? [] : _draftDiagnostics);
             return;
         }
         if (document is not null && _draft?.Matches(document) == true)
@@ -794,7 +790,7 @@ internal sealed class CensorWindow : Form
                 renderSelectedOnly: true);
             return;
         }
-        _draft.Update(e.RowIndex, start, end, note ?? interval.Note);
+        _draft.Update(e.RowIndex, start, end, note);
         Changed(
             deferRender: true,
             selectedIndex: e.RowIndex,
@@ -931,6 +927,18 @@ internal sealed class CensorWindow : Form
     private void RenderDraftSummary(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
         _draftDiagnostics = diagnostics;
+        RenderWarnings(diagnostics);
+        _offset.Value = Math.Clamp(
+            _draft!.Document.Metadata.OffsetMs ?? 0,
+            (long)_offset.Minimum,
+            (long)_offset.Maximum);
+        _draftState.Text = _draft.IsDirty
+            ? "Изменения не применены и не сохранены"
+            : "Сохранено";
+    }
+
+    private void RenderWarnings(IReadOnlyList<ParseDiagnostic> diagnostics)
+    {
         _warnings.Items.Clear();
         foreach (var diagnostic in diagnostics.Where(item => item.Line > 0))
             _warnings.Items.Add($"#{diagnostic.Line}: {diagnostic.Message}");
@@ -942,13 +950,6 @@ internal sealed class CensorWindow : Form
             _warnings.Items.Add($"{severity}: {diagnostic.Message}");
         }
         RenderDiagnostics(_runtimeDiagnostics);
-        _offset.Value = Math.Clamp(
-            _draft!.Document.Metadata.OffsetMs ?? 0,
-            (long)_offset.Minimum,
-            (long)_offset.Maximum);
-        _draftState.Text = _draft.IsDirty
-            ? "Изменения не применены и не сохранены"
-            : "Сохранено";
     }
 
     private static void PopulateIntervalRow(
@@ -1168,7 +1169,7 @@ internal sealed class CensorWindow : Form
             .ToArray();
 
     private int? SelectedIndex() =>
-        _intervals.CurrentCell?.RowIndex is >= 0 and var index ? index : null;
+        _intervals.CurrentCell is { RowIndex: >= 0 } cell ? cell.RowIndex : null;
 
     private void SelectRow(int index)
     {

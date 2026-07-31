@@ -1,5 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-  <!-- These sources are also linked into CensorExtension for its stock single-DLL loader. -->
+  <!-- These sources are linked into CensorExtension for its stock single-DLL loader and internal Core helpers. -->
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
