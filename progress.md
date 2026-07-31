@@ -24,7 +24,13 @@
 - Локальный Release build проходит без warnings; 36/36 Core tests проходят.
 - Создан публичный репозиторий `CBEPX/mpvnet-censor-extension`; первый Windows CI run `30596392355` зелёный.
 - GitHub Actions обновлены до подтверждённых актуальных major tags; feature-branch CI выполняется далее.
+- Feature-branch Windows CI run `30598637241` зелёный за 49 секунд на actions v7/v6/v7.
+- Добавлен WinForms tool window: namespaced client messages, picker, drag-and-drop, reload, disable, duration confirmation и read-only interval summary.
+- Обычный Claude Code Fable review UI diff выполнен; устранены broadcast collision, stale status, dead window thread и повторный O(n) grid rebuild.
+- Повторный Fable UI verdict: `solid`, `BLOCKER/HIGH/MEDIUM` нет; закрыты same-session generation race и потеря state до создания WinForms handle.
+- Adversarial Fable re-check нашёл один High и один Medium в generation/dialog publication; оба исправлены общей session-aware проверкой status/OSD.
+- Повторный запуск Fable после исправлений остановлен внешним session limit до 08:00 Europe/Moscow; Release analyzers/build и 36/36 tests повторно зелёные.
 
 ## Следующий шаг
 
-Дождаться зелёного feature-branch Windows CI, затем добавить manual tool window и выполнить обязательный Windows runtime Phase 0.
+Опубликовать UI commit и выполнить `docs/WINDOWS_PHASE0.md` на физической Windows-машине; без этого `gblur`/timeline/GPU runtime не считается доказанным.

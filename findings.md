@@ -34,6 +34,12 @@
 - Lifecycle review обнаружил и закрыл teardown UAF: оба shutdown caller теперь ждут общий completion barrier после drain всех native calls.
 - Watchdog ограничен тремя успешными и тремя неудачными recovery/read attempts на сессию; persistent `vf clr` не создаёт бесконечный 1 Hz storm.
 - Финальный Fable lifecycle verdict: `approve`; остался только Low residual risk, если synchronous mpv filter call зависнет дольше upstream 10-second shutdown timeout.
+- UI review подтвердил корректную STA/window и lock architecture; generic broadcast verbs заменены на `censor-*`, чтобы чужой `script-message reload/disable` не мог снять filters.
+- Два picker внутри одной media session разделяются cancellation token gates до и после duration confirmation; stale операция не применяет filter и не должна менять итоговый status.
+- Повторный Fable UI review дал verdict `solid` без блокирующих дефектов; manual load теперь повышает generation ID, а `Shown` повторно читает state и закрывает startup/shutdown race окна.
+- Финальный adversarial Fable pass обнаружил ошибочно размещённый generation increment и stale status после duration dialog; increment перенесён в `StartNewOperation`, а status/OSD publication централизованно проверяет session ID и token.
+- Автоматический re-check исправленного diff не завершился из-за лимита Fable до 08:00 Europe/Moscow; локальные analyzers, Release build и 36/36 tests проходят, но это не заменяет физический Windows gate.
+- Reload использует teardown-first semantics: некорректная замена явно отключает прежний filter вместо продолжения с уже не соответствующим файлу schedule; parse-then-swap отложен до Windows Phase 0.
 
 ## Главные риски
 

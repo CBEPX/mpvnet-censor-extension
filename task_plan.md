@@ -1,6 +1,6 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** Core и session host реализованы на `codex/implement-censor-p0`; Windows CI и runtime Phase 0 в работе.
+**Статус:** Core, session host, watchdog, manual tool window и Windows CI реализованы на `codex/implement-censor-p0`; физический runtime Phase 0 не выполнен.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения

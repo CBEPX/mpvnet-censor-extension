@@ -1,0 +1,41 @@
+# Windows Phase 0 checklist
+
+This checklist records runtime evidence that cross-compilation and GitHub
+Actions cannot provide.
+
+## Setup
+
+- Use mpv.net `v7.1.2.0` from `deps.lock.json`.
+- Copy `CensorExtension.dll`, `CensorExtension.deps.json`, and `Censor.Core.dll`
+  into `<MPVNET_CONFIG>\extensions\CensorExtension\`.
+- Merge `examples/input.conf` into `<MPVNET_CONFIG>\input.conf`.
+- Record GPU, driver, Windows build, mpv.net commit, libmpv, and FFmpeg versions.
+
+## Blocking checks
+
+- [ ] `Ctrl+Alt+c` opens one responsive tool window.
+- [ ] Picker and drag-and-drop load TXT, SRT, and WebVTT.
+- [ ] A labeled `@censor_blur_000` filter appears in `vf` readback.
+- [ ] A pre-existing user video filter survives apply, disable, and recovery.
+- [ ] Blur starts at `start_ms` and is absent at exact `end_ms`.
+- [ ] FFmpeg `t` matches mpv `time-pos` for normal media and non-zero start time.
+- [ ] Seek backward/forward, pause/resume, chapters, watch-later, and speeds
+  `0.5x`, `1x`, `1.5x`, and `2x` do not drift.
+- [ ] A → B during parse/apply never applies A's schedule to B.
+- [ ] Pressing `censor-disable` exactly as apply completes leaves the window
+  `DISABLED` and never emits a later `ACTIVE` OSD.
+- [ ] While the duration-mismatch dialog is open, a second load/disable and
+  mpv.net exit cannot publish stale status, hang, or leave a visible dialog.
+- [ ] Removing a censor filter triggers bounded recovery without pause leakage.
+- [ ] Exit during apply/recovery does not hang or crash mpv.net.
+
+## Performance
+
+- [ ] 1,000 intervals parse, normalize, and compile within 250 ms.
+- [ ] Warm picker-to-summary flow completes within 500 ms.
+- [ ] Blur is usable at 1080p30, 1080p60, and 4K30 on target GPUs.
+- [ ] Software decoding fallback is documented.
+- [ ] OBS Window Capture receives the already blurred frame.
+
+Any failed blocking check keeps the release experimental and must be recorded
+with logs, media properties, exact schedule, and `vf` readback.

@@ -17,12 +17,17 @@ public sealed class Extension : IExtension, IDisposable
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
 
     private readonly Lock _stateLock = new();
+    private readonly Lock _windowLock = new();
     private readonly SemaphoreSlim _filterGate = new(1, 1);
     private readonly TaskCompletionSource<bool> _stopped =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly System.Threading.Timer _watchdog;
     private CancellationTokenSource _sessionCancellation = new();
     private ActiveSchedule? _activeSchedule;
+    private string? _currentMediaPath;
+    private CensorWindow? _window;
+    private Thread? _windowThread;
+    private string _windowStatus = "NO SCHEDULE";
     private int _disposed;
     private int _recoveryFailures;
     private int _successfulRecoveries;
@@ -38,6 +43,7 @@ public sealed class Extension : IExtension, IDisposable
         Player.FileLoaded += OnFileLoaded;
         Player.EndFile += OnEndFile;
         Player.Shutdown += OnShutdown;
+        Player.ClientMessage += OnClientMessage;
         Global.Player.Shutdown += OnShutdown;
         Player.ObservePropertyString("vf", OnFiltersChanged);
         _watchdog.Change(WatchdogIntervalMs, WatchdogIntervalMs);
@@ -54,9 +60,11 @@ public sealed class Extension : IExtension, IDisposable
         Player.FileLoaded -= OnFileLoaded;
         Player.EndFile -= OnEndFile;
         Player.Shutdown -= OnShutdown;
+        Player.ClientMessage -= OnClientMessage;
         Global.Player.Shutdown -= OnShutdown;
 
         StopRuntime(removeFilters: true);
+        CloseWindow();
         _watchdog.Dispose();
         _sessionCancellation.Dispose();
         GC.SuppressFinalize(this);
@@ -68,10 +76,42 @@ public sealed class Extension : IExtension, IDisposable
 
     private void OnEndFile(mpv_end_file_reason _) => RunSafely(BeginSession);
 
-    private void OnShutdown() => StopRuntime(removeFilters: false);
+    private void OnShutdown()
+    {
+        StopRuntime(removeFilters: false);
+        CloseWindow();
+    }
+
+    private void OnClientMessage(string[] args) => RunSafely(() => HandleClientMessage(args));
 
     private void OnFiltersChanged(string _) =>
         ThreadPool.QueueUserWorkItem(static state => ((Extension)state!).CheckFilters(null), this);
+
+    private void HandleClientMessage(string[] args)
+    {
+        if (args.Length == 0)
+            return;
+
+        if (args[0].Equals("censor-open", StringComparison.OrdinalIgnoreCase))
+        {
+            ShowToolWindow();
+        }
+        else if (args[0].Equals("censor-load", StringComparison.OrdinalIgnoreCase))
+        {
+            if (args.Length > 1)
+                LoadManualSchedule(args[1]);
+            else
+                ShowToolWindow();
+        }
+        else if (args[0].Equals("censor-reload", StringComparison.OrdinalIgnoreCase))
+        {
+            ReloadSchedule();
+        }
+        else if (args[0].Equals("censor-disable", StringComparison.OrdinalIgnoreCase))
+        {
+            DisableSchedule();
+        }
+    }
 
     private void BeginSession()
     {
@@ -85,6 +125,7 @@ public sealed class Extension : IExtension, IDisposable
                 return;
 
             _sessionId++;
+            _currentMediaPath = null;
             previous = _sessionCancellation;
             _sessionCancellation = new();
         }
@@ -108,6 +149,8 @@ public sealed class Extension : IExtension, IDisposable
         {
             _filterGate.Release();
         }
+
+        UpdateWindow("NO SCHEDULE");
     }
 
     private void LoadCurrentSidecar()
@@ -132,6 +175,9 @@ public sealed class Extension : IExtension, IDisposable
             _filterGate.Release();
         }
 
+        lock (_stateLock)
+            _currentMediaPath = mediaPath;
+        UpdateWindow("LOOKING FOR SIDECAR");
         _ = LoadCurrentSidecarAsync(sessionId, mediaPath, token);
     }
 
@@ -143,32 +189,89 @@ public sealed class Extension : IExtension, IDisposable
         try
         {
             if (!File.Exists(mediaPath))
-                return;
-
-            var sidecars = SidecarLocator.Find(mediaPath);
-            if (sidecars.Count == 0)
-                return;
-            if (sidecars.Count > 1)
             {
-                Show("Multiple sidecars found; select one manually.");
+                token.ThrowIfCancellationRequested();
+                UpdateWindow("NO LOCAL MEDIA", sessionId, token);
                 return;
             }
 
-            var sidecarPath = sidecars[0];
-            var text = await File.ReadAllTextAsync(sidecarPath, StrictUtf8, token).ConfigureAwait(false);
-            var parsed = Parse(sidecarPath, text);
+            var sidecars = SidecarLocator.Find(mediaPath);
+            token.ThrowIfCancellationRequested();
+            if (sidecars.Count == 0)
+            {
+                UpdateWindow("NO SCHEDULE", sessionId, token);
+                return;
+            }
+            if (sidecars.Count > 1)
+            {
+                if (UpdateWindow(
+                    $"MULTIPLE SIDECARS: {string.Join(", ", sidecars.Select(Path.GetFileName))}",
+                    sessionId,
+                    token))
+                {
+                    Show("Multiple sidecars found; select one manually.", sessionId, token);
+                }
+                return;
+            }
+
+            await LoadScheduleAsync(sessionId, sidecars[0], automatic: true, token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+        }
+        catch (Exception exception)
+        {
+            Terminal.WriteError(exception, LogModule);
+            if (UpdateWindow("ERROR", sessionId, token))
+                Show("Failed to load the sidecar. See the terminal log.", sessionId, token);
+        }
+    }
+
+    private async Task LoadScheduleAsync(
+        long sessionId,
+        string schedulePath,
+        bool automatic,
+        CancellationToken token)
+    {
+        try
+        {
+            UpdateWindow("LOADING", sessionId, token);
+            var text = await File.ReadAllTextAsync(schedulePath, StrictUtf8, token).ConfigureAwait(false);
+            token.ThrowIfCancellationRequested();
+            var parsed = Parse(schedulePath, text);
+            token.ThrowIfCancellationRequested();
             if (!parsed.IsSuccess)
             {
-                Show($"Schedule error: {parsed.Diagnostics.First(item => item.Severity == DiagnosticSeverity.Error).Message}");
+                if (UpdateWindow("ERROR", sessionId, token))
+                {
+                    Show(
+                        $"Schedule error: {parsed.Diagnostics.First(item => item.Severity == DiagnosticSeverity.Error).Message}",
+                        sessionId,
+                        token);
+                }
                 return;
             }
 
             var document = parsed.Document!;
+            token.ThrowIfCancellationRequested();
             if (!MatchesCurrentDuration(document.Metadata.MediaDurationMs))
             {
-                Show("Sidecar duration differs from the current media; automatic apply blocked.");
-                return;
+                token.ThrowIfCancellationRequested();
+                var applyAnyway = !automatic && ConfirmDurationMismatch();
+                token.ThrowIfCancellationRequested();
+                if (!applyAnyway)
+                {
+                    if (UpdateWindow("DURATION MISMATCH", sessionId, token))
+                    {
+                        Show(
+                            "Schedule duration differs from the current media; apply blocked.",
+                            sessionId,
+                            token);
+                    }
+                    return;
+                }
             }
+            token.ThrowIfCancellationRequested();
 
             var defaults = new NormalizationOptions();
             var normalized = ScheduleNormalizer.Normalize(
@@ -179,15 +282,22 @@ public sealed class Extension : IExtension, IDisposable
                     document.Metadata.OffsetMs ?? defaults.OffsetMs,
                     defaults.MergeGapMs));
             var plan = FilterCompiler.Compile(normalized, new());
+            token.ThrowIfCancellationRequested();
             if (plan.Chunks.Count == 0)
             {
-                Show("Schedule contains no active intervals.");
+                if (UpdateWindow("EMPTY SCHEDULE", sessionId, token))
+                    Show("Schedule contains no active intervals.", sessionId, token);
                 return;
             }
 
-            await ApplyAsync(sessionId, plan, normalized, token).ConfigureAwait(false);
-            if (IsCurrent(sessionId))
-                Show($"Applied {plan.IntervalCount} intervals from {Path.GetFileName(sidecarPath)}.");
+            await ApplyAsync(sessionId, schedulePath, document, plan, normalized, token).ConfigureAwait(false);
+            if (UpdateWindow("ACTIVE", sessionId, token))
+            {
+                Show(
+                    $"Applied {plan.IntervalCount} intervals from {Path.GetFileName(schedulePath)}.",
+                    sessionId,
+                    token);
+            }
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
@@ -195,13 +305,15 @@ public sealed class Extension : IExtension, IDisposable
         catch (Exception exception)
         {
             Terminal.WriteError(exception, LogModule);
-            if (IsCurrent(sessionId))
-                Show("Failed to load or apply the sidecar. See the terminal log.");
+            if (UpdateWindow("ERROR", sessionId, token))
+                Show("Failed to load or apply the schedule. See the terminal log.", sessionId, token);
         }
     }
 
     private async Task ApplyAsync(
         long sessionId,
+        string schedulePath,
+        ScheduleDocument document,
         FilterPlan plan,
         IReadOnlyList<NormalizedInterval> intervals,
         CancellationToken token)
@@ -228,7 +340,7 @@ public sealed class Extension : IExtension, IDisposable
                 throw new InvalidOperationException("mpv did not report every generated filter after apply.");
             }
 
-            _activeSchedule = new(sessionId, plan, intervals);
+            _activeSchedule = new(sessionId, schedulePath, document, plan, intervals);
             _recoveryFailures = 0;
             _successfulRecoveries = 0;
             _vfReadFailures = 0;
@@ -268,6 +380,300 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
+    private void LoadManualSchedule(string schedulePath)
+    {
+        if (!File.Exists(schedulePath) ||
+            !(schedulePath.EndsWith(".censor.txt", StringComparison.OrdinalIgnoreCase) ||
+              schedulePath.EndsWith(".srt", StringComparison.OrdinalIgnoreCase) ||
+              schedulePath.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase)))
+        {
+            UpdateWindow("INVALID SCHEDULE PATH");
+            Show("Schedule path is invalid or unsupported.");
+            return;
+        }
+
+        var operation = StartNewOperation();
+        if (operation is null)
+        {
+            UpdateWindow("NO CURRENT MEDIA");
+            Show("No current media is available for manual loading.");
+            return;
+        }
+
+        UpdateWindow("LOADING");
+        _ = LoadScheduleAsync(
+            operation.Value.SessionId,
+            schedulePath,
+            automatic: false,
+            operation.Value.Token);
+    }
+
+    private void ReloadSchedule()
+    {
+        var path = _activeSchedule?.SchedulePath;
+        if (path is null)
+        {
+            UpdateWindow("NO SCHEDULE TO RELOAD");
+            return;
+        }
+
+        LoadManualSchedule(path);
+    }
+
+    private void DisableSchedule()
+    {
+        if (StartNewOperation() is null)
+        {
+            UpdateWindow("OPERATION UNAVAILABLE");
+            Show("No current media is available to disable.");
+            return;
+        }
+
+        UpdateWindow("DISABLED");
+        Show("Schedule disabled for the current media.");
+    }
+
+    private (long SessionId, CancellationToken Token)? StartNewOperation()
+    {
+        CancellationTokenSource previous;
+        long sessionId;
+        CancellationToken token;
+        lock (_stateLock)
+        {
+            if (Volatile.Read(ref _stopping) != 0 || string.IsNullOrEmpty(_currentMediaPath))
+                return null;
+
+            sessionId = ++_sessionId;
+            previous = _sessionCancellation;
+            _sessionCancellation = new();
+            token = _sessionCancellation.Token;
+        }
+
+        previous.Cancel();
+        previous.Dispose();
+
+        _filterGate.Wait();
+        try
+        {
+            if (!IsCurrent(sessionId))
+                return null;
+
+            RemoveFilters(_activeSchedule?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
+            _activeSchedule = null;
+            _recoveryFailures = 0;
+            _successfulRecoveries = 0;
+            _vfReadFailures = 0;
+        }
+        finally
+        {
+            _filterGate.Release();
+        }
+
+        return (sessionId, token);
+    }
+
+    private bool ConfirmDurationMismatch()
+    {
+        CensorWindow? window;
+        lock (_windowLock)
+            window = _window;
+
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+            return false;
+
+        try
+        {
+            return (bool)window.Invoke(new Func<bool>(window.ConfirmDurationMismatch));
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private void ShowToolWindow()
+    {
+        if (Volatile.Read(ref _stopping) != 0)
+            return;
+
+        CensorWindow? existing;
+        lock (_windowLock)
+        {
+            existing = _window;
+            if (existing is null && _windowThread is null)
+            {
+                _windowThread = new(() =>
+                {
+                    try
+                    {
+                        using var window = new CensorWindow();
+                        window.ScheduleSelected += path =>
+                            ThreadPool.QueueUserWorkItem(static state =>
+                            {
+                                var (extension, selectedPath) = ((Extension, string))state!;
+                                extension.RunSafely(() => extension.LoadManualSchedule(selectedPath));
+                            }, (this, path));
+                        window.ReloadRequested += () =>
+                            ThreadPool.QueueUserWorkItem(static state =>
+                            {
+                                var extension = (Extension)state!;
+                                extension.RunSafely(extension.ReloadSchedule);
+                            }, this);
+                        window.DisableRequested += () =>
+                            ThreadPool.QueueUserWorkItem(static state =>
+                            {
+                                var extension = (Extension)state!;
+                                extension.RunSafely(extension.DisableSchedule);
+                            }, this);
+                        window.Shown += (_, _) =>
+                        {
+                            if (Volatile.Read(ref _stopping) != 0)
+                            {
+                                window.Shutdown();
+                                return;
+                            }
+
+                            var current = SnapshotWindow();
+                            window.UpdateState(
+                                current.MediaPath,
+                                current.SchedulePath,
+                                current.Status,
+                                current.Intervals);
+                        };
+
+                        lock (_windowLock)
+                            _window = window;
+
+                        var snapshot = SnapshotWindow();
+                        window.UpdateState(
+                            snapshot.MediaPath,
+                            snapshot.SchedulePath,
+                            snapshot.Status,
+                            snapshot.Intervals);
+
+                        if (Volatile.Read(ref _stopping) == 0)
+                            Application.Run(window);
+                    }
+                    catch (Exception exception)
+                    {
+                        Terminal.WriteError(exception, LogModule);
+                    }
+                    finally
+                    {
+                        lock (_windowLock)
+                        {
+                            _window = null;
+                            _windowThread = null;
+                        }
+                    }
+                })
+                {
+                    IsBackground = true,
+                    Name = "CensorExtension UI",
+                };
+                _windowThread.SetApartmentState(ApartmentState.STA);
+                _windowThread.Start();
+                return;
+            }
+        }
+
+        if (existing is null || existing.IsDisposed || !existing.IsHandleCreated)
+            return;
+
+        try
+        {
+            existing.BeginInvoke(new Action(() =>
+            {
+                existing.Show();
+                existing.WindowState = FormWindowState.Normal;
+                existing.Activate();
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private bool UpdateWindow(
+        string status,
+        long? expectedSessionId = null,
+        CancellationToken token = default)
+    {
+        lock (_stateLock)
+        {
+            if (expectedSessionId.HasValue &&
+                (Volatile.Read(ref _stopping) != 0 ||
+                 _sessionId != expectedSessionId.Value ||
+                 token.IsCancellationRequested))
+            {
+                return false;
+            }
+
+            _windowStatus = status;
+        }
+
+        CensorWindow? window;
+        lock (_windowLock)
+            window = _window;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+            return true;
+
+        var snapshot = SnapshotWindow();
+        try
+        {
+            window.BeginInvoke(new Action(() =>
+                window.UpdateState(
+                    snapshot.MediaPath,
+                    snapshot.SchedulePath,
+                    snapshot.Status,
+                    snapshot.Intervals)));
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        return true;
+    }
+
+    private (
+        string? MediaPath,
+        string? SchedulePath,
+        string Status,
+        IReadOnlyList<CensorInterval> Intervals) SnapshotWindow()
+    {
+        string? mediaPath;
+        string status;
+        lock (_stateLock)
+        {
+            mediaPath = _currentMediaPath;
+            status = _windowStatus;
+        }
+
+        var active = _activeSchedule;
+        return (
+            mediaPath,
+            active?.SchedulePath,
+            status,
+            active?.Document.Intervals ?? []);
+    }
+
+    private void CloseWindow()
+    {
+        CensorWindow? window;
+        lock (_windowLock)
+            window = _window;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+            return;
+
+        try
+        {
+            window.BeginInvoke(new Action(window.Shutdown));
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
     private bool IsCurrent(long sessionId)
     {
         lock (_stateLock)
@@ -276,9 +682,9 @@ public sealed class Extension : IExtension, IDisposable
 
     private static ParseResult Parse(string path, string text)
     {
-        if (path.EndsWith(".censor.srt", StringComparison.OrdinalIgnoreCase))
+        if (path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
             return SubtitleScheduleText.Import(text, SubtitleFormat.Srt);
-        if (path.EndsWith(".censor.vtt", StringComparison.OrdinalIgnoreCase))
+        if (path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase))
             return SubtitleScheduleText.Import(text, SubtitleFormat.WebVtt);
         return ScheduleText.Parse(text);
     }
@@ -302,16 +708,23 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private void Show(string message)
+    private void Show(
+        string message,
+        long? expectedSessionId = null,
+        CancellationToken token = default)
     {
-        if (Volatile.Read(ref _stopping) != 0)
+        if (Volatile.Read(ref _stopping) != 0 || token.IsCancellationRequested)
             return;
 
-        _filterGate.Wait();
+        _filterGate.Wait(CancellationToken.None);
         try
         {
-            if (Volatile.Read(ref _stopping) == 0)
+            if (Volatile.Read(ref _stopping) == 0 &&
+                !token.IsCancellationRequested &&
+                (!expectedSessionId.HasValue || IsCurrent(expectedSessionId.Value)))
+            {
                 Player.CommandV("show-text", $"Censor: {message}", "5000");
+            }
         }
         finally
         {
@@ -554,6 +967,8 @@ public sealed class Extension : IExtension, IDisposable
 
     private sealed record ActiveSchedule(
         long SessionId,
+        string SchedulePath,
+        ScheduleDocument Document,
         FilterPlan Plan,
         IReadOnlyList<NormalizedInterval> Intervals);
 }
