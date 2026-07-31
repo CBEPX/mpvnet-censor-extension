@@ -269,6 +269,10 @@ if (-not $SkipInstaller) {
     if (-not (Test-Path $Iscc -PathType Leaf)) {
         throw "Inno Setup compiler is missing: $Iscc"
     }
+    $ActualIsccVersion = (Get-Item $Iscc).VersionInfo.FileVersionRaw.ToString(3)
+    if ($ActualIsccVersion -ne $Lock.tools.innoSetup.version) {
+        throw "Expected Inno Setup $($Lock.tools.innoSetup.version), found $ActualIsccVersion."
+    }
     & $Iscc `
         "/DAppVersion=$Version" `
         "/DStageDir=$StageRoot" `

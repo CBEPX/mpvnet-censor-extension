@@ -48,11 +48,18 @@ jobs:
           --
           src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
 
-      - name: Install pinned Inno Setup
+      - name: Verify pinned Inno Setup
         shell: pwsh
         run: |
-          $version = (Get-Content deps.lock.json -Raw | ConvertFrom-Json).tools.innoSetup.version
-          choco install innosetup --version $version --allow-downgrade --no-progress --yes
+          $expected = (Get-Content deps.lock.json -Raw | ConvertFrom-Json).tools.innoSetup.version
+          $iscc = Join-Path ${env:ProgramFiles(x86)} "Inno Setup 6/ISCC.exe"
+          if (-not (Test-Path $iscc -PathType Leaf)) {
+            throw "Inno Setup compiler is missing: $iscc"
+          }
+          $actual = (Get-Item $iscc).VersionInfo.FileVersionRaw.ToString(3)
+          if ($actual -ne $expected) {
+            throw "Expected Inno Setup $expected, found $actual."
+          }
 
       - name: Build and verify release
         shell: pwsh
