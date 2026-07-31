@@ -17,7 +17,8 @@ Actions cannot provide.
 
 - [ ] `Ctrl+Alt+c` opens one responsive tool window.
 - [ ] Picker and drag-and-drop load TXT, SRT, and WebVTT.
-- [ ] A labeled `@censor_blur_000` filter appears in `vf` readback.
+- [ ] A labeled `@censor_blur_000` filter with `gblur=sigma=50:steps=3`
+  appears in `vf` readback.
 - [ ] A pre-existing user video filter survives apply, disable, and recovery.
 - [ ] Blur starts at `start_ms` and is absent at exact `end_ms`.
 - [ ] FFmpeg `t` matches mpv `time-pos` for normal media and non-zero start time.

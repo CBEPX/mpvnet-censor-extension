@@ -40,6 +40,7 @@ public sealed class FilterCompilerTests
 
         Assert.Equal(2, plan.Chunks.Count);
         Assert.Equal("@censor_blur_001", plan.Chunks[1].Label);
+        Assert.Contains("gblur=sigma=50:steps=3", plan.Chunks[0].Filter, StringComparison.Ordinal);
         Assert.Contains("gte(t,1000.000)", plan.Chunks[1].Filter, StringComparison.Ordinal);
     }
 
