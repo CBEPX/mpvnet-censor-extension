@@ -33,43 +33,6 @@ public static class UiStateStore
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(state);
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException(
-                "Путь к файлу состояния интерфейса должен включать каталог.",
-                nameof(path));
-        Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory, $".UiState.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions);
-            using (var stream = new FileStream(
-                tempPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                4_096,
-                FileOptions.WriteThrough))
-            {
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
-            }
-            if (File.Exists(fullPath))
-                File.Replace(tempPath, fullPath, null);
-            else
-                File.Move(tempPath, fullPath);
-        }
-        catch
-        {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch
-            {
-                // Preserve the original UI-state write failure.
-            }
-            throw;
-        }
+        AtomicFile.Write(path, JsonSerializer.SerializeToUtf8Bytes(state, JsonOptions));
     }
 }

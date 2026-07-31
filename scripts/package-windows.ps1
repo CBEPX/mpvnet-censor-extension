@@ -70,7 +70,11 @@ function Get-LockedDownload {
         }
     }
     if (-not (Test-Path $Path -PathType Leaf)) {
-        Invoke-WebRequest -Uri $Entry.url -OutFile $Path
+        Invoke-WebRequest `
+            -Uri $Entry.url `
+            -OutFile $Path `
+            -MaximumRetryCount 3 `
+            -RetryIntervalSec 2
     }
     $Actual = (Get-FileHash $Path -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($Actual -ne $Entry.sha256) {

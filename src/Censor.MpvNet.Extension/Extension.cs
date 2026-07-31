@@ -13,8 +13,10 @@ public sealed class Extension : IExtension, IDisposable
 {
     private const string LogModule = "CensorExtension";
     private const int MaxRecoveryFailures = 3;
+    private const int MaxPendingWindowActions = 32;
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly TimeSpan ShutdownWaitTimeout = TimeSpan.FromSeconds(5);
 
     private readonly Lock _stateLock = new();
     private readonly Lock _windowLock = new();
@@ -54,6 +56,8 @@ public sealed class Extension : IExtension, IDisposable
         _settings = loadedSettings.Settings;
         _blurSettings = _settings.Blur;
         _log = new(Path.Combine(_localDataRoot, "Logs"), _settings.Logging.RetentionDays);
+        if (!_log.IsEnabled)
+            Terminal.WriteError("Журнал CensorPlayer отключён: не удалось открыть каталог для записи.", LogModule);
         foreach (var warning in loadedSettings.Warnings)
             Terminal.WriteError(warning, LogModule);
 
@@ -446,7 +450,7 @@ public sealed class Extension : IExtension, IDisposable
 
             var normalized = ScheduleNormalizer.Normalize(
                 document.Intervals,
-                ScheduleOptionsResolver.Resolve(document.Metadata, _settings));
+                _settings.ResolveNormalizationOptions(document.Metadata));
             BlurSettings blurSettings;
             lock (_stateLock)
                 blurSettings = _blurSettings;
@@ -791,7 +795,7 @@ public sealed class Extension : IExtension, IDisposable
 
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
-            ScheduleOptionsResolver.Resolve(document.Metadata, _settings));
+            _settings.ResolveNormalizationOptions(document.Metadata));
         var plan = FilterCompiler.Compile(normalized, _blurSettings);
         if (plan.Chunks.Count == 0)
         {
@@ -819,11 +823,13 @@ public sealed class Extension : IExtension, IDisposable
 
     private void ChangeSettings(SettingsFormValues values)
     {
+        ExtensionSettings previousSettings;
         ExtensionSettings settings;
         bool watchdogChanged;
         IReadOnlyList<string> warnings;
         lock (_stateLock)
         {
+            previousSettings = _settings;
             settings = _settings with
             {
                 AutoLoadSidecar = values.AutoLoadSidecar,
@@ -851,10 +857,12 @@ public sealed class Extension : IExtension, IDisposable
         }
         if (warnings.Count > 0)
         {
+            InvokeWindow(window => window.SetSettings(previousSettings));
             Show(warnings[0]);
             return;
         }
 
+        InvokeWindow(window => window.SetSettings(settings));
         _watchdog.Change(
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite,
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite);
@@ -908,9 +916,10 @@ public sealed class Extension : IExtension, IDisposable
         if (!choosePath &&
             expectedHash is not null &&
             File.Exists(path) &&
-            !CryptographicOperations.FixedTimeEquals(
-                Convert.FromHexString(expectedHash),
-                Convert.FromHexString(ComputeHash(File.ReadAllBytes(path)))))
+            !string.Equals(
+                expectedHash,
+                ComputeHash(File.ReadAllBytes(path)),
+                StringComparison.Ordinal))
         {
             var decision = ConfirmExternalChange();
             if (decision == DialogResult.Cancel)
@@ -936,7 +945,7 @@ public sealed class Extension : IExtension, IDisposable
         var savedHash = ComputeHash(File.ReadAllBytes(path));
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
-            ScheduleOptionsResolver.Resolve(document.Metadata, settings));
+            settings.ResolveNormalizationOptions(document.Metadata));
         var plan = FilterCompiler.Compile(normalized, blur);
 
         var markWindowSaved = false;
@@ -1521,75 +1530,32 @@ public sealed class Extension : IExtension, IDisposable
                         using var window = new CensorWindow(
                             _settings,
                             Path.Combine(_localDataRoot, "Recovery", "draft.json"));
-                        window.ScheduleSelected += path =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, selectedPath) = ((Extension, string))state!;
-                                extension.RunSafely(() => extension.LoadManualSchedule(selectedPath));
-                            }, (this, path));
-                        window.ReloadRequested += () =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var extension = (Extension)state!;
-                                extension.RunSafely(extension.ReloadSchedule);
-                            }, this);
-                        window.ApplyRequested += document =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, draft) = ((Extension, ScheduleDocument))state!;
-                                extension.RunSafely(() => extension.ApplyDraftDocument(draft));
-                            }, (this, document));
-                        window.DisableRequested += () =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var extension = (Extension)state!;
-                                extension.RunSafely(extension.DisableSchedule);
-                            }, this);
-                        window.BlurPresetSelected += settings =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, selectedSettings) = ((Extension, BlurSettings))state!;
-                                extension.RunSafely(() => extension.ChangeBlurPreset(selectedSettings));
-                            }, (this, settings));
-                        window.AudioCompressionPresetSelected += presetId =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, selectedPresetId) = ((Extension, string))state!;
-                                extension.RunSafely(() =>
-                                    extension.ChangeAudioCompressionPreset(selectedPresetId));
-                            }, (this, presetId));
-                        window.SettingsChanged += settings =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, changed) = ((Extension, SettingsFormValues))state!;
-                                extension.RunSafely(() => extension.ChangeSettings(changed));
-                            }, (this, settings));
-                        window.SaveRequested += (document, sourcePath, saveAs) =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, draft, path, choosePath) =
-                                    ((Extension, ScheduleDocument, string?, bool))state!;
-                                extension.RunSafely(() =>
-                                    extension.SaveDraft(draft, path, choosePath));
-                            }, (this, document, sourcePath, saveAs));
-                        window.SeekRequested += milliseconds =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, target) = ((Extension, long))state!;
-                                extension.RunSafely(() => extension.SeekTo(target));
-                            }, (this, milliseconds));
-                        window.PreviewRequested += milliseconds =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, target) = ((Extension, long))state!;
-                                extension.RunSafely(() => extension.SeekTo(Math.Max(0, target - 1_000)));
-                            }, (this, milliseconds));
-                        window.DiagnosticsRequested += includeSchedule =>
-                            ThreadPool.QueueUserWorkItem(static state =>
-                            {
-                                var (extension, include) = ((Extension, bool))state!;
-                                extension.RunSafely(() => extension.ExportDiagnostics(include));
-                            }, (this, includeSchedule));
+                        window.ScheduleSelected += Dispatch<string>(
+                            static (extension, path) => extension.LoadManualSchedule(path));
+                        window.ReloadRequested += Dispatch(
+                            static extension => extension.ReloadSchedule());
+                        window.ApplyRequested += Dispatch<ScheduleDocument>(
+                            static (extension, document) => extension.ApplyDraftDocument(document));
+                        window.DisableRequested += Dispatch(
+                            static extension => extension.DisableSchedule());
+                        window.BlurPresetSelected += Dispatch<BlurSettings>(
+                            static (extension, settings) => extension.ChangeBlurPreset(settings));
+                        window.AudioCompressionPresetSelected += Dispatch<string>(
+                            static (extension, presetId) =>
+                                extension.ChangeAudioCompressionPreset(presetId));
+                        window.SettingsChanged += Dispatch<SettingsFormValues>(
+                            static (extension, settings) => extension.ChangeSettings(settings));
+                        window.SaveRequested += Dispatch<ScheduleDocument, string?, bool>(
+                            static (extension, document, sourcePath, saveAs) =>
+                                extension.SaveDraft(document, sourcePath, saveAs));
+                        window.SeekRequested += Dispatch<long>(
+                            static (extension, milliseconds) => extension.SeekTo(milliseconds));
+                        window.PreviewRequested += Dispatch<long>(
+                            static (extension, milliseconds) =>
+                                extension.SeekTo(Math.Max(0, milliseconds - 1_000)));
+                        window.DiagnosticsRequested += Dispatch<bool>(
+                            static (extension, includeSchedule) =>
+                                extension.ExportDiagnostics(includeSchedule));
                         window.CurrentTimeRequested = GetCurrentTimeMs;
                         window.Shown += (_, _) =>
                         {
@@ -1798,12 +1764,19 @@ public sealed class Extension : IExtension, IDisposable
 
     private bool QueueWindowAction(Action<CensorWindow> action)
     {
+        if (Volatile.Read(ref _stopping) != 0)
+            return false;
+
         CensorWindow? window;
         lock (_windowLock)
         {
+            if (Volatile.Read(ref _stopping) != 0)
+                return false;
             window = _window;
             if (window is null || window.IsDisposed || !window.IsHandleCreated)
             {
+                if (_pendingWindowActions.Count == MaxPendingWindowActions)
+                    _pendingWindowActions.Dequeue();
                 _pendingWindowActions.Enqueue(action);
                 window = null;
             }
@@ -1838,33 +1811,7 @@ public sealed class Extension : IExtension, IDisposable
     }
 
     private static void WriteTextAtomically(string path, string text)
-    {
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("Путь экспорта должен включать каталог.", nameof(path));
-        Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(path)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            File.WriteAllText(tempPath, text, new UTF8Encoding(false));
-            if (File.Exists(fullPath))
-                File.Replace(tempPath, fullPath, fullPath + ".bak");
-            else
-                File.Move(tempPath, fullPath);
-        }
-        catch
-        {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch
-            {
-                // Preserve the original export failure.
-            }
-            throw;
-        }
-    }
+        => AtomicFile.WriteUtf8Text(path, text, Path.GetFullPath(path) + ".bak");
 
     private void CloseWindow()
     {
@@ -1951,6 +1898,31 @@ public sealed class Extension : IExtension, IDisposable
             Show("Ошибка расширения CensorPlayer. Подробности — в журнале mpv.net.");
         }
     }
+
+    private Action Dispatch(Action<Extension> action) =>
+        () => ThreadPool.QueueUserWorkItem(static state =>
+        {
+            var (extension, callback) = ((Extension, Action<Extension>))state!;
+            extension.RunSafely(() => callback(extension));
+        }, (this, action));
+
+    private Action<T> Dispatch<T>(Action<Extension, T> action) =>
+        value => ThreadPool.QueueUserWorkItem(static state =>
+        {
+            var (extension, callback, argument) =
+                ((Extension, Action<Extension, T>, T))state!;
+            extension.RunSafely(() => callback(extension, argument));
+        }, (this, action, value));
+
+    private Action<T1, T2, T3> Dispatch<T1, T2, T3>(
+        Action<Extension, T1, T2, T3> action) =>
+        (value1, value2, value3) => ThreadPool.QueueUserWorkItem(static state =>
+        {
+            var (extension, callback, argument1, argument2, argument3) =
+                ((Extension, Action<Extension, T1, T2, T3>, T1, T2, T3))state!;
+            extension.RunSafely(() =>
+                callback(extension, argument1, argument2, argument3));
+        }, (this, action, value1, value2, value3));
 
     private void Show(
         string message,
@@ -2178,12 +2150,15 @@ public sealed class Extension : IExtension, IDisposable
     {
         if (Interlocked.Exchange(ref _stopping, 1) != 0)
         {
-            _stopped.Task.GetAwaiter().GetResult();
+            _stopped.Task.Wait(ShutdownWaitTimeout);
             return;
         }
 
         try
         {
+            lock (_windowLock)
+                _pendingWindowActions.Clear();
+
             try
             {
                 _watchdog.Change(Timeout.Infinite, Timeout.Infinite);
@@ -2204,7 +2179,13 @@ public sealed class Extension : IExtension, IDisposable
             {
             }
 
-            _filterGate.Wait();
+            if (!_filterGate.Wait(ShutdownWaitTimeout))
+            {
+                Terminal.WriteError(
+                    "Фильтр занят дольше 5 секунд. CensorPlayer больше не ждёт его освобождения.",
+                    LogModule);
+                return;
+            }
             try
             {
                 ActiveSchedule? active;

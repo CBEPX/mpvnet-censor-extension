@@ -1,10 +1,11 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** post-review wave и аудиокомпрессия реализованы локально в
-`codex/implement-censor-p0`. Core-тесты и Release-сборка зелёные. Осталось
-подтвердить Windows runtime/installer smoke в CI, пройти итоговый review через
-Claude Opus 5 и физически проверить новый DLL. Полный portable/installer
-по-прежнему нельзя публиковать до закрытия source-provenance gate.
+**Статус:** findings первого Claude Opus 5 review исправлены локально в
+`codex/implement-censor-p0`. Проходят 64 Core-теста и Release-сборка без
+предупреждений. Осталось подтвердить Windows runtime/installer smoke в CI,
+получить чистый повторный review через Claude Opus 5 и физически проверить
+новый DLL. Полный portable/installer по-прежнему нельзя публиковать до закрытия
+source-provenance gate.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения
@@ -135,6 +136,25 @@ Claude Opus 5 и физически проверить новый DLL. Полн�
 оставил actionable findings, пользователю передан один итоговый DLL для
 физического теста.
 
+### 9. Исправления после Claude Opus 5 review
+
+- Санитизировать каждую JSONL-запись журнала при экспорте диагностики: пути и
+  тексты ошибок заменять SHA-256, повреждённые строки не копировать дословно.
+- При недоступном каталоге логов загружать расширение с отключённым журналом;
+  завершение работы не должно ждать занятый filter gate дольше пяти секунд.
+- Удалять recovery-файл после возврата черновика в сохранённое состояние,
+  возвращать отклонённые настройки в форму и ограничить очередь действий окна.
+- Заморозить снимки `ScheduleDraft`, переиспользовать validation result и при
+  редактировании одной границы обновлять только затронутую строку таблицы.
+- Свести durable temp/flush/replace в `AtomicFile`, убрать пустой `T(...)`,
+  повторяющийся event dispatch и отдельный `ScheduleOptionsResolver`.
+- Закрепить рекурсивное включение Core sources, retry загрузок и независимый от
+  текущего каталога путь аудиосмока.
+
+**Выход:** privacy/robustness findings закрыты регрессионными тестами, оба
+Windows CI зелёные, повторный `cc review` на `claude-opus-5` не оставляет
+actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.
@@ -160,3 +180,5 @@ Claude Opus 5 и физически проверить новый DLL. Полн�
 | PowerShell parser rejected `15_000` in Windows audio smoke | Used a C#-style digit separator in a PowerShell numeric literal | Replaced it with `15000`; packaging and pinned Inno had already passed |
 | `mpvnet.com` audio smoke timed out on `film-balanced` | Infinite `anullsrc` left mpv.net in idle state after the requested length | Made the lavfi source finite and set `idle=no`, `keep-open=no`; timeout now preserves console output |
 | PR audio smoke passed Film then timed out on Anime while push-run passed all presets | mpv.net defaults to `process-instance=single`, so consecutive smoke processes could race through single-instance forwarding | Added the documented `--process-instance=multi` option to isolate every preset run |
+| Push audio smoke still timed out nondeterministically after process isolation | The WinForms EOF path depends on ordering of separate `end-file` and `playlist-pos` events | Switched the pinned mpv.net smoke to its built-in headless `--o=` event loop and supplied a complete two-second adaptive-analysis window |
+| Local loader smoke requires `Microsoft.WindowsDesktop.App` | macOS can compile the Windows target but cannot execute its WinForms host | Keep loader execution as a required `windows-latest` CI gate; local Release build still verifies compilation |

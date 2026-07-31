@@ -23,6 +23,16 @@ public sealed record ExtensionSettings
 
     [JsonExtensionData]
     public Dictionary<string, JsonElement>? AdditionalProperties { get; init; }
+
+    public NormalizationOptions ResolveNormalizationOptions(ScheduleMetadata metadata)
+    {
+        ArgumentNullException.ThrowIfNull(metadata);
+        return new(
+            metadata.LeadInMs ?? LeadInMs,
+            metadata.LeadOutMs ?? LeadOutMs,
+            metadata.OffsetMs ?? 0,
+            MergeGapMs);
+    }
 }
 
 public sealed record SettingsLimits
@@ -104,42 +114,10 @@ public static class ExtensionSettingsStore
         if (warnings.Count > 0)
             throw new ArgumentException(string.Join(" ", warnings), nameof(settings));
 
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("Путь к настройкам должен включать каталог.", nameof(path));
-        Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            var bytes = JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions);
-            using (var stream = new FileStream(
-                tempPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                4_096,
-                FileOptions.WriteThrough))
-            {
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
-            }
-            if (File.Exists(fullPath))
-                File.Replace(tempPath, fullPath, fullPath + ".bak");
-            else
-                File.Move(tempPath, fullPath);
-        }
-        catch
-        {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch
-            {
-                // Preserve the original settings write failure.
-            }
-            throw;
-        }
+        AtomicFile.Write(
+            path,
+            JsonSerializer.SerializeToUtf8Bytes(settings, JsonOptions),
+            Path.GetFullPath(path) + ".bak");
     }
 
     public static IReadOnlyList<string> Validate(ExtensionSettings settings)

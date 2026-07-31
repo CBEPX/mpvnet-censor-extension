@@ -9,7 +9,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 $MpvNetPath = [IO.Path]::GetFullPath($MpvNetPath)
-$CoreAssemblyPath = [IO.Path]::GetFullPath($CoreAssemblyPath)
+$RepoRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$CoreAssemblyPath = if ([IO.Path]::IsPathRooted($CoreAssemblyPath)) {
+    [IO.Path]::GetFullPath($CoreAssemblyPath)
+} else {
+    [IO.Path]::GetFullPath((Join-Path $RepoRoot $CoreAssemblyPath))
+}
 if (-not (Test-Path $MpvNetPath -PathType Leaf)) {
     throw "mpv.net console launcher is missing: $MpvNetPath"
 }

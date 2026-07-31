@@ -43,10 +43,24 @@ public sealed class ExtensionLog : IDisposable
         _directory = Path.GetFullPath(directory);
         _retentionDays = retentionDays;
         _lastPrunedDate = DateOnly.FromDateTime(DateTime.UtcNow);
-        Directory.CreateDirectory(_directory);
-        DeleteExpired(retentionDays);
-        _writer = Task.Run(WriteLoopAsync);
+        try
+        {
+            Directory.CreateDirectory(_directory);
+            DeleteExpired(retentionDays);
+            IsEnabled = true;
+            _writer = Task.Run(WriteLoopAsync);
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+                UnauthorizedAccessException or
+                NotSupportedException or
+                System.Security.SecurityException)
+        {
+            _writer = Task.CompletedTask;
+        }
     }
+
+    public bool IsEnabled { get; }
 
     public void Write(
         string eventName,
@@ -54,7 +68,7 @@ public sealed class ExtensionLog : IDisposable
         IReadOnlyDictionary<string, object?>? fields = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
-        if (Volatile.Read(ref _disposed) != 0)
+        if (!IsEnabled || Volatile.Read(ref _disposed) != 0)
             return;
         _channel.Writer.TryWrite(new(
             DateTimeOffset.UtcNow,

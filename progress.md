@@ -1,5 +1,26 @@
 # Progress
 
+## 2026-08-01
+
+- Первый полный `cc review` на `claude-opus-5` одобрил session/revision и
+  filter transaction design, но нашёл шесть edge findings: privacy ZIP,
+  отказ логирования, shutdown wait, stale recovery, large-draft UI и очередь
+  окна.
+- Диагностический ZIP теперь заново санитизирует JSONL: значения `*path` и
+  `*error` хешируются, невалидные строки заменяются безопасным маркером.
+- Недоступный каталог журналов больше не мешает загрузке расширения; ожидание
+  filter gate при shutdown ограничено пятью секундами.
+- Recovery синхронизирован с `IsDirty`, отклонённые настройки возвращаются в
+  форму, очередь действий окна ограничена 32 элементами и очищается при stop.
+- `ScheduleDraft` хранит замороженные снимки, переиспользует validation result
+  и не клонирует все интервалы при чтении. Cell edit и шаг ±100 мс обновляют
+  одну строку без повторной сериализации всего расписания.
+- Пять atomic writers сведены в `AtomicFile`; убраны пустой `T(...)`,
+  повторяющийся event dispatch и отдельный `ScheduleOptionsResolver`.
+- Локально: Release build без предупреждений, 64/64 теста, format, JSON/YAML и
+  shell syntax — PASS. Loader smoke исполняется только в Windows CI, потому
+  что macOS не содержит `Microsoft.WindowsDesktop.App`.
+
 ## 2026-07-31
 
 - Принят post-review план: исправления runtime/data/installer и четыре

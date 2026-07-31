@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.IO.Compression;
+using System.Text.Json;
 using Censor.Core;
 
 namespace Censor.Core.Tests;
@@ -176,9 +177,8 @@ public sealed class SettingsAndDiagnosticsTests
             LeadOutMs = 200,
             MergeGapMs = 300,
         };
-        var resolved = ScheduleOptionsResolver.Resolve(
-            new(LeadInMs: 400, OffsetMs: -500),
-            settings);
+        var resolved = settings.ResolveNormalizationOptions(
+            new(LeadInMs: 400, OffsetMs: -500));
 
         Assert.Equal(new(400, 200, -500, 300), resolved);
     }
@@ -193,7 +193,7 @@ public sealed class SettingsAndDiagnosticsTests
             [new(1_000, 2_000, "note")],
             []);
 
-        DraftRecoveryStore.Save(path, document);
+        DraftRecoveryStore.SaveOrDelete(path, document, isDirty: true);
         var json = File.ReadAllText(path);
         Assert.DoesNotContain("mediaPath", json, StringComparison.OrdinalIgnoreCase);
         var restored = DraftRecoveryStore.Load(path);
@@ -201,7 +201,7 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.Equal(document.Metadata, restored.Document!.Metadata);
         Assert.Equal(document.Intervals, restored.Document.Intervals);
 
-        DraftRecoveryStore.Delete(path);
+        DraftRecoveryStore.SaveOrDelete(path, document, isDirty: false);
         Assert.False(File.Exists(path));
     }
 
@@ -283,6 +283,19 @@ public sealed class SettingsAndDiagnosticsTests
     }
 
     [Fact]
+    public void LogDisablesItselfWhenDirectoryCannotBeCreated()
+    {
+        using var directory = new TemporaryDirectory();
+        var blockedDirectory = Path.Combine(directory.Path, "blocked");
+        File.WriteAllText(blockedDirectory, "not a directory");
+
+        using var log = new ExtensionLog(blockedDirectory, 30);
+
+        Assert.False(log.IsEnabled);
+        Assert.Null(Record.Exception(() => log.Write("event", new(1, 1))));
+    }
+
+    [Fact]
     public void DiagnosticsIncludesScheduleOnlyWithConsent()
     {
         using var directory = new TemporaryDirectory();
@@ -307,7 +320,7 @@ public sealed class SettingsAndDiagnosticsTests
     {
         using var directory = new TemporaryDirectory();
         var logPath = Path.Combine(directory.Path, "censor-extension.log");
-        File.WriteAllText(logPath, "live event");
+        File.WriteAllText(logPath, "{\"event\":\"live-event\"}" + Environment.NewLine);
         using var writer = new FileStream(
             logPath,
             FileMode.Open,
@@ -321,6 +334,38 @@ public sealed class SettingsAndDiagnosticsTests
 
         using var archive = ZipFile.OpenRead(path);
         Assert.Contains(archive.Entries, entry => entry.FullName == "logs/censor-extension.log");
+    }
+
+    [Fact]
+    public void DiagnosticsRedactsPathsAndErrorsFromLogs()
+    {
+        using var directory = new TemporaryDirectory();
+        var privatePath = Path.Combine(directory.Path, "Private", "film.mkv");
+        var logPath = Path.Combine(directory.Path, "censor-extension.log");
+        var line = JsonSerializer.Serialize(new
+        {
+            @event = "schedule-load-error",
+            fields = new Dictionary<string, object?>
+            {
+                ["schedulePath"] = privatePath,
+                ["error"] = $"Unable to open {privatePath}",
+            },
+        });
+        File.WriteAllLines(logPath, [line, $"invalid raw entry {privatePath}"]);
+        var path = Path.Combine(directory.Path, "diagnostics.zip");
+        var snapshot = new DiagnosticsSnapshot(
+            "{}", "{}", "{}", "{}", "{}", "{}", "{}", [logPath], null);
+
+        DiagnosticsExporter.Export(path, snapshot, includeSchedule: false);
+
+        using var archive = ZipFile.OpenRead(path);
+        var entry = Assert.Single(archive.Entries, item =>
+            item.FullName == "logs/censor-extension.log");
+        using var reader = new StreamReader(entry.Open());
+        var exported = reader.ReadToEnd();
+        Assert.DoesNotContain(privatePath, exported, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("sha256:", exported, StringComparison.Ordinal);
+        Assert.Contains("log-entry-redacted", exported, StringComparison.Ordinal);
     }
 
     [Fact]

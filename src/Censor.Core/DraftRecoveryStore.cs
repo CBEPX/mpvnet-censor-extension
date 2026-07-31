@@ -1,4 +1,3 @@
-using System.Text;
 using System.Text.Json;
 
 namespace Censor.Core;
@@ -28,41 +27,18 @@ public static class DraftRecoveryStore
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(document);
         var envelope = new RecoveryEnvelope(1, document, DateTimeOffset.UtcNow);
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException(
-                "Путь к файлу восстановления должен включать каталог.",
-                nameof(path));
-        Directory.CreateDirectory(directory);
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
-        try
-        {
-            var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(envelope, JsonOptions));
-            using (var stream = new FileStream(
-                tempPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                4096,
-                FileOptions.WriteThrough))
-            {
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
-            }
-            File.Move(tempPath, fullPath, overwrite: true);
-        }
-        catch
-        {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch
-            {
-                // Preserve the original recovery write failure.
-            }
-            throw;
-        }
+        AtomicFile.WriteUtf8Text(path, JsonSerializer.Serialize(envelope, JsonOptions));
+    }
+
+    public static void SaveOrDelete(
+        string path,
+        ScheduleDocument document,
+        bool isDirty)
+    {
+        if (isDirty)
+            Save(path, document);
+        else
+            Delete(path);
     }
 
     public static DraftRecoveryLoadResult Load(string path)

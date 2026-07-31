@@ -1,5 +1,7 @@
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Censor.Core;
 
@@ -47,7 +49,10 @@ public static class DiagnosticsExporter
                 {
                     try
                     {
-                        AddFile(archive, logPath, $"logs/{Path.GetFileName(logPath)}");
+                        AddSanitizedLog(
+                            archive,
+                            logPath,
+                            $"logs/{Path.GetFileName(logPath)}");
                     }
                     catch (IOException)
                     {
@@ -83,7 +88,7 @@ public static class DiagnosticsExporter
         writer.Write(content);
     }
 
-    private static void AddFile(ZipArchive archive, string path, string name)
+    private static void AddSanitizedLog(ZipArchive archive, string path, string name)
     {
         using var source = new FileStream(
             path,
@@ -91,7 +96,82 @@ public static class DiagnosticsExporter
             FileAccess.Read,
             FileShare.ReadWrite | FileShare.Delete);
         var entry = archive.CreateEntry(name, CompressionLevel.SmallestSize);
-        using var destination = entry.Open();
-        source.CopyTo(destination);
+        using var reader = new StreamReader(source, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
+        while (reader.ReadLine() is { } line)
+        {
+            if (TrySanitizeLogLine(line, out var sanitized))
+                writer.WriteLine(sanitized);
+            else
+                writer.WriteLine("{\"event\":\"log-entry-redacted\",\"reason\":\"invalid-json\"}");
+        }
     }
+
+    private static bool TrySanitizeLogLine(string line, out string sanitized)
+    {
+        sanitized = "";
+        try
+        {
+            if (JsonNode.Parse(line) is not JsonObject root)
+                return false;
+            SanitizeNode(root);
+            sanitized = root.ToJsonString();
+            return true;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+    }
+
+    private static void SanitizeNode(JsonNode node)
+    {
+        if (node is JsonObject jsonObject)
+        {
+            foreach (var property in jsonObject.ToArray())
+            {
+                if (property.Value is JsonValue value &&
+                    value.TryGetValue<string>(out var text) &&
+                    ShouldRedact(property.Key, text))
+                {
+                    jsonObject[property.Key] = ExtensionLog.ProtectPath(text, includePath: false);
+                }
+                else if (property.Value is not null)
+                {
+                    SanitizeNode(property.Value);
+                }
+            }
+        }
+        else if (node is JsonArray jsonArray)
+        {
+            for (var index = 0; index < jsonArray.Count; index++)
+            {
+                if (jsonArray[index] is JsonValue value &&
+                    value.TryGetValue<string>(out var text) &&
+                    LooksLikeRootedPath(text))
+                {
+                    jsonArray[index] = ExtensionLog.ProtectPath(text, includePath: false);
+                }
+                else if (jsonArray[index] is { } child)
+                {
+                    SanitizeNode(child);
+                }
+            }
+        }
+    }
+
+    private static bool ShouldRedact(string propertyName, string value) =>
+        !value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) &&
+        (propertyName.Contains("path", StringComparison.OrdinalIgnoreCase) ||
+         propertyName.Contains("error", StringComparison.OrdinalIgnoreCase) ||
+         LooksLikeRootedPath(value));
+
+    private static bool LooksLikeRootedPath(string value) =>
+        value.StartsWith('/') ||
+        value.StartsWith("\\\\", StringComparison.Ordinal) ||
+        value.StartsWith("//", StringComparison.Ordinal) ||
+        (value.Length >= 3 &&
+         char.IsAsciiLetter(value[0]) &&
+         value[1] == ':' &&
+         value[2] is '\\' or '/');
 }

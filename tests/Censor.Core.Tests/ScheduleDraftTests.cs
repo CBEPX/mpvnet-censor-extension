@@ -99,6 +99,47 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void DocumentAndValidationSnapshotsAreReusedUntilAnEdit()
+    {
+        CensorInterval[] source = [new(0, 1_000)];
+        var draft = new ScheduleDraft(Document(source));
+        var firstDocument = draft.Document;
+        var firstValidation = draft.Validate(checkSerializedSize: false);
+
+        source[0] = new(10_000, 11_000);
+
+        Assert.Equal(new CensorInterval(0, 1_000), firstDocument.Intervals[0]);
+        Assert.Same(firstDocument, draft.Document);
+        Assert.Same(firstValidation, draft.Validate(checkSerializedSize: false));
+        Assert.Throws<NotSupportedException>(() =>
+            ((IList<CensorInterval>)firstDocument.Intervals)[0] = new(20_000, 21_000));
+
+        draft.Update(0, 1_200, 1_100, null);
+
+        Assert.NotSame(firstDocument, draft.Document);
+        var changedValidation = draft.Validate(checkSerializedSize: false);
+        Assert.NotSame(firstValidation, changedValidation);
+        Assert.Contains(changedValidation, item => item.Severity == DiagnosticSeverity.Error);
+    }
+
+    [Fact]
+    public void LargeDraftEditSharesUntouchedIntervals()
+    {
+        var intervals = Enumerable.Range(0, ScheduleText.MaxIntervals)
+            .Select(index => new CensorInterval(index * 2L, index * 2L + 1))
+            .ToArray();
+        var draft = new ScheduleDraft(Document(intervals));
+        var before = draft.Document;
+
+        draft.Update(5_000, 20_000, 20_001, "changed");
+
+        var after = draft.Document;
+        Assert.Same(before.Intervals[0], after.Intervals[0]);
+        Assert.NotSame(before.Intervals[5_000], after.Intervals[5_000]);
+        Assert.Same(before.Intervals[^1], after.Intervals[^1]);
+    }
+
+    [Fact]
     public void InvalidGlobalOffsetIsReportedOutsideIntervalRows()
     {
         var draft = new ScheduleDraft(
@@ -133,6 +174,9 @@ public sealed class ScheduleDraftTests
         Assert.Contains(
             oversized.Validate(maxTextFileBytes: 100),
             item => item.Message.Contains("100 байт", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            oversized.Validate(maxTextFileBytes: 100, checkSerializedSize: false),
+            item => item.Message.Contains("байт", StringComparison.Ordinal));
     }
 
     [Fact]

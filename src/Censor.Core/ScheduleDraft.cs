@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.Text;
 
 namespace Censor.Core;
@@ -10,18 +11,20 @@ public sealed class ScheduleDraft
     private readonly List<ScheduleDocument> _undo = [];
     private ScheduleDocument _document;
     private ScheduleDocument _savedDocument;
+    private ValidationCache? _validationCache;
     private bool _forceDirty;
+    private long _revision;
 
     public ScheduleDraft(ScheduleDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         _document = Copy(document);
-        _savedDocument = Copy(document);
+        _savedDocument = _document;
     }
 
-    public ScheduleDocument Document => Copy(_document);
+    public ScheduleDocument Document => _document;
 
-    public bool IsDirty => _forceDirty || !DocumentsEqual(_document, _savedDocument);
+    public bool IsDirty => _forceDirty || !ReferenceEquals(_document, _savedDocument);
 
     public bool CanUndo => _undo.Count > 0;
 
@@ -29,12 +32,27 @@ public sealed class ScheduleDraft
 
     public IReadOnlyList<ParseDiagnostic> Validate(
         int maxIntervals = ScheduleText.MaxIntervals,
-        int maxTextFileBytes = ScheduleText.MaxTextFileBytes)
+        int maxTextFileBytes = ScheduleText.MaxTextFileBytes,
+        bool checkSerializedSize = true)
     {
         if (maxIntervals is < 1 or > ScheduleText.MaxIntervals)
             throw new ArgumentOutOfRangeException(nameof(maxIntervals));
         if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
             throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
+        if (_validationCache is
+            {
+                Revision: var revision,
+                MaxIntervals: var cachedMaxIntervals,
+                MaxTextFileBytes: var cachedMaxTextFileBytes,
+                CheckSerializedSize: var cachedCheckSerializedSize,
+            } cache &&
+            revision == _revision &&
+            cachedMaxIntervals == maxIntervals &&
+            cachedMaxTextFileBytes == maxTextFileBytes &&
+            cachedCheckSerializedSize == checkSerializedSize)
+        {
+            return cache.Diagnostics;
+        }
 
         var diagnostics = new List<ParseDiagnostic>();
         if (_document.Intervals.Count > maxIntervals)
@@ -63,29 +81,39 @@ public sealed class ScheduleDraft
                 1,
                 "Смещение выходит за допустимый диапазон."));
 
-        try
+        if (checkSerializedSize)
         {
-            var serializedBytes = Encoding.UTF8.GetByteCount(ScheduleText.Serialize(_document));
-            if (serializedBytes > maxTextFileBytes)
+            try
+            {
+                var serializedBytes = Encoding.UTF8.GetByteCount(ScheduleText.Serialize(_document));
+                if (serializedBytes > maxTextFileBytes)
+                {
+                    diagnostics.Add(new(
+                        DiagnosticSeverity.Error,
+                        0,
+                        1,
+                        $"Расписание превышает ограничение в {maxTextFileBytes} байт."));
+                }
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException or OverflowException)
             {
                 diagnostics.Add(new(
                     DiagnosticSeverity.Error,
                     0,
                     1,
-                    $"Расписание превышает ограничение в {maxTextFileBytes} байт."));
+                    $"Черновик нельзя сохранить: {exception.Message}"));
             }
         }
-        catch (Exception exception) when (
-            exception is ArgumentException or OverflowException)
-        {
-            diagnostics.Add(new(
-                DiagnosticSeverity.Error,
-                0,
-                1,
-                $"Черновик нельзя сохранить: {exception.Message}"));
-        }
 
-        return diagnostics;
+        var result = Array.AsReadOnly(diagnostics.ToArray());
+        _validationCache = new(
+            _revision,
+            maxIntervals,
+            maxTextFileBytes,
+            checkSerializedSize,
+            result);
+        return result;
     }
 
     public void Add(long startMs, long endMs, string? note = null) =>
@@ -219,8 +247,9 @@ public sealed class ScheduleDraft
         if (_undo.Count == 0)
             return false;
 
-        _redo.Add(Copy(_document));
+        _redo.Add(_document);
         _document = Pop(_undo);
+        InvalidateValidation();
         return true;
     }
 
@@ -231,12 +260,13 @@ public sealed class ScheduleDraft
 
         Push(_undo, _document);
         _document = Pop(_redo);
+        InvalidateValidation();
         return true;
     }
 
     public void MarkSaved()
     {
-        _savedDocument = Copy(_document);
+        _savedDocument = _document;
         _forceDirty = false;
     }
 
@@ -260,10 +290,11 @@ public sealed class ScheduleDraft
 
     private void Change(Func<ScheduleDocument, ScheduleDocument> update)
     {
-        var changed = Copy(update(Copy(_document)));
+        var changed = Freeze(update(_document));
         Push(_undo, _document);
         _document = changed;
         _redo.Clear();
+        InvalidateValidation();
     }
 
     private void EnsureIndex(int index)
@@ -274,7 +305,7 @@ public sealed class ScheduleDraft
 
     private static void Push(List<ScheduleDocument> history, ScheduleDocument document)
     {
-        history.Add(Copy(document));
+        history.Add(document);
         if (history.Count > MaxHistory)
             history.RemoveAt(0);
     }
@@ -284,15 +315,37 @@ public sealed class ScheduleDraft
         var index = history.Count - 1;
         var document = history[index];
         history.RemoveAt(index);
-        return Copy(document);
+        return document;
     }
 
     private static ScheduleDocument Copy(ScheduleDocument document) =>
         document with
         {
-            Intervals = document.Intervals.Select(interval => interval with { }).ToArray(),
-            PreservedHeaderLines = document.PreservedHeaderLines.ToArray(),
+            Intervals = Array.AsReadOnly(document.Intervals.ToArray()),
+            PreservedHeaderLines = Array.AsReadOnly(document.PreservedHeaderLines.ToArray()),
         };
+
+    private static ScheduleDocument Freeze(ScheduleDocument document) =>
+        document with
+        {
+            Intervals = Freeze(document.Intervals),
+            PreservedHeaderLines = Freeze(document.PreservedHeaderLines),
+        };
+
+    private static IReadOnlyList<T> Freeze<T>(IReadOnlyList<T> values) =>
+        values switch
+        {
+            ReadOnlyCollection<T> => values,
+            T[] array => Array.AsReadOnly(array),
+            List<T> list => list.AsReadOnly(),
+            _ => Array.AsReadOnly(values.ToArray()),
+        };
+
+    private void InvalidateValidation()
+    {
+        _revision++;
+        _validationCache = null;
+    }
 
     private static bool DocumentsEqual(ScheduleDocument left, ScheduleDocument right) =>
         left.Metadata == right.Metadata &&
@@ -304,4 +357,11 @@ public sealed class ScheduleDraft
 
     private static ParseDiagnostic Error(int intervalIndex, string message) =>
         new(DiagnosticSeverity.Error, intervalIndex + 1, 1, message);
+
+    private sealed record ValidationCache(
+        long Revision,
+        int MaxIntervals,
+        int MaxTextFileBytes,
+        bool CheckSerializedSize,
+        IReadOnlyList<ParseDiagnostic> Diagnostics);
 }
