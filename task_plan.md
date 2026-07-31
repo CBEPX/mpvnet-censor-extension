@@ -158,3 +158,4 @@ Claude Opus 5 и физически проверить новый DLL. Полн�
 | `mpvnet.dll` absent from portable release ZIP | Tried to extract a compile-time assembly after verifying the portable archive SHA-256 | Build only pinned upstream `MpvNet.csproj` and reference its `libmpvnet.dll` with `Private=false` |
 | `CS8752` in new draft-limit test | Used target-typed `new()` as the sole argument of a `params` call | Named `CensorInterval` explicitly; production code was unaffected |
 | PowerShell parser rejected `15_000` in Windows audio smoke | Used a C#-style digit separator in a PowerShell numeric literal | Replaced it with `15000`; packaging and pinned Inno had already passed |
+| `mpvnet.com` audio smoke timed out on `film-balanced` | Infinite `anullsrc` left mpv.net in idle state after the requested length | Made the lavfi source finite and set `idle=no`, `keep-open=no`; timeout now preserves console output |

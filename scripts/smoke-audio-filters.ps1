@@ -33,19 +33,25 @@ try {
                 "--no-config",
                 "--load-scripts=no",
                 "--input-terminal=no",
+                "--idle=no",
+                "--keep-open=no",
                 "--video=no",
                 "--ao=null",
                 "--length=0.2",
                 "--msg-level=all=warn",
                 "--af-add=$($Preset.Filter)",
-                "av://lavfi:anullsrc=r=48000:cl=stereo"
+                "av://lavfi:anullsrc=r=48000:cl=stereo:d=0.2"
             ) `
             -RedirectStandardOutput $StdOut `
             -RedirectStandardError $StdErr `
             -PassThru
         if (-not $Process.WaitForExit(15000)) {
             Stop-Process -Id $Process.Id -Force
-            throw "Audio filter smoke timed out for preset $($Preset.Id)."
+            $Process.WaitForExit()
+            $TimeoutOutput = (
+                Get-Content $StdOut, $StdErr -Raw -ErrorAction SilentlyContinue
+            ) -join "`n"
+            throw "Audio filter smoke timed out for preset $($Preset.Id):`n$TimeoutOutput"
         }
         $Output = (Get-Content $StdOut, $StdErr -Raw -ErrorAction SilentlyContinue) -join "`n"
         if ($Process.ExitCode -ne 0 -or

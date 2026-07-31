@@ -25,6 +25,9 @@
 - Первый Windows run `30661245085` подтвердил build/tests/loader/package и
   закреплённый Inno, затем нашёл синтаксическую ошибку `15_000` в новом
   PowerShell smoke. Литерал исправлен на `15000`; требуется повторный run.
+- Run `30661482265` снова подтвердил package и дошёл до mpv runtime, но
+  бесконечный `anullsrc` оставил процесс в idle. Fixture сделан конечным;
+  добавлены `idle=no`, `keep-open=no` и вывод лога при timeout.
 - README, ТЗ и Windows checklist синхронизированы; строки интерфейса проверены
   через `humanizer-ru`. Локально: 60/60, extension build без предупреждений,
   `dotnet format --verify-no-changes`, JSON/YAML и shell syntax — PASS.
