@@ -31,7 +31,8 @@ try {
         $Process = Start-Process $MpvNetPath `
             -ArgumentList @(
                 "--no-config",
-                "--process-instance=multi",
+                # Empty output selects mpv.net's deterministic headless event loop.
+                "--o=",
                 "--load-scripts=no",
                 "--input-terminal=no",
                 "--idle=no",
