@@ -6,9 +6,10 @@
     <AssemblyName>CensorExtension</AssemblyName>
     <RootNamespace>Censor.MpvNet.Extension</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Censor.Core\Censor.Core.csproj" />
+    <Compile Include="..\Censor.Core\*.cs" Link="Core\%(Filename)%(Extension)" />
     <Reference Include="libmpvnet">
       <HintPath>..\..\.deps\mpvnet\libmpvnet.dll</HintPath>
       <Private>false</Private>

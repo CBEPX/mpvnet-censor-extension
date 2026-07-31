@@ -32,12 +32,19 @@ jobs:
       - name: Test
         run: dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 
+      - name: Verify stock extension loader contract
+        run: >-
+          dotnet run
+          --project tests/Censor.LoaderSmoke/Censor.LoaderSmoke.csproj
+          --configuration Release
+          --no-build
+          --no-restore
+          --
+          src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
+
       - name: Upload extension
         uses: actions/upload-artifact@v7
         with:
           name: CensorExtension-windows
           if-no-files-found: error
-          path: |
-            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
-            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.deps.json
-            src/Censor.MpvNet.Extension/bin/Release/Censor.Core.dll
+          path: src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll

@@ -16,18 +16,21 @@ dotnet build CensorPlayer.sln --configuration Release --no-restore
 dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 ```
 
-The extension output is
-`src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll` together with
-`Censor.Core.dll`.
+The extension output is the single assembly
+`src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll`. Core sources are
+compiled into that assembly because stock mpv.net loads extensions with
+`Assembly.LoadFile` and does not resolve sibling project dependencies.
 
 ## Install and open
 
-Copy `CensorExtension.dll`, `CensorExtension.deps.json`, and `Censor.Core.dll`
-into:
+Copy `CensorExtension.dll` into:
 
 ```text
 <MPVNET_CONFIG>\extensions\CensorExtension\
 ```
+
+When replacing the earlier three-file artifact, remove the legacy
+`Censor.Core.dll` and `CensorExtension.deps.json` first.
 
 mpv.net requires the directory and primary DLL to have the same
 `CensorExtension` name. Merge [examples/input.conf](examples/input.conf) into
@@ -48,6 +51,8 @@ script-message-to censor censor-disable
 - Core parser, subtitle adapters, normalization, atomic save, and filter
   compilation are covered by deterministic and property-based tests.
 - The extension cross-builds against pinned mpv.net `v7.1.2.0`.
+- Windows CI repeats the stock `Assembly.LoadFile` + `GetTypes` loader contract
+  and rejects any external `Censor.Core` assembly reference.
 - Windows CI publishes a `CensorExtension-windows` artifact.
 - Real playback timing, `gblur`, seek/speed behavior, GPU performance, and
   mpv.net UI integration still require the documented Windows Phase 0 run.

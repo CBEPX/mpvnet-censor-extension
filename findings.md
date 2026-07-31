@@ -51,6 +51,7 @@
 | Большой expression превышает лимиты | Normalize + chunks + measured limits |
 | Сохранение портит schedule | Temp + atomic replace + backup + failure simulation |
 | UI callback завершает mpv.net | Общий exception boundary и actionable error |
+| Stock loader не разрешает sibling dependency | Single `CensorExtension.dll` + Windows `LoadFile/GetTypes` smoke |
 
 ## Граница доказательств
 
@@ -66,3 +67,5 @@
 - Официальный .NET SDK разрешает cross-build WinForms/WPF на macOS при `EnableWindowsTargeting=true`.
 - Глобальный trace-mcp закреплён за `/Users/g.mehrenin/project/infra` и не отражает этот репозиторий; для `player` используется активированный Serena до отдельной перенастройки trace root.
 - `CensorExtension.dll` cross-build подтверждён на macOS с `EnableWindowsTargeting=true`; это compile evidence, а не Windows runtime evidence.
+- Первый физический Windows smoke на `58004d4` дал blocking fail: stock mpv.net дошёл до `Assembly.LoadFile/GetTypes`, но не разрешил лежащий рядом `Censor.Core.dll`.
+- Packaging contract изменён на одну `CensorExtension.dll`; Core продолжает тестироваться отдельно, но его исходники компилируются внутрь extension assembly.

@@ -6,8 +6,10 @@ Actions cannot provide.
 ## Setup
 
 - Use mpv.net `v7.1.2.0` from `deps.lock.json`.
-- Copy `CensorExtension.dll`, `CensorExtension.deps.json`, and `Censor.Core.dll`
-  into `<MPVNET_CONFIG>\extensions\CensorExtension\`.
+- Copy the single `CensorExtension.dll` into
+  `<MPVNET_CONFIG>\extensions\CensorExtension\`.
+- Remove legacy `Censor.Core.dll` and `CensorExtension.deps.json` from the
+  previous failed artifact before the cold start.
 - Merge `examples/input.conf` into `<MPVNET_CONFIG>\input.conf`.
 - Record GPU, driver, Windows build, mpv.net commit, libmpv, and FFmpeg versions.
 
