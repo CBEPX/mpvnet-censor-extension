@@ -38,15 +38,14 @@ try {
                 "--keep-open=no",
                 "--video=no",
                 "--ao=null",
-                "--length=0.2",
                 "--msg-level=all=warn",
                 "--af-add=$($Preset.Filter)",
-                "av://lavfi:anullsrc=r=48000:cl=stereo:d=0.2"
+                "av://lavfi:anullsrc=r=48000:cl=stereo:d=2"
             ) `
             -RedirectStandardOutput $StdOut `
             -RedirectStandardError $StdErr `
             -PassThru
-        if (-not $Process.WaitForExit(15000)) {
+        if (-not $Process.WaitForExit(30000)) {
             Stop-Process -Id $Process.Id -Force
             $Process.WaitForExit()
             $TimeoutOutput = (
