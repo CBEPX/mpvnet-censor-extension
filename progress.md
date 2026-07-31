@@ -28,6 +28,10 @@
 - Run `30661482265` снова подтвердил package и дошёл до mpv runtime, но
   бесконечный `anullsrc` оставил процесс в idle. Fixture сделан конечным;
   добавлены `idle=no`, `keep-open=no` и вывод лога при timeout.
+- Push-run `30661744664` полностью прошёл, включая четыре аудиографа и новый
+  installer smoke. Параллельный PR-run `30661747438` выявил single-instance
+  race между последовательными `mpvnet.com`; smoke переведён в штатный
+  `process-instance=multi` и должен пройти повторно в обоих событиях.
 - README, ТЗ и Windows checklist синхронизированы; строки интерфейса проверены
   через `humanizer-ru`. Локально: 60/60, extension build без предупреждений,
   `dotnet format --verify-no-changes`, JSON/YAML и shell syntax — PASS.

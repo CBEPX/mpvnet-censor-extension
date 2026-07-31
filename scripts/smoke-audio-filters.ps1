@@ -31,6 +31,7 @@ try {
         $Process = Start-Process $MpvNetPath `
             -ArgumentList @(
                 "--no-config",
+                "--process-instance=multi",
                 "--load-scripts=no",
                 "--input-terminal=no",
                 "--idle=no",
