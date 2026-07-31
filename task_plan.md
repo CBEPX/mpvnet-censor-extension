@@ -2,10 +2,10 @@
 
 **Статус:** полный код Windows P0 реализован локально в
 `codex/implement-censor-p0`: runtime, редактор, настройки, recovery, логи,
-диагностика, portable, installer и package-validation CI. До публикации
-остаётся доказать полный соответствующий исходный код штатного `libmpv`, затем
-повторить post-fix Fable-review, Windows CI и физическую проверку итогового
-пакета.
+диагностика, portable, installer и package-validation CI. Windows CI для
+`194fe60` прошёл полностью. До публикации остаётся доказать полный
+соответствующий исходный код штатного `libmpv`, повторить post-fix
+Fable-review и физически проверить итоговый пакет.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения

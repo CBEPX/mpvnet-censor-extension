@@ -72,9 +72,10 @@
 
 - Физический Windows smoke на `440269a` доказал extension API, filter timeline,
   preset switching, watchdog, session races и 1080p30/60.
-- Новый редактор и полный portable/installer пока имеют только локальное
-  compile/test evidence. Их runtime-факты будут доказаны после Windows CI и
-  повторной физической проверки точного SHA.
+- Новый редактор и полный portable/installer прошли Windows CI, включая
+  install/update/uninstall smoke. Работа UI внутри mpv.net и поведение точного
+  пакета на реальной Windows-машине будут доказаны отдельной физической
+  проверкой текущего SHA.
 
 ## Environment discovery
 

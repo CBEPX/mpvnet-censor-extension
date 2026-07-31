@@ -60,9 +60,18 @@
   `dotnet format --verify-no-changes`, JSON/YAML и shell syntax checks.
 - Post-fix Fable запуск упирается во внешний session limit до 13:00 МСК; это
   остаётся review gate и не заменяется локальными проверками.
+- Windows CI для `194fe60` прошёл в push-run `30616857713` и PR-run
+  `30616859951`: 54/54 теста, stock loader, package/source/checksum/SBOM
+  verification и install/update/uninstall smoke зелёные.
+- Evidence artifact `8787805777` содержит только DLL расширения, исходный код
+  проекта, лицензии и пример `input.conf`; полный runtime не опубликован.
+- README выполнил критерии issue #2, issue закрыт. Source-provenance gate для
+  полного portable/installer вынесен в issue #4.
+- Повторный Fable-review полного branch diff в 11:40 МСК снова получил
+  внешний session limit до 13:00 МСК; post-fix verdict ещё не получен.
 
 ## Следующий шаг
 
-Отправить branch в PR #1, дождаться Windows package CI и повторить Fable после
-сброса внешнего лимита. PR остаётся draft; полный portable/installer не
-публикуется до закрытия source-provenance gate.
+После 13:00 МСК повторить Fable-review полного branch diff и разобрать все
+замечания. Затем физически проверить точный SHA на Windows. PR остаётся draft;
+полный portable/installer не публикуется до закрытия issue #4.
