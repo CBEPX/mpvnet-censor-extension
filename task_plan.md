@@ -171,8 +171,9 @@ actionable findings.
 - Удалить лишний Extension writer wrapper и generic `Dispatch` overloads,
   объединить test helper и зафиксировать порядок блокировок. Validation cache
   и zero-copy `Freeze` сохранить как защиту сценария с 10 000 интервалов.
-- Вернуть `compileReferenceSha256` в `deps.lock.json` и проверять реальный
-  результат сборки закреплённого чистого mpv.net source checkout.
+- Не использовать общий `compileReferenceSha256`: одинаковый source commit и
+  SDK дают разные DLL на macOS и Windows. Закреплять commit и требовать чистый
+  mpv.net source checkout перед каждой сборкой.
 
 **Выход:** второй набор findings закрыт минимальными регрессионными проверками,
 два Windows CI зелёные, следующий `cc review` на `claude-opus-5` не оставляет
@@ -205,3 +206,4 @@ actionable findings.
 | PR audio smoke passed Film then timed out on Anime while push-run passed all presets | mpv.net defaults to `process-instance=single`, so consecutive smoke processes could race through single-instance forwarding | Added the documented `--process-instance=multi` option to isolate every preset run |
 | Push audio smoke still timed out nondeterministically after process isolation | The WinForms EOF path depends on ordering of separate `end-file` and `playlist-pos` events | Switched the pinned mpv.net smoke to its built-in headless `--o=` event loop and supplied a complete two-second adaptive-analysis window |
 | Local loader smoke requires `Microsoft.WindowsDesktop.App` | macOS can compile the Windows target but cannot execute its WinForms host | Keep loader execution as a required `windows-latest` CI gate; local Release build still verifies compilation |
+| `compileReferenceSha256` passed on macOS but failed Windows CI `30669608246` | `libmpvnet.dll` is not bit-identical across the two build platforms | Removed the misleading cross-platform artifact pin; exact source commit and clean checkout remain enforced |

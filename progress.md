@@ -13,9 +13,10 @@
 - Исправлены mpv bool readback, ложный watchdog success, двойной `.censor` в
   имени, redo и ложный diagnostic hotkey. Event dispatch и atomic text wrapper
   упрощены, общий temporary-directory helper больше не дублируется.
-- `compileReferenceSha256` снова является исполняемым pin: restore проверяет
-  точный SHA-256 `00da16e2…` собранной `libmpvnet.dll`; Node.js явно указан как
-  build prerequisite.
+- Попытка вернуть общий `compileReferenceSha256` прошла локально, но Windows CI
+  `30669608246` доказал, что DLL не bit-identical между платформами. Binary pin
+  удалён сознательно; точный source commit и чистый checkout обязательны.
+- Node.js явно указан как build prerequisite для чтения `deps.lock.json`.
 - Large-draft validation cache и zero-copy `Freeze` намеренно сохранены: они
   закрывают уже подтверждённый сценарий редактирования 10 000 интервалов.
 - Первый полный `cc review` на `claude-opus-5` одобрил session/revision и
