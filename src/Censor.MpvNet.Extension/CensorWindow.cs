@@ -1,145 +1,386 @@
+using System.ComponentModel;
+using System.Globalization;
 using Censor.Core;
 
 namespace Censor.MpvNet.Extension;
 
 internal sealed class CensorWindow : Form
 {
-    private static readonly (string Label, BlurSettings Settings)[] BlurPresets =
+    private static string T(string value) => value;
+
+    private readonly List<(string Label, BlurSettings Settings)> _blurPresets =
     [
-        ("Strong (30 / 2)", BlurSettings.Strong),
-        ("Balanced (40 / 2)", BlurSettings.Balanced),
-        ("Maximum (50 / 3)", BlurSettings.Maximum),
+        (T("Умеренное (30 / 2)"), BlurSettings.Moderate),
+        (T("Сбалансированное (40 / 2)"), BlurSettings.Balanced),
+        (T("Максимальное (50 / 3)"), BlurSettings.Maximum),
     ];
 
-    private readonly Label _media = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
-    private readonly Label _schedule = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
-    private readonly Label _status = new() { AutoEllipsis = true, Dock = DockStyle.Fill };
+    private readonly Label _media = ValueLabel();
+    private readonly Label _schedule = ValueLabel();
+    private readonly Label _status = ValueLabel();
+    private readonly Label _duration = ValueLabel();
+    private readonly Label _filterState = ValueLabel();
+    private readonly Label _draftState = ValueLabel();
+    private readonly ListBox _warnings = new() { Dock = DockStyle.Fill };
+    private readonly DataGridView _intervals = CreateGrid();
     private readonly ComboBox _blurPreset = new()
     {
-        AccessibleName = "Blur preset",
+        AccessibleName = T("Степень размытия"),
         DropDownStyle = ComboBoxStyle.DropDownList,
-        Width = 170,
+        Width = 230,
     };
-    private readonly DataGridView _intervals = new()
+    private readonly CheckBox _autoSidecar = new()
     {
-        AllowUserToAddRows = false,
-        AllowUserToDeleteRows = false,
-        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+        AutoSize = true,
+        Text = T("Автозагрузка расписания рядом с фильмом"),
+    };
+    private readonly CheckBox _watchdog = new() { AutoSize = true, Text = T("Автоматически восстанавливать фильтр") };
+    private readonly NumericUpDown _watchdogInterval = Milliseconds(250, 60_000);
+    private readonly NumericUpDown _leadIn = Milliseconds(0, 86_400_000);
+    private readonly NumericUpDown _leadOut = Milliseconds(0, 86_400_000);
+    private readonly NumericUpDown _mergeGap = Milliseconds(0, 86_400_000);
+    private readonly NumericUpDown _durationTolerance = Milliseconds(0, 86_400_000);
+    private readonly NumericUpDown _earlyGuard = Milliseconds(0, 86_400_000);
+    private readonly NumericUpDown _offset = Milliseconds(-86_400_000, 86_400_000);
+    private readonly NumericUpDown _shiftAll = Milliseconds(-86_400_000, 86_400_000);
+    private readonly CheckBox _includeSchedule = new()
+    {
+        AutoSize = true,
+        Text = T("Добавить расписание в диагностический ZIP-архив"),
+    };
+    private readonly TextBox _diagnostics = new()
+    {
         Dock = DockStyle.Fill,
+        Multiline = true,
         ReadOnly = true,
-        RowHeadersVisible = false,
+        ScrollBars = ScrollBars.Vertical,
     };
-
+    private readonly System.Windows.Forms.Timer _recoveryTimer = new() { Interval = 500 };
+    private readonly string _recoveryPath;
+    private readonly string _uiStatePath;
+    private ExtensionSettings _settings;
+    private ScheduleDraft? _draft;
+    private IReadOnlyList<CensorInterval>? _sourceIntervals;
+    private IReadOnlyList<ParseDiagnostic> _runtimeDiagnostics = [];
     private bool _allowClose;
-    private IReadOnlyList<CensorInterval>? _renderedIntervals;
+    private bool _rendering;
+    private long? _pendingStartMs;
+    private string? _mediaPath;
+    private string? _sourcePath;
 
-    public CensorWindow()
+    public CensorWindow(ExtensionSettings settings, string recoveryPath)
     {
-        Text = "Censor Extension";
-        MinimumSize = new(640, 360);
-        Size = new(820, 520);
+        _settings = settings;
+        _recoveryPath = recoveryPath;
+        _uiStatePath = Path.Combine(
+            Directory.GetParent(Path.GetDirectoryName(recoveryPath)!)!.FullName,
+            "UiState.json");
+        Text = T("CensorPlayer — редактор цензуры");
+        AccessibleName = Text;
+        MinimumSize = new(760, 520);
+        Size = new(980, 680);
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;
+        AutoScaleMode = AutoScaleMode.Dpi;
+        if (UiStateStore.Load(_uiStatePath) is { } uiState)
+        {
+            var restoredBounds = new Rectangle(
+                uiState.Left,
+                uiState.Top,
+                uiState.Width,
+                uiState.Height);
+            if (Screen.AllScreens.Any(screen => screen.WorkingArea.IntersectsWith(restoredBounds)))
+            {
+                StartPosition = FormStartPosition.Manual;
+                Bounds = restoredBounds;
+            }
+        }
 
-        _intervals.Columns.Add("start", "Start");
-        _intervals.Columns.Add("end", "End");
-        _intervals.Columns.Add("note", "Note");
-
-        var load = new Button { AutoSize = true, Text = "Load schedule…" };
-        var reload = new Button { AutoSize = true, Text = "Reload" };
-        var disable = new Button { AutoSize = true, Text = "Disable" };
-        load.Click += (_, _) => SelectSchedule();
-        reload.Click += (_, _) => ReloadRequested?.Invoke();
-        disable.Click += (_, _) => DisableRequested?.Invoke();
-        _blurPreset.Items.AddRange(BlurPresets.Select(preset => preset.Label).ToArray());
-        _blurPreset.SelectedIndex = 1;
+        var blurPresetIndex = EnsureBlurPreset(settings.Blur);
+        _blurPreset.Items.AddRange(_blurPresets.Select(item => item.Label).ToArray());
+        _blurPreset.SelectedIndex = blurPresetIndex;
         _blurPreset.SelectedIndexChanged += (_, _) =>
-            BlurPresetSelected?.Invoke(BlurPresets[_blurPreset.SelectedIndex].Settings);
-
-        var buttons = new FlowLayoutPanel
         {
-            AutoSize = true,
-            Dock = DockStyle.Fill,
-            FlowDirection = FlowDirection.LeftToRight,
+            if (_rendering)
+                return;
+            BlurPresetSelected?.Invoke(_blurPresets[_blurPreset.SelectedIndex].Settings);
         };
-        buttons.Controls.AddRange(
-        [
-            load,
-            reload,
-            disable,
-            new Label { AutoSize = true, Margin = new(12, 8, 3, 0), Text = "Blur:" },
-            _blurPreset,
-        ]);
+        PopulateSettings(settings);
 
-        var layout = new TableLayoutPanel
+        var tabs = new TabControl { Dock = DockStyle.Fill };
+        tabs.TabPages.Add(new TabPage(T("Текущий фильм")) { Controls = { BuildCurrentTab() } });
+        tabs.TabPages.Add(new TabPage(T("Интервалы")) { Controls = { BuildIntervalsTab() } });
+        tabs.TabPages.Add(new TabPage(T("Настройки")) { Controls = { BuildSettingsTab() } });
+        tabs.TabPages.Add(new TabPage(T("Диагностика")) { Controls = { BuildDiagnosticsTab() } });
+        Controls.Add(tabs);
+
+        _intervals.CellEndEdit += OnCellEndEdit;
+        _offset.ValueChanged += (_, _) =>
         {
-            ColumnCount = 2,
-            Dock = DockStyle.Fill,
-            Padding = new(12),
-            RowCount = 5,
+            if (_rendering || _draft is null)
+                return;
+            _draft.SetOffset((long)_offset.Value);
+            Changed();
         };
-        layout.ColumnStyles.Add(new(SizeType.AutoSize));
-        layout.ColumnStyles.Add(new(SizeType.Percent, 100));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.Percent, 100));
-        layout.Controls.Add(new Label { AutoSize = true, Text = "Media:" }, 0, 0);
-        layout.Controls.Add(_media, 1, 0);
-        layout.Controls.Add(new Label { AutoSize = true, Text = "Schedule:" }, 0, 1);
-        layout.Controls.Add(_schedule, 1, 1);
-        layout.Controls.Add(new Label { AutoSize = true, Text = "Status:" }, 0, 2);
-        layout.Controls.Add(_status, 1, 2);
-        layout.Controls.Add(buttons, 0, 3);
-        layout.SetColumnSpan(buttons, 2);
-        layout.Controls.Add(_intervals, 0, 4);
-        layout.SetColumnSpan(_intervals, 2);
-        Controls.Add(layout);
-
+        _recoveryTimer.Tick += (_, _) =>
+        {
+            _recoveryTimer.Stop();
+            SaveRecovery();
+        };
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
+        Shown += (_, _) => OfferRecovery();
     }
 
     public event Action<string>? ScheduleSelected;
-
+    public event Action<ScheduleDocument>? ApplyRequested;
+    public event Action<ScheduleDocument, string?, bool>? SaveRequested;
     public event Action? ReloadRequested;
-
     public event Action? DisableRequested;
-
     public event Action<BlurSettings>? BlurPresetSelected;
+    public event Action<ExtensionSettings>? SettingsChanged;
+    public event Action<long>? SeekRequested;
+    public event Action<long>? PreviewRequested;
+    public event Action<bool>? DiagnosticsRequested;
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<long?>? CurrentTimeRequested { get; set; }
 
     public void UpdateState(
         string? mediaPath,
         string? schedulePath,
         string status,
-        IReadOnlyList<CensorInterval> intervals)
+        long? mediaDurationMs,
+        ScheduleDocument? document,
+        IReadOnlyList<ParseDiagnostic> diagnostics)
     {
-        _media.Text = string.IsNullOrEmpty(mediaPath) ? "No media" : mediaPath;
-        _schedule.Text = string.IsNullOrEmpty(schedulePath) ? "None" : schedulePath;
-        _status.Text = status;
-        if (ReferenceEquals(_renderedIntervals, intervals))
-            return;
-
-        _renderedIntervals = intervals;
-        _intervals.Rows.Clear();
-        foreach (var interval in intervals)
+        var intervals = document?.Intervals ?? [];
+        if (!string.Equals(_mediaPath, mediaPath, StringComparison.OrdinalIgnoreCase))
         {
-            _intervals.Rows.Add(
-                FormatTimestamp(interval.StartMs),
-                FormatTimestamp(interval.EndMs),
-                interval.Note ?? "");
+            _mediaPath = mediaPath;
+            _pendingStartMs = null;
         }
+        _media.Text = string.IsNullOrEmpty(mediaPath) ? T("Нет открытого фильма") : mediaPath;
+        _schedule.Text = string.IsNullOrEmpty(schedulePath) ? T("Не выбрано") : schedulePath;
+        var localizedStatus = LocalizeStatus(status);
+        _status.Text = localizedStatus;
+        _duration.Text = mediaDurationMs.HasValue
+            ? FormatTimestamp(mediaDurationMs.Value)
+            : T("Неизвестна");
+        _filterState.Text = status is "ACTIVE" or "WARNING"
+            ? localizedStatus
+            : T("Нет активной цепочки фильтров");
+        _diagnostics.Text =
+            $"{T("Статус:")} {localizedStatus}{Environment.NewLine}" +
+            $"{T("Фильм:")} {_media.Text}{Environment.NewLine}" +
+            $"{T("Расписание:")} {_schedule.Text}{Environment.NewLine}" +
+            $"{T("Интервалов:")} {intervals.Count}";
+        _runtimeDiagnostics = diagnostics;
+
+        if (ReferenceEquals(_sourceIntervals, intervals))
+            return;
+        if (document is not null && _draft?.Matches(document) == true)
+        {
+            _sourceIntervals = intervals;
+            _sourcePath = schedulePath;
+            RenderDraft();
+            return;
+        }
+        if (_draft?.IsDirty == true)
+        {
+            RenderDraft();
+            _draftState.Text = T("Несохранённый черновик не связан с текущим расписанием");
+            return;
+        }
+
+        _sourceIntervals = intervals;
+        _sourcePath = schedulePath;
+        _draft = new(document ?? new(new(), [], []));
+        _draft.MarkSaved();
+        RenderDraft();
     }
 
     public bool ConfirmDurationMismatch() =>
         MessageBox.Show(
             this,
-            "The schedule duration differs from the current media. Apply it anyway?",
-            "Censor Extension",
+            T("Длительность расписания отличается от фильма. Применить всё равно?"),
+            "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2) == DialogResult.Yes;
+
+    public DialogResult ConfirmExternalChange() =>
+        MessageBox.Show(
+            this,
+            T("Файл изменён другой программой.\n\nДа — перезаписать, Нет — сохранить как новый, Отмена — ничего не делать."),
+            "CensorPlayer",
+            MessageBoxButtons.YesNoCancel,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button3);
+
+    public void MarkSaved(
+        string path,
+        ScheduleDocument savedDocument,
+        ExtensionSettings settings)
+    {
+        _sourcePath = path;
+        _schedule.Text = path;
+        _settings = settings;
+        if (_draft?.MarkSaved(savedDocument) == true)
+            DraftRecoveryStore.Delete(_recoveryPath);
+        else
+            SaveRecovery();
+        RenderDraft();
+    }
+
+    public void ShowDiagnosticsResult(string message)
+    {
+        _diagnostics.Text = message;
+    }
+
+    public void OpenSchedulePicker() => SelectSchedule();
+
+    public void HandleAuthoringCommand(string command)
+    {
+        switch (command)
+        {
+            case "mark-start":
+                _pendingStartMs = CurrentTimeRequested?.Invoke();
+                _draftState.Text = _pendingStartMs.HasValue
+                    ? $"{T("Начало отмечено:")} {FormatTimestamp(_pendingStartMs.Value)}"
+                    : T("Текущая позиция воспроизведения недоступна");
+                break;
+            case "mark-end":
+                if (_pendingStartMs is { } start &&
+                    CurrentTimeRequested?.Invoke() is { } end &&
+                    end > start)
+                {
+                    EnsureDraft();
+                    _draft!.Add(start, end);
+                    _pendingStartMs = null;
+                    Changed();
+                }
+                else
+                {
+                    Warn(T("Сначала отметьте начало интервала. Конец должен быть позже начала."));
+                }
+                break;
+            case "set-start":
+                CaptureBoundary(start: true);
+                break;
+            case "set-end":
+                CaptureBoundary(start: false);
+                break;
+            case "previous":
+                NavigateInterval(-1);
+                break;
+            case "next":
+                NavigateInterval(1);
+                break;
+            case "save":
+                SaveDraft(saveAs: false);
+                break;
+        }
+    }
+
+    public string? ChooseSavePath(string? currentPath)
+    {
+        using var dialog = new SaveFileDialog
+        {
+            AddExtension = true,
+            DefaultExt = "censor.txt",
+            FileName = string.IsNullOrWhiteSpace(currentPath)
+                ? "schedule.censor.txt"
+                : Path.GetFileName(currentPath),
+            Filter = "Censor TXT|*.censor.txt|SubRip|*.srt|WebVTT|*.vtt",
+            InitialDirectory = _settings.RememberLastScheduleDirectory
+                ? _settings.LastScheduleDirectory
+                : null,
+            OverwritePrompt = true,
+            Title = T("Сохранить расписание"),
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
+    public string? ChooseDiagnosticsPath(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        using var dialog = new SaveFileDialog
+        {
+            AddExtension = true,
+            DefaultExt = "zip",
+            FileName = $"CensorPlayer-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.zip",
+            Filter = T("ZIP-архив|*.zip"),
+            InitialDirectory = directory,
+            OverwritePrompt = true,
+            Title = T("Экспортировать диагностику"),
+        };
+        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+    }
+
+    public string? ChooseSidecar(
+        IReadOnlyList<string> paths,
+        CancellationToken cancellationToken)
+    {
+        if (paths.Count == 0)
+            return null;
+
+        using var dialog = new Form
+        {
+            Text = T("Выберите файл расписания"),
+            StartPosition = FormStartPosition.CenterParent,
+            MinimizeBox = false,
+            MaximizeBox = false,
+            ShowInTaskbar = false,
+            Size = new(640, 320),
+        };
+        var list = new ListBox
+        {
+            Dock = DockStyle.Fill,
+            DisplayMember = nameof(SidecarChoice.Name),
+        };
+        foreach (var path in paths)
+            list.Items.Add(new SidecarChoice(Path.GetFileName(path), path));
+        list.SelectedIndex = 0;
+        var ok = new Button
+        {
+            AutoSize = true,
+            DialogResult = DialogResult.OK,
+            Text = T("Выбрать"),
+        };
+        var cancel = new Button
+        {
+            AutoSize = true,
+            DialogResult = DialogResult.Cancel,
+            Text = T("Отмена"),
+        };
+        var buttons = Flow(ok, cancel);
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        layout.RowStyles.Add(new(SizeType.Percent, 100));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.Controls.Add(list, 0, 0);
+        layout.Controls.Add(buttons, 0, 1);
+        dialog.Controls.Add(layout);
+        dialog.AcceptButton = ok;
+        dialog.CancelButton = cancel;
+        _ = dialog.Handle;
+        using var registration = cancellationToken.Register(() =>
+        {
+            try
+            {
+                dialog.BeginInvoke(new Action(dialog.Close));
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        });
+        if (cancellationToken.IsCancellationRequested)
+            return null;
+        return dialog.ShowDialog(this) == DialogResult.OK &&
+            !cancellationToken.IsCancellationRequested &&
+            list.SelectedItem is SidecarChoice choice
+                ? choice.Path
+                : null;
+    }
 
     public void Shutdown()
     {
@@ -151,39 +392,626 @@ internal sealed class CensorWindow : Form
     {
         if (!_allowClose && e.CloseReason == CloseReason.UserClosing)
         {
+            SaveRecovery();
+            SaveUiState();
             e.Cancel = true;
             Hide();
             return;
         }
 
+        SaveRecovery();
+        SaveUiState();
         base.OnFormClosing(e);
+    }
+
+    protected override void Dispose(bool disposing)
+    {
+        if (disposing)
+            _recoveryTimer.Dispose();
+        base.Dispose(disposing);
+    }
+
+    private TableLayoutPanel BuildCurrentTab()
+    {
+        var load = Button(T("Загрузить файл…"), SelectSchedule);
+        var apply = Button(T("Применить"), ApplyDraft);
+        var reload = Button(T("Перезагрузить"), () => ReloadRequested?.Invoke());
+        var disable = Button(T("Отключить"), () => DisableRequested?.Invoke());
+        var next = Button(T("Следующий интервал"), () => NavigateInterval(1));
+        var buttons = Flow(load, apply, reload, disable, next);
+
+        var layout = new TableLayoutPanel
+        {
+            ColumnCount = 2,
+            Dock = DockStyle.Fill,
+            Padding = new(12),
+            RowCount = 8,
+        };
+        layout.ColumnStyles.Add(new(SizeType.AutoSize));
+        layout.ColumnStyles.Add(new(SizeType.Percent, 100));
+        AddRow(layout, 0, T("Фильм:"), _media);
+        AddRow(layout, 1, T("Длительность:"), _duration);
+        AddRow(layout, 2, T("Расписание:"), _schedule);
+        AddRow(layout, 3, T("Состояние:"), _status);
+        AddRow(layout, 4, T("Цепочка фильтров:"), _filterState);
+        AddRow(layout, 5, T("Черновик:"), _draftState);
+        layout.Controls.Add(buttons, 0, 6);
+        layout.SetColumnSpan(buttons, 2);
+        layout.Controls.Add(_warnings, 0, 7);
+        layout.SetColumnSpan(_warnings, 2);
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.Percent, 100));
+        return layout;
+    }
+
+    private TableLayoutPanel BuildIntervalsTab()
+    {
+        var toolbar = Flow(
+            Button(T("Добавить"), AddInterval),
+            Button(T("Удалить"), DeleteSelected),
+            Button(T("Дублировать"), DuplicateSelected),
+            Button(T("Объединить"), MergeSelected),
+            Button(T("Разрезать"), SplitSelected),
+            Button(T("Отменить"), Undo),
+            Button(T("Повторить"), Redo));
+        var capture = Flow(
+            Button(T("Начало = текущая позиция"), () => CaptureBoundary(start: true)),
+            Button(T("Конец = текущая позиция"), () => CaptureBoundary(start: false)),
+            Button(T("Начало −100"), () => ShiftSelected(start: true, -100)),
+            Button(T("Начало +100"), () => ShiftSelected(start: true, 100)),
+            Button(T("Конец −100"), () => ShiftSelected(start: false, -100)),
+            Button(T("Конец +100"), () => ShiftSelected(start: false, 100)));
+        var global = Flow(
+            new Label { AutoSize = true, Margin = new(3, 8, 3, 0), Text = T("Смещение, мс:") },
+            _offset,
+            new Label { AutoSize = true, Margin = new(12, 8, 3, 0), Text = T("Сдвиг всех интервалов, мс:") },
+            _shiftAll,
+            Button(T("Сдвинуть"), ShiftAll),
+            Button(T("Предыдущий"), () => NavigateInterval(-1)),
+            Button(T("Следующий"), () => NavigateInterval(1)),
+            Button(T("Предпросмотр"), PreviewSelected),
+            Button(T("Сохранить"), () => SaveDraft(saveAs: false)),
+            Button(T("Сохранить как…"), () => SaveDraft(saveAs: true)),
+            Button(T("Отбросить черновик"), DiscardDraft));
+
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4 };
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.Percent, 100));
+        layout.Controls.Add(toolbar, 0, 0);
+        layout.Controls.Add(capture, 0, 1);
+        layout.Controls.Add(global, 0, 2);
+        layout.Controls.Add(_intervals, 0, 3);
+        return layout;
+    }
+
+    private TableLayoutPanel BuildSettingsTab()
+    {
+        var layout = new TableLayoutPanel
+        {
+            ColumnCount = 2,
+            Dock = DockStyle.Top,
+            Padding = new(12),
+            AutoSize = true,
+        };
+        AddRow(layout, 0, T("Размытие:"), _blurPreset);
+        AddRow(layout, 1, T("Запас перед началом, мс:"), _leadIn);
+        AddRow(layout, 2, T("Запас после конца, мс:"), _leadOut);
+        AddRow(layout, 3, T("Порог объединения, мс:"), _mergeGap);
+        AddRow(layout, 4, T("Допуск длительности, мс:"), _durationTolerance);
+        AddRow(layout, 5, T("Защитный запас до интервала, мс:"), _earlyGuard);
+        AddRow(layout, 6, T("Период проверки фильтра, мс:"), _watchdogInterval);
+        layout.Controls.Add(_autoSidecar, 1, 7);
+        layout.Controls.Add(_watchdog, 1, 8);
+        layout.Controls.Add(Button(T("Сохранить настройки"), SaveSettings), 1, 9);
+        return layout;
+    }
+
+    private TableLayoutPanel BuildDiagnosticsTab()
+    {
+        var controls = Flow(
+            _includeSchedule,
+            Button(T("Экспортировать диагностический ZIP-архив…"), () =>
+                DiagnosticsRequested?.Invoke(_includeSchedule.Checked)));
+        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.Percent, 100));
+        layout.Controls.Add(controls, 0, 0);
+        layout.Controls.Add(_diagnostics, 0, 1);
+        return layout;
+    }
+
+    private void AddInterval()
+    {
+        EnsureDraft();
+        var start = CurrentTimeRequested?.Invoke() ?? 0;
+        _draft!.Add(start, checked(start + 1_000));
+        Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
+    }
+
+    private void DeleteSelected()
+    {
+        if (_draft is null)
+            return;
+        var selected = SelectedIndices();
+        if (selected.Length == 0)
+            return;
+        _draft.Delete(selected);
+        var next = _draft.Document.Intervals.Count == 0
+            ? (int?)null
+            : Math.Min(selected[0], _draft.Document.Intervals.Count - 1);
+        Changed(selectedIndex: next);
+    }
+
+    private void DuplicateSelected()
+    {
+        if (_draft is null || SelectedIndex() is not { } index)
+            return;
+        _draft.Duplicate(index);
+        Changed(selectedIndex: index + 1);
+    }
+
+    private void MergeSelected()
+    {
+        if (_draft is null)
+            return;
+        try
+        {
+            var selected = SelectedIndices();
+            _draft.Merge(selected);
+            Changed(selectedIndex: selected[0]);
+        }
+        catch (ArgumentException exception)
+        {
+            Warn(exception.Message);
+        }
+    }
+
+    private void SplitSelected()
+    {
+        if (_draft is null || SelectedIndex() is not { } index ||
+            CurrentTimeRequested?.Invoke() is not { } position)
+        {
+            return;
+        }
+        try
+        {
+            _draft.Split(index, position);
+            Changed(selectedIndex: index);
+        }
+        catch (ArgumentOutOfRangeException exception)
+        {
+            Warn(exception.Message);
+        }
+    }
+
+    private void CaptureBoundary(bool start)
+    {
+        if (_draft is null || SelectedIndex() is not { } index ||
+            CurrentTimeRequested?.Invoke() is not { } position)
+        {
+            return;
+        }
+        var interval = _draft.Document.Intervals[index];
+        _draft.Update(
+            index,
+            start ? position : interval.StartMs,
+            start ? interval.EndMs : position,
+            interval.Note);
+        Changed();
+    }
+
+    private void ShiftSelected(bool start, long delta)
+    {
+        if (_draft is null || SelectedIndex() is not { } index)
+            return;
+        try
+        {
+            _draft.ShiftBoundary(index, start, delta);
+            Changed();
+        }
+        catch (OverflowException)
+        {
+            Warn(T("Граница вышла за допустимый диапазон."));
+        }
+    }
+
+    private void ShiftAll()
+    {
+        if (_draft is null)
+            return;
+        try
+        {
+            _draft.ShiftAll((long)_shiftAll.Value);
+            Changed();
+        }
+        catch (OverflowException)
+        {
+            Warn(T("Сдвиг вышел за допустимый диапазон."));
+        }
+    }
+
+    private void Undo()
+    {
+        if (_draft?.Undo() == true)
+            Changed();
+    }
+
+    private void Redo()
+    {
+        if (_draft?.Redo() == true)
+            Changed();
+    }
+
+    private void ApplyDraft()
+    {
+        if (!TryGetValidDraft(out var document))
+            return;
+        ApplyRequested?.Invoke(document);
+    }
+
+    private void SaveDraft(bool saveAs)
+    {
+        if (!TryGetValidDraft(out var document))
+            return;
+        SaveRequested?.Invoke(
+            document,
+            _sourcePath,
+            saveAs || string.IsNullOrWhiteSpace(_sourcePath));
+    }
+
+    private bool TryGetValidDraft(out ScheduleDocument document)
+    {
+        document = new(new(), [], []);
+        if (_draft is null)
+        {
+            Warn(T("Сначала загрузите или создайте расписание."));
+            return false;
+        }
+        var diagnostics = _draft.Validate();
+        if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+        {
+            Warn(T("Исправьте ошибки черновика перед применением или сохранением."));
+            return false;
+        }
+        document = _draft.Document;
+        return true;
+    }
+
+    private void NavigateInterval(int direction)
+    {
+        if (_draft is null || _draft.Document.Intervals.Count == 0)
+            return;
+        var current = SelectedIndex() ?? (direction > 0 ? -1 : 0);
+        var next = Math.Clamp(current + direction, 0, _draft.Document.Intervals.Count - 1);
+        SelectRow(next);
+        SeekRequested?.Invoke(_draft.Document.Intervals[next].StartMs);
+    }
+
+    private void PreviewSelected()
+    {
+        if (_draft is null || SelectedIndex() is not { } index)
+            return;
+        PreviewRequested?.Invoke(_draft.Document.Intervals[index].StartMs);
+    }
+
+    private void OnCellEndEdit(object? sender, DataGridViewCellEventArgs e)
+    {
+        if (_rendering || _draft is null || e.RowIndex < 0)
+            return;
+        var interval = _draft.Document.Intervals[e.RowIndex];
+        var start = interval.StartMs;
+        var end = interval.EndMs;
+        var note = Convert.ToString(
+            _intervals.Rows[e.RowIndex].Cells["note"].Value,
+            CultureInfo.InvariantCulture);
+        var column = _intervals.Columns[e.ColumnIndex].Name;
+        var text = Convert.ToString(
+            _intervals.Rows[e.RowIndex].Cells[e.ColumnIndex].Value,
+            CultureInfo.InvariantCulture) ?? "";
+        var timestampValid = column switch
+        {
+            "start" => ScheduleText.TryParseTimestamp(text.AsSpan(), out start),
+            "end" => ScheduleText.TryParseTimestamp(text.AsSpan(), out end),
+            _ => true,
+        };
+        if (!timestampValid)
+        {
+            DeferRender(e.RowIndex, T("Формат времени: ЧЧ:ММ:СС.мс"));
+            return;
+        }
+        _draft.Update(e.RowIndex, start, end, note ?? interval.Note);
+        Changed(deferRender: true, selectedIndex: e.RowIndex);
+    }
+
+    private void Changed(bool deferRender = false, int? selectedIndex = null)
+    {
+        _recoveryTimer.Stop();
+        _recoveryTimer.Start();
+        if (deferRender)
+            DeferRender(selectedIndex);
+        else
+            RenderDraft(selectedIndex);
+    }
+
+    private void DeferRender(int? selectedIndex, string? status = null)
+    {
+        try
+        {
+            BeginInvoke(new Action(() =>
+            {
+                RenderDraft(selectedIndex);
+                if (status is not null)
+                    _draftState.Text = status;
+            }));
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
+
+    private void RenderDraft(int? selectedIndex = null)
+    {
+        var restoreIndices = selectedIndex.HasValue
+            ? [selectedIndex.Value]
+            : SelectedIndices();
+        var restoreCurrent = selectedIndex ?? SelectedIndex();
+        _rendering = true;
+        try
+        {
+            _intervals.Rows.Clear();
+            _warnings.Items.Clear();
+            if (_draft is null)
+            {
+                _draftState.Text = T("Нет черновика");
+                return;
+            }
+
+            var draftDiagnostics = _draft.Validate();
+            var errors = draftDiagnostics
+                .Where(item => item.Line > 0)
+                .GroupBy(item => item.Line - 1)
+                .ToDictionary(group => group.Key, group => group.ToArray());
+            var intervals = _draft.Document.Intervals;
+            for (var index = 0; index < intervals.Count; index++)
+            {
+                var interval = intervals[index];
+                var status = errors.TryGetValue(index, out var rowErrors) ? T("Ошибка") : T("Корректно");
+                _intervals.Rows.Add(
+                    index + 1,
+                    FormatTimestamp(interval.StartMs),
+                    FormatTimestamp(interval.EndMs),
+                    interval.EndMs >= interval.StartMs
+                        ? FormatDuration(interval.EndMs - interval.StartMs)
+                        : "—",
+                    interval.Note ?? "",
+                    status);
+                if (rowErrors is not null)
+                {
+                    foreach (var error in rowErrors)
+                        _warnings.Items.Add($"#{index + 1}: {error.Message}");
+                }
+            }
+            _offset.Value = Math.Clamp(
+                _draft.Document.Metadata.OffsetMs ?? 0,
+                (long)_offset.Minimum,
+                (long)_offset.Maximum);
+            _draftState.Text = _draft.IsDirty
+                ? T("Изменения не применены и не сохранены")
+                : T("Сохранено");
+            foreach (var diagnostic in draftDiagnostics.Where(item => item.Line <= 0))
+            {
+                var severity = diagnostic.Severity == DiagnosticSeverity.Error
+                    ? T("Ошибка")
+                    : T("Предупреждение");
+                _warnings.Items.Add($"{severity}: {diagnostic.Message}");
+            }
+            RenderDiagnostics(_runtimeDiagnostics);
+        }
+        finally
+        {
+            _rendering = false;
+        }
+        if (_intervals.Rows.Count == 0)
+            return;
+        var validIndices = restoreIndices
+            .Where(index => index >= 0 && index < _intervals.Rows.Count)
+            .ToArray();
+        if (validIndices.Length == 0)
+            return;
+        _intervals.ClearSelection();
+        foreach (var index in validIndices)
+            _intervals.Rows[index].Selected = true;
+        var current = restoreCurrent.HasValue &&
+            validIndices.Contains(restoreCurrent.Value)
+                ? restoreCurrent.Value
+                : validIndices[0];
+        _intervals.CurrentCell = _intervals.Rows[current].Cells["start"];
+    }
+
+    private void RenderDiagnostics(IReadOnlyList<ParseDiagnostic> diagnostics)
+    {
+        foreach (var diagnostic in diagnostics)
+        {
+            var severity = diagnostic.Severity == DiagnosticSeverity.Error
+                ? T("Ошибка")
+                : T("Предупреждение");
+            _warnings.Items.Add(
+                $"{severity}: {diagnostic.Line}:{diagnostic.Column} {diagnostic.Message}");
+        }
+    }
+
+    private void SaveSettings()
+    {
+        var selectedBlur = _blurPresets[_blurPreset.SelectedIndex].Settings;
+        _settings = _settings with
+        {
+            AutoLoadSidecar = _autoSidecar.Checked,
+            WatchdogEnabled = _watchdog.Checked,
+            WatchdogIntervalMs = (int)_watchdogInterval.Value,
+            LeadInMs = (long)_leadIn.Value,
+            LeadOutMs = (long)_leadOut.Value,
+            MergeGapMs = (long)_mergeGap.Value,
+            DurationToleranceMs = (long)_durationTolerance.Value,
+            EarlyIntervalGuardMs = (long)_earlyGuard.Value,
+            Blur = selectedBlur,
+        };
+        SettingsChanged?.Invoke(_settings);
+    }
+
+    private void PopulateSettings(ExtensionSettings settings)
+    {
+        _rendering = true;
+        try
+        {
+            _autoSidecar.Checked = settings.AutoLoadSidecar;
+            _watchdog.Checked = settings.WatchdogEnabled;
+            _watchdogInterval.Value = settings.WatchdogIntervalMs;
+            _leadIn.Value = settings.LeadInMs;
+            _leadOut.Value = settings.LeadOutMs;
+            _mergeGap.Value = settings.MergeGapMs;
+            _durationTolerance.Value = settings.DurationToleranceMs;
+            _earlyGuard.Value = settings.EarlyIntervalGuardMs;
+        }
+        finally
+        {
+            _rendering = false;
+        }
+    }
+
+    private void SaveRecovery()
+    {
+        try
+        {
+            if (_draft?.IsDirty == true)
+                DraftRecoveryStore.Save(_recoveryPath, _draft.Document);
+        }
+        catch (Exception exception)
+        {
+            _draftState.Text =
+                $"{T("Не удалось сохранить файл восстановления:")} {exception.Message}";
+        }
+    }
+
+    private void SaveUiState()
+    {
+        try
+        {
+            var bounds = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+            UiStateStore.Save(
+                _uiStatePath,
+                new(bounds.Left, bounds.Top, bounds.Width, bounds.Height));
+        }
+        catch (Exception exception)
+        {
+            _draftState.Text =
+                $"{T("Не удалось сохранить положение окна:")} {exception.Message}";
+        }
+    }
+
+    private void OfferRecovery()
+    {
+        var recovered = DraftRecoveryStore.Load(_recoveryPath);
+        if (recovered is null)
+            return;
+        var restore = MessageBox.Show(
+            this,
+            T("Найден несохранённый черновик. Восстановить его?"),
+            "CensorPlayer",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question) == DialogResult.Yes;
+        if (restore)
+        {
+            _draft = new(recovered);
+            _draft.MarkDirty();
+            _draftState.Text = T("Восстановлен несохранённый черновик");
+            RenderDraft();
+        }
+        else
+        {
+            DraftRecoveryStore.Delete(_recoveryPath);
+        }
+    }
+
+    private void EnsureDraft()
+    {
+        _draft ??= new(new(new(), [], []));
     }
 
     private void SelectSchedule()
     {
+        if (_draft?.IsDirty == true)
+        {
+            Warn(T("Сначала сохраните или отбросьте текущий черновик."));
+            return;
+        }
         using var dialog = new OpenFileDialog
         {
             CheckFileExists = true,
-            Filter = "Censor schedules|*.censor.txt;*.srt;*.vtt|Censor TXT|*.censor.txt|SubRip|*.srt|WebVTT|*.vtt",
+            Filter = T("Расписания цензуры|*.censor.txt;*.srt;*.vtt|Censor TXT|*.censor.txt|SubRip|*.srt|WebVTT|*.vtt"),
+            InitialDirectory = _settings.RememberLastScheduleDirectory
+                ? _settings.LastScheduleDirectory
+                : null,
             Multiselect = false,
-            Title = "Load censor schedule",
+            Title = T("Загрузить расписание цензуры"),
         };
-
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-            ScheduleSelected?.Invoke(dialog.FileName);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+        if (_settings.RememberLastScheduleDirectory)
+        {
+            _settings = _settings with
+            {
+                LastScheduleDirectory = Path.GetDirectoryName(dialog.FileName),
+            };
+            SettingsChanged?.Invoke(_settings);
+        }
+        ScheduleSelected?.Invoke(dialog.FileName);
     }
 
     private void OnDragEnter(object? sender, DragEventArgs e)
     {
-        e.Effect = TryGetDroppedSchedule(e.Data, out _)
+        e.Effect = _draft?.IsDirty != true &&
+            TryGetDroppedSchedule(e.Data, out _)
             ? DragDropEffects.Copy
             : DragDropEffects.None;
     }
 
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
+        if (_draft?.IsDirty == true)
+        {
+            Warn(T("Сначала сохраните или отбросьте текущий черновик."));
+            return;
+        }
         if (TryGetDroppedSchedule(e.Data, out var path))
             ScheduleSelected?.Invoke(path);
+    }
+
+    private void DiscardDraft()
+    {
+        if (_draft?.IsDirty == true &&
+            MessageBox.Show(
+                this,
+                T("Отбросить несохранённые изменения?"),
+                "CensorPlayer",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2) != DialogResult.Yes)
+        {
+            return;
+        }
+        _draft = null;
+        _sourceIntervals = null;
+        DraftRecoveryStore.Delete(_recoveryPath);
+        RenderDraft();
+        ReloadRequested?.Invoke();
     }
 
     private static bool TryGetDroppedSchedule(IDataObject? data, out string path)
@@ -191,19 +1019,161 @@ internal sealed class CensorWindow : Form
         path = "";
         if (data?.GetData(DataFormats.FileDrop) is not string[] { Length: 1 } files)
             return false;
-
         path = files[0];
         return path.EndsWith(".censor.txt", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase) ||
             path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase);
     }
 
+    private int[] SelectedIndices() =>
+        _intervals.SelectedRows.Cast<DataGridViewRow>()
+            .Select(row => row.Index)
+            .Distinct()
+            .Order()
+            .ToArray();
+
+    private int? SelectedIndex() =>
+        _intervals.CurrentCell?.RowIndex is >= 0 and var index ? index : null;
+
+    private void SelectRow(int index)
+    {
+        if (index < 0 || index >= _intervals.Rows.Count)
+            return;
+        _intervals.ClearSelection();
+        _intervals.Rows[index].Selected = true;
+        _intervals.CurrentCell = _intervals.Rows[index].Cells["start"];
+    }
+
+    private static DataGridView CreateGrid()
+    {
+        var grid = new DataGridView
+        {
+            AllowUserToAddRows = false,
+            AllowUserToDeleteRows = false,
+            AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill,
+            Dock = DockStyle.Fill,
+            MultiSelect = true,
+            RowHeadersVisible = false,
+            SelectionMode = DataGridViewSelectionMode.FullRowSelect,
+        };
+        grid.Columns.Add("number", "№");
+        grid.Columns.Add("start", T("Начало"));
+        grid.Columns.Add("end", T("Конец"));
+        grid.Columns.Add("duration", T("Длительность"));
+        grid.Columns.Add("note", T("Примечание"));
+        grid.Columns.Add("status", T("Состояние"));
+        grid.Columns["number"]!.ReadOnly = true;
+        grid.Columns["duration"]!.ReadOnly = true;
+        grid.Columns["status"]!.ReadOnly = true;
+        return grid;
+    }
+
+    private static Label ValueLabel() =>
+        new() { AutoEllipsis = true, Dock = DockStyle.Fill };
+
+    private static NumericUpDown Milliseconds(long minimum, long maximum) =>
+        new()
+        {
+            Minimum = minimum,
+            Maximum = maximum,
+            ThousandsSeparator = true,
+            Width = 130,
+        };
+
+    private static Button Button(string text, Action action)
+    {
+        var button = new Button { AutoSize = true, Text = text };
+        button.Click += (_, _) => action();
+        return button;
+    }
+
+    private static FlowLayoutPanel Flow(params Control[] controls)
+    {
+        var panel = new FlowLayoutPanel
+        {
+            AutoSize = true,
+            Dock = DockStyle.Fill,
+            FlowDirection = FlowDirection.LeftToRight,
+            WrapContents = true,
+        };
+        panel.Controls.AddRange(controls);
+        return panel;
+    }
+
+    private static void AddRow(
+        TableLayoutPanel layout,
+        int row,
+        string label,
+        Control value)
+    {
+        layout.Controls.Add(new Label
+        {
+            AutoSize = true,
+            Margin = new(3, 7, 8, 3),
+            Text = label,
+        }, 0, row);
+        layout.Controls.Add(value, 1, row);
+    }
+
+    private int EnsureBlurPreset(BlurSettings settings)
+    {
+        var index = _blurPresets.FindIndex(item => item.Settings == settings);
+        if (index >= 0)
+            return index;
+
+        _blurPresets.Add((
+            FormattableString.Invariant(
+                $"{T("Пользовательское")} ({settings.Sigma:0.##} / {settings.Steps})"),
+            settings));
+        return _blurPresets.Count - 1;
+    }
+
+    private static string LocalizeStatus(string status) =>
+        status switch
+        {
+            "ACTIVE" => T("Активно"),
+            "APPLYING" => T("Применение"),
+            "DISABLED" => T("Отключено"),
+            "DURATION MISMATCH" => T("Не совпадает длительность"),
+            "EMPTY SCHEDULE" => T("Расписание пусто"),
+            "ERROR" => T("Ошибка"),
+            "IDLE" => T("Ожидание"),
+            "INVALID DRAFT" => T("В черновике есть ошибки"),
+            "INVALID SCHEDULE PATH" => T("Некорректный путь к расписанию"),
+            "LOADING" => T("Загрузка"),
+            "LOOKING FOR SIDECAR" => T("Поиск расписания рядом с фильмом"),
+            "NO CURRENT MEDIA" => T("Нет открытого фильма"),
+            "NO LOCAL MEDIA" => T("Открыт не локальный файл"),
+            "NO SCHEDULE" => T("Расписание не выбрано"),
+            "NO SCHEDULE TO APPLY" => T("Нет расписания для применения"),
+            "NO SCHEDULE TO RELOAD" => T("Нет расписания для перезагрузки"),
+            "OPERATION UNAVAILABLE" => T("Операция недоступна"),
+            "READY TO APPLY" => T("Готово к применению"),
+            "SAVED" => T("Сохранено"),
+            "SELECT SIDECAR" => T("Выберите файл расписания"),
+            "SETTINGS ERROR" => T("Ошибка настроек"),
+            "SETTINGS SAVED" => T("Настройки сохранены"),
+            "WARNING" => T("Требуется внимание"),
+            _ => status,
+        };
+
     private static string FormatTimestamp(long milliseconds)
     {
-        var hours = milliseconds / 3_600_000;
-        var minutes = (milliseconds / 60_000) % 60;
-        var seconds = (milliseconds / 1_000) % 60;
-        var millis = milliseconds % 1_000;
-        return FormattableString.Invariant($"{hours:D2}:{minutes:D2}:{seconds:D2}.{millis:D3}");
+        var negative = milliseconds < 0;
+        var magnitude = Math.Abs((decimal)milliseconds);
+        var hours = decimal.ToInt64(decimal.Truncate(magnitude / 3_600_000));
+        var minutes = decimal.ToInt32(decimal.Truncate(magnitude / 60_000) % 60);
+        var seconds = decimal.ToInt32(decimal.Truncate(magnitude / 1_000) % 60);
+        var millis = decimal.ToInt32(magnitude % 1_000);
+        return FormattableString.Invariant(
+            $"{(negative ? "-" : "")}{hours:D2}:{minutes:D2}:{seconds:D2}.{millis:D3}");
     }
+
+    private static string FormatDuration(long milliseconds) =>
+        FormattableString.Invariant($"{milliseconds / 1_000}.{milliseconds % 1_000:D3} с");
+
+    private void Warn(string message) =>
+        MessageBox.Show(this, message, "CensorPlayer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+
+    private sealed record SidecarChoice(string Name, string Path);
 }

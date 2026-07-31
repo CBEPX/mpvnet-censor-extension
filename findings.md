@@ -32,14 +32,28 @@
 - `gblur` ограничен `sigma 0.01..1024`, `steps 1..6`; числовое форматирование invariant и round-trip.
 - Locator больше не рекламирует неподдерживаемые форматы: SRT/WebVTT adapters реализованы и протестированы.
 - Lifecycle review обнаружил и закрыл teardown UAF: оба shutdown caller теперь ждут общий completion barrier после drain всех native calls.
-- Watchdog ограничен тремя успешными и тремя неудачными recovery/read attempts на сессию; persistent `vf clr` не создаёт бесконечный 1 Hz storm.
+- Watchdog ограничивает только три последовательные ошибки. Успешный
+  readback сбрасывает счётчик, поэтому разнесённые потери фильтра продолжают
+  восстанавливаться без пожизненного лимита.
 - Финальный Fable lifecycle verdict: `approve`; остался только Low residual risk, если synchronous mpv filter call зависнет дольше upstream 10-second shutdown timeout.
 - UI review подтвердил корректную STA/window и lock architecture; generic broadcast verbs заменены на `censor-*`, чтобы чужой `script-message reload/disable` не мог снять filters.
 - Два picker внутри одной media session разделяются cancellation token gates до и после duration confirmation; stale операция не применяет filter и не должна менять итоговый status.
 - Повторный Fable UI review дал verdict `solid` без блокирующих дефектов; manual load теперь повышает generation ID, а `Shown` повторно читает state и закрывает startup/shutdown race окна.
 - Финальный adversarial Fable pass обнаружил ошибочно размещённый generation increment и stale status после duration dialog; increment перенесён в `StartNewOperation`, а status/OSD publication централизованно проверяет session ID и token.
 - Автоматический re-check исправленного diff не завершился из-за лимита Fable до 08:00 Europe/Moscow; локальные analyzers, Release build и 36/36 tests проходят, но это не заменяет физический Windows gate.
-- Reload использует teardown-first semantics: некорректная замена явно отключает прежний filter вместо продолжения с уже не соответствующим файлу schedule; parse-then-swap отложен до Windows Phase 0.
+- Load/reload теперь использует parse-then-swap: прежний активный filter
+  остаётся до успешных parse, compile, apply и readback. При ошибке swap
+  восстанавливается предыдущий plan.
+- Итоговый Fable-review обнаружил реальный cross-schedule overwrite: окно
+  передавало документ без его source path. Save contract теперь передаёт оба
+  snapshot-значения, а detached draft и scratch принудительно открывают
+  `Сохранить как…`.
+- При неудачном apply/recovery pause снимается только после подтверждённого
+  нового filtergraph или проверенного rollback. Неотменяемый sidecar-dialog
+  теперь закрывается при смене media и по таймауту.
+- Installer update сохраняет изменённый `portable_config`; smoke создаёт
+  пользовательскую правку и runtime-файл, проверяет их после update и
+  отсутствие хвостов после uninstall.
 
 ## Главные риски
 
@@ -52,11 +66,15 @@
 | Сохранение портит schedule | Temp + atomic replace + backup + failure simulation |
 | UI callback завершает mpv.net | Общий exception boundary и actionable error |
 | Stock loader не разрешает sibling dependency | Single `CensorExtension.dll` + Windows `LoadFile/GetTypes` smoke |
+| Неполный соответствующий исходный код bundled `libmpv` | Полный пакет не публикуется; CI отдаёт только extension DLL и project source до фиксации всей статической dependency closure |
 
 ## Граница доказательств
 
-- Документы и Fable review подтверждают целостность направления, но не работоспособность extension API или filter timeline.
-- Эти runtime-факты считаются доказанными только после Phase 0 на pinned mpv.net/libmpv и физической Windows-машине.
+- Физический Windows smoke на `440269a` доказал extension API, filter timeline,
+  preset switching, watchdog, session races и 1080p30/60.
+- Новый редактор и полный portable/installer пока имеют только локальное
+  compile/test evidence. Их runtime-факты будут доказаны после Windows CI и
+  повторной физической проверки точного SHA.
 
 ## Environment discovery
 

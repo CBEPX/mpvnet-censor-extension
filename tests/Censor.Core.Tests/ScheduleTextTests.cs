@@ -41,6 +41,9 @@ public sealed class ScheduleTextTests
         Assert.Equal(-250, reloaded.Document!.Metadata.OffsetMs);
         Assert.Equal(new CensorInterval(1_000, 2_000, "sample"), reloaded.Document.Intervals.Single());
         Assert.Equal(["# future-key: keep me", "# a comment"], reloaded.Document.PreservedHeaderLines);
+        Assert.Contains(
+            parsed.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("future-key", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -68,7 +71,9 @@ public sealed class ScheduleTextTests
         var result = ScheduleText.Parse(text);
 
         Assert.False(result.IsSuccess);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("duplicated", StringComparison.Ordinal));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("несколько раз", StringComparison.Ordinal));
     }
 
     [Fact]

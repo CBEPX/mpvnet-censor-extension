@@ -1,18 +1,25 @@
-name: CI
+name: Windows package validation
 
 on:
-  push:
-  pull_request:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix
+        required: true
 
 permissions:
   contents: read
 
 jobs:
-  windows:
+  windows-release:
     runs-on: windows-latest
     timeout-minutes: 45
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-dotnet@v6
         with:
@@ -23,14 +30,13 @@ jobs:
       - name: Restore pinned mpv.net reference
         run: bash scripts/restore-mpvnet.sh
 
-      - name: Restore
-        run: dotnet restore CensorPlayer.sln --locked-mode
-
-      - name: Build
-        run: dotnet build CensorPlayer.sln --configuration Release --no-restore
-
-      - name: Test
-        run: dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
+      - name: Restore, build, and test
+        run: |
+          dotnet restore CensorPlayer.sln --locked-mode
+          dotnet build CensorPlayer.sln --configuration Release --no-restore `
+            -p:Version=$env:RELEASE_VERSION `
+            -p:InformationalVersion=$env:RELEASE_VERSION
+          dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 
       - name: Verify stock extension loader contract
         run: >-
@@ -48,27 +54,22 @@ jobs:
           $version = (Get-Content deps.lock.json -Raw | ConvertFrom-Json).tools.innoSetup.version
           choco install innosetup --version $version --no-progress --yes
 
-      - name: Build portable, installer, project source, checksums, and SBOM
+      - name: Build and verify release
         shell: pwsh
-        run: >-
-          ./scripts/package-windows.ps1
-          -Commit $env:GITHUB_SHA
-          -RunId $env:GITHUB_RUN_ID
-
-      - name: Verify release artifacts
-        shell: pwsh
-        run: ./scripts/verify-release-artifacts.ps1 -ArtifactDirectory artifacts/windows/release
-
-      - name: Smoke installer
-        shell: pwsh
-        run: >-
-          ./scripts/smoke-installer.ps1
-          -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
+        run: |
+          ./scripts/package-windows.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Commit $env:GITHUB_SHA `
+            -RunId $env:GITHUB_RUN_ID
+          ./scripts/verify-release-artifacts.ps1 `
+            -ArtifactDirectory artifacts/windows/release
+          ./scripts/smoke-installer.ps1 `
+            -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
 
       - name: Upload extension build evidence
         uses: actions/upload-artifact@v7
         with:
-          name: CensorExtension-windows-x64
+          name: CensorExtension-${{ inputs.version }}-windows-x64
           if-no-files-found: error
           path: |
             src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
@@ -76,4 +77,4 @@ jobs:
             LICENSE
             THIRD_PARTY_NOTICES.md
             examples/input.conf
-          retention-days: 30
+          retention-days: 90

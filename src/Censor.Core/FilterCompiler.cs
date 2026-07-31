@@ -5,7 +5,7 @@ namespace Censor.Core;
 
 public sealed record BlurSettings(double Sigma = 40, int Steps = 2)
 {
-    public static BlurSettings Strong { get; } = new(30, 2);
+    public static BlurSettings Moderate { get; } = new(30, 2);
 
     public static BlurSettings Balanced { get; } = new();
 
@@ -36,7 +36,8 @@ public static class FilterCompiler
 
         var chunkCount = (intervals.Count + MaxIntervalsPerChunk - 1) / MaxIntervalsPerChunk;
         if (chunkCount > MaxFilters)
-            throw new InvalidOperationException($"A filter plan cannot exceed {MaxFilters} filters.");
+            throw new InvalidOperationException(
+                $"План не может содержать больше {MaxFilters} фильтров.");
 
         var sigma = blur.Sigma.ToString("R", CultureInfo.InvariantCulture);
         var chunks = new List<FilterChunk>(chunkCount);
@@ -82,17 +83,25 @@ public static class FilterCompiler
         BlurSettings blur)
     {
         if (!double.IsFinite(blur.Sigma) || blur.Sigma is < 0.01 or > 1_024)
-            throw new ArgumentOutOfRangeException(nameof(blur), "Sigma must be between 0.01 and 1024.");
+            throw new ArgumentOutOfRangeException(
+                nameof(blur),
+                "Значение sigma должно быть от 0.01 до 1024.");
         if (blur.Steps is < 1 or > 6)
-            throw new ArgumentOutOfRangeException(nameof(blur), "Steps must be between 1 and 6.");
+            throw new ArgumentOutOfRangeException(
+                nameof(blur),
+                "Значение steps должно быть от 1 до 6.");
 
         for (var index = 0; index < intervals.Count; index++)
         {
             var interval = intervals[index];
             if (interval.StartMs < 0 || interval.StartMs >= interval.EndMs)
-                throw new ArgumentException("Normalized intervals must satisfy 0 <= start < end.", nameof(intervals));
+                throw new ArgumentException(
+                    "Нормализованные интервалы должны удовлетворять условию 0 <= начало < конец.",
+                    nameof(intervals));
             if (index > 0 && intervals[index - 1].EndMs >= interval.StartMs)
-                throw new ArgumentException("Normalized intervals must be sorted and disjoint.", nameof(intervals));
+                throw new ArgumentException(
+                    "Нормализованные интервалы должны быть отсортированы и не пересекаться.",
+                    nameof(intervals));
         }
     }
 }

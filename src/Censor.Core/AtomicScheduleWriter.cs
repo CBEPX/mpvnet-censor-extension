@@ -13,7 +13,7 @@ public static class AtomicScheduleWriter
 
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("Schedule path must include a directory.", nameof(path));
+            throw new ArgumentException("Путь к расписанию должен включать каталог.", nameof(path));
         if (!Directory.Exists(directory))
             throw new DirectoryNotFoundException(directory);
 
@@ -24,7 +24,8 @@ public static class AtomicScheduleWriter
         {
             var text = ScheduleText.Serialize(document);
             if (!ScheduleText.Parse(text).IsSuccess)
-                throw new InvalidOperationException("Refusing to write a schedule that cannot be parsed back.");
+                throw new InvalidOperationException(
+                    "Расписание не записано: после сохранения оно не проходит повторный разбор.");
 
             var bytes = Utf8WithoutBom.GetBytes(text);
             using (var stream = new FileStream(

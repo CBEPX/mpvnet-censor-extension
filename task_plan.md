@@ -1,6 +1,11 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** Core, session host, watchdog, manual tool window и single-DLL Windows CI реализованы на `codex/implement-censor-p0`; первый физический smoke выявил packaging blocker, исправленный artifact ожидает повторной проверки.
+**Статус:** полный код Windows P0 реализован локально в
+`codex/implement-censor-p0`: runtime, редактор, настройки, recovery, логи,
+диагностика, portable, installer и package-validation CI. До публикации
+остаётся доказать полный соответствующий исходный код штатного `libmpv`, затем
+повторить post-fix Fable-review, Windows CI и физическую проверку итогового
+пакета.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения
@@ -17,7 +22,14 @@
 - Допустимый `offset-ms`: от `-86_400_000` до `+86_400_000` включительно, вычисления выполняются в checked `Int64`.
 - Неизвестные `# key: value` и комментарии сохраняются дословно и в исходном относительном порядке; duplicate известного ключа является ошибкой.
 - Watchdog использует `earlyIntervalGuardMs` как единственный порог «следующий интервал близко».
-- Начальные blur presets: `Strong = sigma 30 / steps 2`, `Maximum = sigma 50 / steps 3`; итоговые значения фиксируются после GPU-проверки.
+- Blur presets: `Moderate = sigma 30 / steps 2`, default
+  `Balanced = sigma 40 / steps 2`, `Maximum = sigma 50 / steps 3`.
+- Синтетический 4K30 с software decode остаётся известным ограничением
+  плавности из issue #3, но не блокирует P0, пока каждый показанный кадр
+  проходит через censor filter.
+- P0 выпускается только для Windows x64 под `GPL-2.0-only`; RC не подписан
+  Authenticode. Installer работает без прав администратора и сохраняет
+  пользовательские данные при обычном удалении.
 
 ## Этапы
 
@@ -64,7 +76,8 @@
 
 ### 4. Media session integration
 
-- Реализовать `MediaSessionCoordinator` с монотонным ID и `CancellationTokenSource` на сессию.
+- Реализовать `MediaSessionCoordinator` с монотонным ID и
+  `CancellationTokenSource` на сессию.
 - На `StartFile` инвалидировать старую session, отменять операции и удалять прежние `@censor_*`; на `EndFile` очищать schedule/UI.
 - Реализовать manual load, reload и exact sidecar lookup с приоритетом TXT → SRT → VTT; при нескольких sidecars показывать выбор.
 - Проверять `media-duration-ms`: mismatch блокирует auto-load и требует явного подтверждения при manual load.
@@ -97,8 +110,11 @@
 
 - Сначала собрать portable ZIP с isolated `portable_config`, pinned runtime, licenses/notices, checksums и SBOM.
 - Затем добавить Windows installer, install/update/rollback test и сохранение предыдущего release artifact.
-- В GitHub Actions выполнять locked restore, Release build, tests, package, installer, checksums, SBOM и artifacts.
-- На self-hosted Windows runner пройти Intel/NVIDIA/AMD, 1080p30/60, 4K30, software decoding, full-film soak и OBS Window Capture.
+- В GitHub Actions выполнять locked restore, Release build, tests, package,
+  installer, checksums и SBOM. До закрытия source-provenance gate загружать
+  только DLL расширения и исходный код самого проекта.
+- На Windows пройти Intel/NVIDIA/AMD, 1080p30/60, software decoding и
+  full-film soak. Реальные 4K-фильмы и OBS проверяются отдельно в issue #3.
 
 **Выход:** выполнены все 15 acceptance criteria ТЗ; нет `BLOCKER/HIGH`, есть Windows evidence для mpv interaction и rollback artifact.
 

@@ -15,7 +15,7 @@ public sealed class FilterCompilerTests
 
             var plan = FilterCompiler.Compile(
                 [new(1_250, 2_500), new(4_000, 5_001)],
-                BlurSettings.Strong);
+                BlurSettings.Moderate);
 
             var chunk = Assert.Single(plan.Chunks);
             Assert.Equal("@censor_blur_000", chunk.Label);
@@ -47,7 +47,7 @@ public sealed class FilterCompilerTests
     [Fact]
     public void ExposesNamedBlurPresets()
     {
-        Assert.Equal(new(30, 2), BlurSettings.Strong);
+        Assert.Equal(new(30, 2), BlurSettings.Moderate);
         Assert.Equal(new(40, 2), BlurSettings.Balanced);
         Assert.Equal(new(50, 3), BlurSettings.Maximum);
     }

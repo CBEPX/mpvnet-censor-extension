@@ -9,6 +9,7 @@
     <GenerateDependencyFile>false</GenerateDependencyFile>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Single-DLL packaging intentionally keeps linked Core sources flat. -->
     <Compile Include="..\Censor.Core\*.cs" Link="Core\%(Filename)%(Extension)" />
     <Reference Include="libmpvnet">
       <HintPath>..\..\.deps\mpvnet\libmpvnet.dll</HintPath>

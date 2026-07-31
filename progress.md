@@ -32,7 +32,37 @@
 - Повторный запуск Fable после исправлений остановлен внешним session limit до 08:00 Europe/Moscow; Release analyzers/build и 36/36 tests повторно зелёные.
 - Физический Windows smoke artifact `58004d4` подтвердил blocking packaging fail: `Censor.Core.dll` не разрешается stock `Assembly.LoadFile/GetTypes`.
 - Extension переведён на single-DLL contract; добавлен Windows loader-smoke, повторяющий точку отказа до публикации artifact.
+- Физический Windows retest на `440269a` подтвердил loader, меню/окно,
+  переключение `30/2 → 40/2 → 50/3`, сохранение user `vf`, watchdog и
+  1080p30/60. Синтетический 4K30 принят как известное ограничение и вынесен в
+  issue #3.
+- Реализован полный редактор: четыре русские вкладки, grid operations,
+  F7/F8, undo/redo, offset, preview, Save/Save As, conflict check и detached
+  recovery.
+- Каждая media session получает монотонный ID; смена фильма отменяет текущий
+  `CancellationTokenSource`. Старый активный filter остаётся до успешного
+  swap; preset пересобирается из in-memory intervals.
+- Добавлены user settings, privacy-safe JSONL logs, diagnostic ZIP с consent,
+  запоминание геометрии и список при нескольких sidecar.
+- Добавлены GPL-2.0-only license/notices, изолированный portable, per-user
+  Inno installer, SPDX 2.3 SBOM, `SHA256SUMS.txt`, installer smoke и ручной
+  package-validation workflow.
+- Итоговый Fable-review выявил неполный corresponding-source набор штатного
+  `libmpv`. Публикация portable/installer отключена; CI загружает только DLL
+  расширения и исходный код проекта до закрытия отдельного issue.
+- README закрывает требования issue #2; Windows checklist синхронизирован с
+  решением по issue #3.
+- Итоговый Fable-review нашёл cross-schedule overwrite, сохранение scratch в
+  относительный путь, небезопасное снятие pause, неотменяемый sidecar-dialog и
+  потерю `portable_config` при update/uninstall. Все Critical/Major закрыты в
+  коде и installer smoke.
+- Локально проходят Release build без warnings, 54/54 Core tests,
+  `dotnet format --verify-no-changes`, JSON/YAML и shell syntax checks.
+- Post-fix Fable запуск упирается во внешний session limit до 13:00 МСК; это
+  остаётся review gate и не заменяется локальными проверками.
 
 ## Следующий шаг
 
-Опубликовать исправленный single-DLL artifact и повторить `docs/WINDOWS_PHASE0.md` на физической Windows-машине; без этого `gblur`/timeline/GPU runtime не считается доказанным.
+Отправить branch в PR #1, дождаться Windows package CI и повторить Fable после
+сброса внешнего лимита. PR остаётся draft; полный portable/installer не
+публикуется до закрытия source-provenance gate.

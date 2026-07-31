@@ -1,13 +1,134 @@
-# mpv.net Censor Extension
+# CensorPlayer для mpv.net
 
-Experimental Windows extension for stock [mpv.net](https://github.com/mpvnet-player/mpv.net).
-It reads exact-name `.censor.txt`, `.censor.srt`, or `.censor.vtt` sidecars and
-compiles their intervals into labeled FFmpeg `gblur` filters scoped to the
-current media session.
+Расширение для стандартного
+[mpv.net](https://github.com/mpvnet-player/mpv.net) под Windows x64. Оно
+размывает весь кадр по интервалам из TXT, SRT или WebVTT. Расписание действует
+только во время текущего сеанса воспроизведения. Базы фильмов, сетевых функций,
+отпечатков файлов и автоматического обновления нет.
 
-## Build
+Лицензия проекта — [GPL-2.0-only](LICENSE).
 
-Requires .NET SDK 10.0.302.
+## Установка
+
+Публичный portable-пакет и установщик пока не выпускаются. CI собирает и
+проверяет их на временном Windows runner, но публикует только DLL расширения,
+его исходный код и сопроводительные файлы. Перед распространением полного
+пакета нужно зафиксировать соответствующий исходный код всех статически
+связанных зависимостей штатного `libmpv`.
+
+После снятия этого ограничения выпуск будет содержать изолированную
+portable-сборку, установщик для текущего пользователя, контрольные суммы и
+SPDX SBOM.
+
+Установщик размещает программу в
+`%LOCALAPPDATA%\Programs\CensorPlayer`. Настройки, файлы восстановления, журналы
+и диагностические данные хранятся в `%LOCALAPPDATA%\CensorPlayer`. Обычное
+удаление программы их сохраняет; чтобы удалить эти данные, нужно отдельно включить
+соответствующую опцию в деинсталляторе.
+
+Файлы внутри каталога установки `portable_config` сохраняются при обновлении,
+но удаляются вместе с программой. Если вы меняли их вручную и хотите оставить
+копию перед удалением, сохраните этот каталог отдельно.
+
+Будущая RC-сборка не будет подписана Authenticode, поэтому Windows SmartScreen
+может показать предупреждение.
+
+Чтобы вручную установить только расширение, скопируйте единственный файл
+`CensorExtension.dll` в каталог:
+
+```text
+<MPVNET_CONFIG>\extensions\CensorExtension\
+```
+
+Удалите оставшиеся от ранних сборок `Censor.Core.dll` и
+`CensorExtension.deps.json`, затем объедините [examples/input.conf](examples/input.conf)
+со своим `input.conf`. Portable-сборка уже содержит собственный изолированный
+`portable_config` и статическое меню `Цензура`.
+
+## Использование
+
+Откройте фильм, выберите `Цензура → Загрузить файл таймкодов…`, проверьте
+сводку и нажмите `Применить`. Окно содержит четыре вкладки:
+
+- текущий фильм и предупреждения парсера;
+- редактор интервалов с отменой и повтором действий, F7/F8, настройкой
+  смещения и командами Save/Save As;
+- настройки sidecar-файлов, контроля фильтра, временных параметров и
+  размытия;
+- экспорт диагностического ZIP с обезличенными данными.
+
+Профили размытия:
+
+- `Умеренное`: `sigma=30`, `steps=2`;
+- `Сбалансированное`: `sigma=40`, `steps=2` — по умолчанию;
+- `Максимальное`: `sigma=50`, `steps=3`.
+
+Расширение принимает следующие сообщения `script-message`:
+
+```text
+censor-open
+censor-pick
+censor-load "C:\path\Film.censor.txt"
+censor-apply
+censor-reload
+censor-disable
+censor-mark-start / censor-mark-end
+censor-set-start / censor-set-end
+censor-previous / censor-next
+censor-save
+censor-diagnostics
+```
+
+## Формат расписания
+
+Минимальный валидный `Film.censor.txt`:
+
+```text
+00:12:03.250 --> 00:12:07.900
+00:24:18.100 --> 00:24:23.450 | Необязательная заметка
+```
+
+Расширенный пример:
+
+```text
+# censor-timeline: 1
+# title: Example Film
+# media-duration-ms: 7200123
+# lead-in-ms: 150
+# lead-out-ms: 250
+# offset-ms: 0
+
+00:12:03.250 --> 00:12:07.900 | Сцена 1
+```
+
+P0 поддерживает только `# censor-timeline: 1`; другая версия формата
+отклоняется. `media-duration-ms` — необязательная длительность фильма в
+миллисекундах. Она помогает обнаружить расписание от другой версии монтажа:
+
+- разница до 2 000 мс допустима;
+- при ручной загрузке большую разницу можно подтвердить;
+- sidecar-файл с большой разницей автоматически не применяется;
+- если метаданных нет, появляется предупреждение, но ручная загрузка разрешена.
+
+Границы полуоткрытые: `[start_ms, end_ms)`. Смещение хранится в отдельном поле
+метаданных (`offset-ms`) и не меняет временные метки. Полная грамматика описана в
+[ТЗ, раздел 7](docs/TZ.md#7-пользовательский-формат-расписания).
+
+Имена sidecar-файлов рядом с фильмом должны точно соответствовать шаблону:
+
+```text
+Film.mkv
+Film.censor.txt
+Film.censor.srt
+Film.censor.vtt
+```
+
+Если найдено несколько вариантов, расширение показывает список и не выбирает
+молча.
+
+## Сборка
+
+Нужен .NET SDK `10.0.302`:
 
 ```sh
 bash scripts/restore-mpvnet.sh
@@ -16,48 +137,28 @@ dotnet build CensorPlayer.sln --configuration Release --no-restore
 dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 ```
 
-The extension output is the single assembly
-`src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll`. Core sources are
-compiled into that assembly because stock mpv.net loads extensions with
-`Assembly.LoadFile` and does not resolve sibling project dependencies.
+Чтобы собрать пакет для Windows:
 
-## Install and open
-
-Copy `CensorExtension.dll` into:
-
-```text
-<MPVNET_CONFIG>\extensions\CensorExtension\
+```powershell
+.\scripts\package-windows.ps1 -Version 1.3.1-rc.1
 ```
 
-When replacing the earlier three-file artifact, remove the legacy
-`Censor.Core.dll` and `CensorExtension.deps.json` first.
+## Что уже проверено и ограничение 4K
 
-mpv.net requires the directory and primary DLL to have the same
-`CensorExtension` name. Merge [examples/input.conf](examples/input.conf) into
-your mpv.net `input.conf`, then press `Ctrl+Alt+c`.
+Проверка коммита `440269a` из PR на реальном компьютере с Windows
+подтвердила загрузку расширения из одного DLL-файла, видимое размытие,
+переключение профилей, сохранение пользовательского `vf`, работу контроля
+и восстановления фильтра, режимы 1080p30/60 и защиту от гонок состояния между
+сеансами. На синтетическом видео 4K30 при `hwdec-current=no` пропускается больше
+половины кадров, но все показанные кадры проходят через фильтр цензуры. Это
+известное ограничение плавности, а не подтверждённая утечка кадров без
+размытия. Проверка на типичном 4K-видео и в OBS продолжается в
+[issue #3](https://github.com/CBEPX/mpvnet-censor-extension/issues/3).
 
-The tool window supports file picking, drag-and-drop, reload, disabling the
-current session, and live selection between `Strong (30/2)`,
-`Balanced (40/2)`, and `Maximum (50/3)` blur presets. `Balanced` is the
-default. You can also use:
+Перед выпуском portable-сборка и установщик должны повторно пройти
+[проверку Windows P0](docs/WINDOWS_PHASE0.md) для точного SHA-256 каждого
+пакета.
 
-```text
-script-message-to censor censor-open
-script-message-to censor censor-load "C:\path\Film.censor.txt"
-script-message-to censor censor-reload
-script-message-to censor censor-disable
-```
-
-## Current proof boundary
-
-- Core parser, subtitle adapters, normalization, atomic save, and filter
-  compilation are covered by deterministic and property-based tests.
-- The extension cross-builds against pinned mpv.net `v7.1.2.0`.
-- Windows CI repeats the stock `Assembly.LoadFile` + `GetTypes` loader contract
-  and rejects any external `Censor.Core` assembly reference.
-- Windows CI publishes a `CensorExtension-windows` artifact.
-- Real playback timing, `gblur`, seek/speed behavior, GPU performance, and
-  mpv.net UI integration still require the documented Windows Phase 0 run.
-
-See [the specification](docs/TZ.md), [ADR-003](docs/adr/ADR-003-session-scoped-schedules-no-database.md),
-[the execution plan](task_plan.md), and [the Windows checklist](docs/WINDOWS_PHASE0.md).
+Дополнительно: [ТЗ](docs/TZ.md),
+[ADR-003](docs/adr/ADR-003-session-scoped-schedules-no-database.md) и
+[план выполнения](task_plan.md).

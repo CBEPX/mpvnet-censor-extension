@@ -22,7 +22,9 @@ public static class ScheduleNormalizer
         foreach (var interval in intervals)
         {
             if (interval.StartMs < 0 || interval.StartMs >= interval.EndMs)
-                throw new ArgumentException("Intervals must satisfy 0 <= start < end.", nameof(intervals));
+                throw new ArgumentException(
+                    "Интервалы должны удовлетворять условию 0 <= начало < конец.",
+                    nameof(intervals));
 
             var start = checked(interval.StartMs - options.LeadInMs + options.OffsetMs);
             var end = checked(interval.EndMs + options.LeadOutMs + options.OffsetMs);
@@ -69,6 +71,8 @@ public static class ScheduleNormalizer
         ArgumentOutOfRangeException.ThrowIfNegative(options.MergeGapMs);
 
         if (options.OffsetMs is < -ScheduleText.MaxOffsetMs or > ScheduleText.MaxOffsetMs)
-            throw new ArgumentOutOfRangeException(nameof(options), "Offset is outside the supported range.");
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "Смещение выходит за допустимый диапазон.");
     }
 }

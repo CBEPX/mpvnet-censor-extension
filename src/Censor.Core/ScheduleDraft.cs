@@ -1,0 +1,268 @@
+namespace Censor.Core;
+
+public sealed class ScheduleDraft
+{
+    public const int MaxHistory = 100;
+
+    private readonly List<ScheduleDocument> _redo = [];
+    private readonly List<ScheduleDocument> _undo = [];
+    private ScheduleDocument _document;
+    private ScheduleDocument _savedDocument;
+    private bool _forceDirty;
+
+    public ScheduleDraft(ScheduleDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        _document = Copy(document);
+        _savedDocument = Copy(document);
+    }
+
+    public ScheduleDocument Document => Copy(_document);
+
+    public bool IsDirty => _forceDirty || !DocumentsEqual(_document, _savedDocument);
+
+    public bool CanUndo => _undo.Count > 0;
+
+    public bool CanRedo => _redo.Count > 0;
+
+    public IReadOnlyList<ParseDiagnostic> Validate()
+    {
+        var diagnostics = new List<ParseDiagnostic>();
+        for (var index = 0; index < _document.Intervals.Count; index++)
+        {
+            var interval = _document.Intervals[index];
+            if (interval.StartMs < 0)
+                diagnostics.Add(Error(index, "Начало не может быть отрицательным."));
+            if (interval.StartMs >= interval.EndMs)
+                diagnostics.Add(Error(index, "Начало должно быть раньше конца."));
+            if (interval.EndMs > 359_999_999)
+                diagnostics.Add(Error(index, "Время не может быть позже 99:59:59.999."));
+        }
+
+        if (_document.Metadata.OffsetMs is < -ScheduleText.MaxOffsetMs or > ScheduleText.MaxOffsetMs)
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                0,
+                1,
+                "Смещение выходит за допустимый диапазон."));
+
+        return diagnostics;
+    }
+
+    public void Add(long startMs, long endMs, string? note = null) =>
+        Change(document => document with
+        {
+            Intervals = document.Intervals.Append(new(startMs, endMs, NormalizeNote(note))).ToArray(),
+        });
+
+    public void Update(int index, long startMs, long endMs, string? note)
+    {
+        EnsureIndex(index);
+        Change(document =>
+        {
+            var intervals = document.Intervals.ToArray();
+            intervals[index] = new(startMs, endMs, NormalizeNote(note));
+            return document with { Intervals = intervals };
+        });
+    }
+
+    public void Delete(IEnumerable<int> indices)
+    {
+        ArgumentNullException.ThrowIfNull(indices);
+        var selected = indices.Distinct().OrderDescending().ToArray();
+        if (selected.Length == 0)
+            return;
+        foreach (var index in selected)
+            EnsureIndex(index);
+
+        Change(document =>
+        {
+            var intervals = document.Intervals.ToList();
+            foreach (var index in selected)
+                intervals.RemoveAt(index);
+            return document with { Intervals = intervals };
+        });
+    }
+
+    public void Duplicate(int index)
+    {
+        EnsureIndex(index);
+        Change(document =>
+        {
+            var intervals = document.Intervals.ToList();
+            intervals.Insert(index + 1, intervals[index] with { });
+            return document with { Intervals = intervals };
+        });
+    }
+
+    public void Merge(IEnumerable<int> indices)
+    {
+        ArgumentNullException.ThrowIfNull(indices);
+        var selected = indices.Distinct().Order().ToArray();
+        if (selected.Length < 2)
+            throw new ArgumentException("Выберите хотя бы два интервала.", nameof(indices));
+        foreach (var index in selected)
+            EnsureIndex(index);
+
+        Change(document =>
+        {
+            var source = selected.Select(index => document.Intervals[index]).ToArray();
+            var merged = new CensorInterval(
+                source.Min(interval => interval.StartMs),
+                source.Max(interval => interval.EndMs),
+                string.Join(
+                    "; ",
+                    source.Select(interval => interval.Note)
+                        .Where(note => !string.IsNullOrWhiteSpace(note))
+                        .Distinct(StringComparer.Ordinal)));
+            var intervals = document.Intervals.ToList();
+            foreach (var index in selected.Reverse())
+                intervals.RemoveAt(index);
+            intervals.Insert(selected[0], merged with
+            {
+                Note = string.IsNullOrWhiteSpace(merged.Note) ? null : merged.Note,
+            });
+            return document with { Intervals = intervals };
+        });
+    }
+
+    public void Split(int index, long positionMs)
+    {
+        EnsureIndex(index);
+        var interval = _document.Intervals[index];
+        if (positionMs <= interval.StartMs || positionMs >= interval.EndMs)
+            throw new ArgumentOutOfRangeException(
+                nameof(positionMs),
+                "Точка разделения должна находиться внутри интервала.");
+
+        Change(document =>
+        {
+            var intervals = document.Intervals.ToList();
+            intervals[index] = interval with { EndMs = positionMs };
+            intervals.Insert(index + 1, interval with { StartMs = positionMs });
+            return document with { Intervals = intervals };
+        });
+    }
+
+    public void ShiftBoundary(int index, bool start, long deltaMs)
+    {
+        EnsureIndex(index);
+        var interval = _document.Intervals[index];
+        Update(
+            index,
+            start ? checked(interval.StartMs + deltaMs) : interval.StartMs,
+            start ? interval.EndMs : checked(interval.EndMs + deltaMs),
+            interval.Note);
+    }
+
+    public void ShiftAll(long deltaMs) =>
+        Change(document => document with
+        {
+            Intervals = document.Intervals.Select(interval => new CensorInterval(
+                checked(interval.StartMs + deltaMs),
+                checked(interval.EndMs + deltaMs),
+                interval.Note)).ToArray(),
+        });
+
+    public void SetOffset(long offsetMs)
+    {
+        if (offsetMs is < -ScheduleText.MaxOffsetMs or > ScheduleText.MaxOffsetMs)
+            throw new ArgumentOutOfRangeException(nameof(offsetMs));
+
+        Change(document => document with
+        {
+            Metadata = document.Metadata with { OffsetMs = offsetMs },
+        });
+    }
+
+    public bool Undo()
+    {
+        if (_undo.Count == 0)
+            return false;
+
+        _redo.Add(Copy(_document));
+        _document = Pop(_undo);
+        return true;
+    }
+
+    public bool Redo()
+    {
+        if (_redo.Count == 0)
+            return false;
+
+        Push(_undo, _document);
+        _document = Pop(_redo);
+        return true;
+    }
+
+    public void MarkSaved()
+    {
+        _savedDocument = Copy(_document);
+        _forceDirty = false;
+    }
+
+    public bool MarkSaved(ScheduleDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        if (!DocumentsEqual(_document, document))
+            return false;
+
+        MarkSaved();
+        return true;
+    }
+
+    public bool Matches(ScheduleDocument document)
+    {
+        ArgumentNullException.ThrowIfNull(document);
+        return DocumentsEqual(_document, document);
+    }
+
+    public void MarkDirty() => _forceDirty = true;
+
+    private void Change(Func<ScheduleDocument, ScheduleDocument> update)
+    {
+        var changed = Copy(update(Copy(_document)));
+        Push(_undo, _document);
+        _document = changed;
+        _redo.Clear();
+    }
+
+    private void EnsureIndex(int index)
+    {
+        if ((uint)index >= (uint)_document.Intervals.Count)
+            throw new ArgumentOutOfRangeException(nameof(index));
+    }
+
+    private static void Push(List<ScheduleDocument> history, ScheduleDocument document)
+    {
+        history.Add(Copy(document));
+        if (history.Count > MaxHistory)
+            history.RemoveAt(0);
+    }
+
+    private static ScheduleDocument Pop(List<ScheduleDocument> history)
+    {
+        var index = history.Count - 1;
+        var document = history[index];
+        history.RemoveAt(index);
+        return Copy(document);
+    }
+
+    private static ScheduleDocument Copy(ScheduleDocument document) =>
+        document with
+        {
+            Intervals = document.Intervals.Select(interval => interval with { }).ToArray(),
+            PreservedHeaderLines = document.PreservedHeaderLines.ToArray(),
+        };
+
+    private static bool DocumentsEqual(ScheduleDocument left, ScheduleDocument right) =>
+        left.Metadata == right.Metadata &&
+        left.Intervals.SequenceEqual(right.Intervals) &&
+        left.PreservedHeaderLines.SequenceEqual(right.PreservedHeaderLines);
+
+    private static string? NormalizeNote(string? note) =>
+        string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+
+    private static ParseDiagnostic Error(int intervalIndex, string message) =>
+        new(DiagnosticSeverity.Error, intervalIndex + 1, 1, message);
+}

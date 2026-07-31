@@ -15,7 +15,7 @@ public static class SidecarLocator
 
         var fullPath = Path.GetFullPath(mediaPath);
         var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("Media path must include a directory.", nameof(mediaPath));
+            throw new ArgumentException("Путь к фильму должен включать каталог.", nameof(mediaPath));
         var baseName = Path.GetFileNameWithoutExtension(fullPath);
 
         return Extensions

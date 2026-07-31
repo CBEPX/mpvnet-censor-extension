@@ -22,7 +22,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     1,
                     1,
-                    $"Subtitle exceeds the {ScheduleText.MaxTextFileBytes}-byte limit."),
+                    $"Файл субтитров превышает ограничение в {ScheduleText.MaxTextFileBytes} байт."),
             ]);
         }
 
@@ -34,7 +34,7 @@ public static class SubtitleScheduleText
         if (format == SubtitleFormat.WebVtt)
         {
             if (lines.Length == 0 || !lines[0].StartsWith("WEBVTT", StringComparison.Ordinal))
-                return Error(1, "WEBVTT header is missing.");
+                return Error(1, "В файле нет заголовка WEBVTT.");
 
             index = 1;
             while (index < lines.Length && lines[index].Length > 0)
@@ -63,7 +63,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     blockStart + 1,
                     1,
-                    "Cue timing line is missing."));
+                    "В блоке субтитров нет строки с таймкодами."));
                 continue;
             }
 
@@ -73,7 +73,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     blockStart + timingIndex + 1,
                     1,
-                    "Cue timing is invalid."));
+                    "Некорректные таймкоды блока субтитров."));
                 continue;
             }
 
@@ -83,7 +83,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     blockStart + timingIndex + 1,
                     1,
-                    "Cue start must be earlier than end."));
+                    "Начало блока субтитров должно быть раньше конца."));
                 continue;
             }
 
@@ -93,7 +93,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     blockStart + 1,
                     1,
-                    $"Subtitle exceeds the {ScheduleText.MaxIntervals}-interval limit."));
+                    $"В файле субтитров больше {ScheduleText.MaxIntervals} интервалов."));
                 break;
             }
 
@@ -120,7 +120,9 @@ public static class SubtitleScheduleText
         {
             var interval = document.Intervals[index];
             if (interval.StartMs < 0 || interval.StartMs >= interval.EndMs)
-                throw new ArgumentException("Intervals must satisfy 0 <= start < end.", nameof(document));
+                throw new ArgumentException(
+                    "Интервалы должны удовлетворять условию 0 <= начало < конец.",
+                    nameof(document));
 
             if (format == SubtitleFormat.Srt)
                 builder.Append(index + 1).Append('\n');
