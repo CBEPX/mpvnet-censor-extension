@@ -269,7 +269,15 @@ if (-not $SkipInstaller) {
     if (-not (Test-Path $Iscc -PathType Leaf)) {
         throw "Inno Setup compiler is missing: $Iscc"
     }
-    $ActualIsccVersion = (Get-Item $Iscc).VersionInfo.FileVersionRaw.ToString(3)
+    $InstalledInno = @(
+        choco list --exact innosetup --limit-output |
+            Where-Object { $_ -like "innosetup|*" }
+    )
+    $ActualIsccVersion = if ($InstalledInno.Count -eq 1) {
+        ($InstalledInno[0] -split "\|", 2)[1]
+    } else {
+        ""
+    }
     if ($ActualIsccVersion -ne $Lock.tools.innoSetup.version) {
         throw "Expected Inno Setup $($Lock.tools.innoSetup.version), found $ActualIsccVersion."
     }

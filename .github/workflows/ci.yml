@@ -50,7 +50,15 @@ jobs:
           if (-not (Test-Path $iscc -PathType Leaf)) {
             throw "Inno Setup compiler is missing: $iscc"
           }
-          $actual = (Get-Item $iscc).VersionInfo.FileVersionRaw.ToString(3)
+          $installed = @(
+            choco list --exact innosetup --limit-output |
+              Where-Object { $_ -like "innosetup|*" }
+          )
+          $actual = if ($installed.Count -eq 1) {
+            ($installed[0] -split "\|", 2)[1]
+          } else {
+            ""
+          }
           if ($actual -ne $expected) {
             throw "Expected Inno Setup $expected, found $actual."
           }
