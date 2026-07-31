@@ -195,19 +195,4 @@ public sealed class ScheduleDraftTests
 
     private static ScheduleDocument Document(params CensorInterval[] intervals) =>
         new(new(), intervals, []);
-
-    private sealed class TemporaryDirectory : IDisposable
-    {
-        public TemporaryDirectory()
-        {
-            Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                $"censor-tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(Path);
-        }
-
-        public string Path { get; }
-
-        public void Dispose() => Directory.Delete(Path, recursive: true);
-    }
 }

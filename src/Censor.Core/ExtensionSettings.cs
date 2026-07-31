@@ -202,9 +202,8 @@ public static class ExtensionSettingsStore
             WatchdogIntervalMs = settings.WatchdogIntervalMs is >= 250 and <= 60_000
                 ? settings.WatchdogIntervalMs
                 : defaults.WatchdogIntervalMs,
-            AudioCompressionPreset = AudioCompressionPresets.IsValid(settings.AudioCompressionPreset)
-                ? settings.AudioCompressionPreset
-                : defaults.AudioCompressionPreset,
+            AudioCompressionPreset = AudioCompressionPresets
+                .Find(settings.AudioCompressionPreset)?.Id ?? defaults.AudioCompressionPreset,
             Blur = settings.Blur is not null &&
                 double.IsFinite(settings.Blur.Sigma) &&
                 settings.Blur.Sigma is >= 0.01 and <= 1_024 &&
@@ -240,9 +239,10 @@ public static class ExtensionSettingsStore
             File.ReadAllText(path),
             JsonOptions) ?? throw new JsonException("Файл настроек пуст.");
         var warnings = Validate(settings);
+        var normalized = Normalize(settings);
         return warnings.Count == 0
-            ? new(settings, [])
-            : new(Normalize(settings), warnings);
+            ? new(normalized, [])
+            : new(normalized, warnings);
     }
 
     private static bool ValidMilliseconds(long value) =>

@@ -2,6 +2,22 @@
 
 ## 2026-08-01
 
+- Повторный полный `cc review` на `claude-opus-5` после первого remediation
+  нашёл case-sensitive preset ID, disk I/O под `_stateLock`, потерю текста
+  ошибок диагностики и запись draft до compile, а также семь low findings.
+- Аудиопресет теперь канонизируется при загрузке; регрессионный тест проверяет
+  `Film-Balanced` → `film-balanced` до создания окна.
+- Сохранение настроек сериализовано отдельно от runtime locks, normalize и
+  compile выполняются до записи schedule, а диагностический ZIP сохраняет
+  сообщение ошибки и хеширует содержащийся в нём абсолютный путь.
+- Исправлены mpv bool readback, ложный watchdog success, двойной `.censor` в
+  имени, redo и ложный diagnostic hotkey. Event dispatch и atomic text wrapper
+  упрощены, общий temporary-directory helper больше не дублируется.
+- `compileReferenceSha256` снова является исполняемым pin: restore проверяет
+  точный SHA-256 `00da16e2…` собранной `libmpvnet.dll`; Node.js явно указан как
+  build prerequisite.
+- Large-draft validation cache и zero-copy `Freeze` намеренно сохранены: они
+  закрывают уже подтверждённый сценарий редактирования 10 000 интервалов.
 - Первый полный `cc review` на `claude-opus-5` одобрил session/revision и
   filter transaction design, но нашёл шесть edge findings: privacy ZIP,
   отказ логирования, shutdown wait, stale recovery, large-draft UI и очередь
@@ -127,7 +143,7 @@
 
 ## Следующий шаг
 
-Зафиксировать и отправить post-review wave, дождаться Windows CI, затем
-выполнить полный review Claude Opus 5 через `cc`. После зелёного verdict
-физически проверить точный SHA DLL на Windows. PR остаётся draft; полный
-portable/installer не публикуется до закрытия issue #4.
+Зафиксировать и отправить исправления второго Opus-review, дождаться двух
+Windows CI, затем снова выполнить полный review Claude Opus 5 через `cc`.
+После зелёного verdict физически проверить точный SHA DLL на Windows. PR
+остаётся draft; полный portable/installer не публикуется до закрытия issue #4.

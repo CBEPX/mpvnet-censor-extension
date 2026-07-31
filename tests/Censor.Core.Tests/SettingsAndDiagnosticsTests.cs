@@ -64,6 +64,15 @@ public sealed class SettingsAndDiagnosticsTests
 
         File.WriteAllText(
             path,
+            """{"schema":1,"audioCompressionPreset":"Film-Balanced"}""");
+        var canonical = ExtensionSettingsStore.Load(path);
+        Assert.Empty(canonical.Warnings);
+        Assert.Equal(
+            AudioCompressionPresets.FilmBalancedId,
+            canonical.Settings.AudioCompressionPreset);
+
+        File.WriteAllText(
+            path,
             """{"schema":1,"audioCompressionPreset":"future","futureRoot":true}""");
         var invalid = ExtensionSettingsStore.Load(path);
         Assert.Contains(
@@ -349,6 +358,7 @@ public sealed class SettingsAndDiagnosticsTests
             {
                 ["schedulePath"] = privatePath,
                 ["error"] = $"Unable to open {privatePath}",
+                ["rollbackError"] = "Audio filter rollback failed",
             },
         });
         File.WriteAllLines(logPath, [line, $"invalid raw entry {privatePath}"]);
@@ -365,6 +375,8 @@ public sealed class SettingsAndDiagnosticsTests
         var exported = reader.ReadToEnd();
         Assert.DoesNotContain(privatePath, exported, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("sha256:", exported, StringComparison.Ordinal);
+        Assert.Contains("Unable to open", exported, StringComparison.Ordinal);
+        Assert.Contains("Audio filter rollback failed", exported, StringComparison.Ordinal);
         Assert.Contains("log-entry-redacted", exported, StringComparison.Ordinal);
     }
 
@@ -381,20 +393,5 @@ public sealed class SettingsAndDiagnosticsTests
 
         File.WriteAllText(path, """{"left":0,"top":0,"width":10,"height":10}""");
         Assert.Null(UiStateStore.Load(path));
-    }
-
-    private sealed class TemporaryDirectory : IDisposable
-    {
-        public TemporaryDirectory()
-        {
-            Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
-                $"censor-tests-{Guid.NewGuid():N}");
-            Directory.CreateDirectory(Path);
-        }
-
-        public string Path { get; }
-
-        public void Dispose() => Directory.Delete(Path, recursive: true);
     }
 }

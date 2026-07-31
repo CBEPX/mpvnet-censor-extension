@@ -131,10 +131,9 @@ public static class DiagnosticsExporter
             foreach (var property in jsonObject.ToArray())
             {
                 if (property.Value is JsonValue value &&
-                    value.TryGetValue<string>(out var text) &&
-                    ShouldRedact(property.Key, text))
+                    value.TryGetValue<string>(out var text))
                 {
-                    jsonObject[property.Key] = ExtensionLog.ProtectPath(text, includePath: false);
+                    jsonObject[property.Key] = SanitizeText(property.Key, text);
                 }
                 else if (property.Value is not null)
                 {
@@ -147,10 +146,9 @@ public static class DiagnosticsExporter
             for (var index = 0; index < jsonArray.Count; index++)
             {
                 if (jsonArray[index] is JsonValue value &&
-                    value.TryGetValue<string>(out var text) &&
-                    LooksLikeRootedPath(text))
+                    value.TryGetValue<string>(out var text))
                 {
-                    jsonArray[index] = ExtensionLog.ProtectPath(text, includePath: false);
+                    jsonArray[index] = RedactRootedPaths(text);
                 }
                 else if (jsonArray[index] is { } child)
                 {
@@ -160,18 +158,76 @@ public static class DiagnosticsExporter
         }
     }
 
-    private static bool ShouldRedact(string propertyName, string value) =>
-        !value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase) &&
-        (propertyName.Contains("path", StringComparison.OrdinalIgnoreCase) ||
-         propertyName.Contains("error", StringComparison.OrdinalIgnoreCase) ||
-         LooksLikeRootedPath(value));
+    private static string SanitizeText(string propertyName, string value)
+    {
+        if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+            return value;
+        return propertyName.Contains("path", StringComparison.OrdinalIgnoreCase)
+            ? ExtensionLog.ProtectPath(value, includePath: false)
+            : RedactRootedPaths(value);
+    }
 
-    private static bool LooksLikeRootedPath(string value) =>
-        value.StartsWith('/') ||
-        value.StartsWith("\\\\", StringComparison.Ordinal) ||
-        value.StartsWith("//", StringComparison.Ordinal) ||
-        (value.Length >= 3 &&
-         char.IsAsciiLetter(value[0]) &&
-         value[1] == ':' &&
-         value[2] is '\\' or '/');
+    private static string RedactRootedPaths(string value)
+    {
+        if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+            return value;
+
+        StringBuilder? sanitized = null;
+        var copiedUntil = 0;
+        while (FindRootedPathStart(value, copiedUntil) is { } start)
+        {
+            sanitized ??= new(value.Length);
+            sanitized.Append(value, copiedUntil, start - copiedUntil);
+            var end = FindRootedPathEnd(value, start);
+            sanitized.Append(ExtensionLog.ProtectPath(value[start..end], includePath: false));
+            copiedUntil = end;
+        }
+
+        if (sanitized is null)
+            return value;
+        sanitized.Append(value, copiedUntil, value.Length - copiedUntil);
+        return sanitized.ToString();
+    }
+
+    private static int? FindRootedPathStart(string value, int startIndex)
+    {
+        for (var index = startIndex; index < value.Length; index++)
+        {
+            if (IsRootedPathStart(value, index))
+                return index;
+        }
+        return null;
+    }
+
+    private static bool IsRootedPathStart(string value, int index)
+    {
+        if (index > 0 && !IsPathBoundary(value[index - 1]))
+            return false;
+
+        if (value[index] == '/')
+            return true;
+        if (value[index] == '\\')
+            return index + 1 < value.Length && value[index + 1] == '\\';
+        return index + 2 < value.Length &&
+            char.IsAsciiLetter(value[index]) &&
+            value[index + 1] == ':' &&
+            value[index + 2] is '\\' or '/';
+    }
+
+    private static bool IsPathBoundary(char value) =>
+        char.IsWhiteSpace(value) || value is '"' or '\'' or '(' or '[' or '{' or '=' or ':';
+
+    private static int FindRootedPathEnd(string value, int start)
+    {
+        var quote = start > 0 && value[start - 1] is '"' or '\''
+            ? value[start - 1]
+            : '\0';
+        for (var index = start; index < value.Length; index++)
+        {
+            if (value[index] is '\r' or '\n' || quote != '\0' && value[index] == quote)
+                return index;
+        }
+        return value.Length;
+    }
+
 }

@@ -140,7 +140,7 @@ Film.censor.vtt
 
 ## Сборка
 
-Нужен .NET SDK `10.0.302`:
+Нужны .NET SDK `10.0.302`, Git и Node.js (для чтения `deps.lock.json`):
 
 ```sh
 bash scripts/restore-mpvnet.sh

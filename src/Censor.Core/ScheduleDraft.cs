@@ -247,7 +247,7 @@ public sealed class ScheduleDraft
         if (_undo.Count == 0)
             return false;
 
-        _redo.Add(_document);
+        Push(_redo, _document);
         _document = Pop(_undo);
         InvalidateValidation();
         return true;

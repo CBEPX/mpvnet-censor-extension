@@ -1,11 +1,11 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** findings первого Claude Opus 5 review исправлены локально в
-`codex/implement-censor-p0`. Проходят 64 Core-теста и Release-сборка без
-предупреждений. Осталось подтвердить Windows runtime/installer smoke в CI,
-получить чистый повторный review через Claude Opus 5 и физически проверить
-новый DLL. Полный portable/installer по-прежнему нельзя публиковать до закрытия
-source-provenance gate.
+**Статус:** findings второго Claude Opus 5 review исправлены локально в
+`codex/implement-censor-p0`. Проходят 64 Core-теста, Release-сборка без
+предупреждений и проверка закреплённой compile reference. Осталось подтвердить
+Windows runtime/installer smoke в CI, получить чистый следующий review через
+Claude Opus 5 и физически проверить новый DLL. Полный portable/installer
+по-прежнему нельзя публиковать до закрытия source-provenance gate.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения
@@ -155,13 +155,36 @@ source-provenance gate.
 Windows CI зелёные, повторный `cc review` на `claude-opus-5` не оставляет
 actionable findings.
 
+### 10. Исправления после повторного Claude Opus 5 review
+
+- Канонизировать регистронезависимый ID аудиопресета при загрузке настроек и
+  закрепить этот контракт Core-тестом до создания WinForms-окна.
+- Сериализовать сохранение настроек отдельной блокировкой: immutable snapshot
+  брать под `_stateLock`, а durable write выполнять после его освобождения.
+- Выполнять normalize/compile черновика до записи расписания, чтобы ошибка
+  подготовки filter plan не оставляла на диске неподтверждённый файл.
+- Сохранять читаемый текст ошибок в диагностическом ZIP, хешируя только
+  абсолютные пути; невалидные JSONL-строки по-прежнему заменять маркером.
+- Исправить чтение `MPV_FORMAT_FLAG`, ложный `watchdog-recovered`, имя после
+  импорта `.censor.srt/.vtt` и асимметрию redo; удалить ложную команду
+  `censor-diagnostics` из примера.
+- Удалить лишний Extension writer wrapper и generic `Dispatch` overloads,
+  объединить test helper и зафиксировать порядок блокировок. Validation cache
+  и zero-copy `Freeze` сохранить как защиту сценария с 10 000 интервалов.
+- Вернуть `compileReferenceSha256` в `deps.lock.json` и проверять реальный
+  результат сборки закреплённого чистого mpv.net source checkout.
+
+**Выход:** второй набор findings закрыт минимальными регрессионными проверками,
+два Windows CI зелёные, следующий `cc review` на `claude-opus-5` не оставляет
+actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.
 - Compiler: `[start,end)` boundaries, locale decimal separator, chunks/labels, escaping и non-zero-start timeline.
 - Lifecycle: seek/pause/speed/chapter, early interval guard, filter loss и весь cancellation/race matrix.
 - Data safety: temp/replace/backup failures, отмена dialog и exception isolation.
-- Для parser, compiler и media lifecycle запускать adversarial Claude Code Fable review через `cc`.
+- Для parser, compiler и media lifecycle запускать полный Claude Opus 5 review через `cc`.
 - Merge запрещён при `BLOCKER/HIGH`, stale-session риске либо отсутствии требуемого Windows runtime evidence.
 
 ## Вне P0
