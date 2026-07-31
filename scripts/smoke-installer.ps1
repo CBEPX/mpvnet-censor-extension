@@ -7,6 +7,10 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if ($env:GITHUB_ACTIONS -ne "true") {
+    throw "Installer smoke is CI-only because it deletes its test install and data."
+}
+
 $InstallerPath = [IO.Path]::GetFullPath($InstallerPath)
 $InstallRoot = Join-Path $env:LOCALAPPDATA "Programs/CensorPlayer"
 $DataRoot = Join-Path $env:LOCALAPPDATA "CensorPlayer"
@@ -22,11 +26,15 @@ $InstalledDll = Join-Path $ExtensionDirectory "CensorExtension.dll"
 $LegacyCore = Join-Path $ExtensionDirectory "Censor.Core.dll"
 $LegacyDeps = Join-Path $ExtensionDirectory "CensorExtension.deps.json"
 
+if ((Test-Path $InstallRoot) -or (Test-Path $DataRoot)) {
+    throw "Installer smoke refuses to overwrite an existing CensorPlayer install or data directory."
+}
+
 New-Item -ItemType Directory -Force $DataRoot | Out-Null
 "retain me" | Set-Content $Marker
 
 $Setup = Start-Process $InstallerPath `
-    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$SetupLog`"" `
+    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$InstallRoot`"", "/LOG=`"$SetupLog`"" `
     -Wait -PassThru
 if ($Setup.ExitCode -ne 0) {
     throw "Installer failed with exit code $($Setup.ExitCode)."
@@ -44,7 +52,7 @@ Add-Content $InputConfig "# installer-update-preservation-smoke"
 
 # A second silent install must replace the extension and preserve the live config.
 $Update = Start-Process $InstallerPath `
-    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$SetupLog`"" `
+    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$InstallRoot`"", "/LOG=`"$SetupLog`"" `
     -Wait -PassThru
 if ($Update.ExitCode -ne 0 -or
     -not (Test-Path $Marker -PathType Leaf) -or
@@ -86,7 +94,7 @@ if (-not (Test-Path $Marker -PathType Leaf) -or
 }
 
 $Reinstall = Start-Process $InstallerPath `
-    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/LOG=`"$SetupLog`"" `
+    -ArgumentList "/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/DIR=`"$InstallRoot`"", "/LOG=`"$SetupLog`"" `
     -Wait -PassThru
 if ($Reinstall.ExitCode -ne 0 -or
     -not (Test-Path $InstalledDll -PathType Leaf) -or

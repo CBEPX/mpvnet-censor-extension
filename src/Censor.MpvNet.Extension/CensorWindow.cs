@@ -65,6 +65,7 @@ internal sealed class CensorWindow : Form
     private ExtensionSettings _settings;
     private ScheduleDraft? _draft;
     private IReadOnlyList<CensorInterval>? _sourceIntervals;
+    private IReadOnlyList<ParseDiagnostic> _draftDiagnostics = [];
     private IReadOnlyList<ParseDiagnostic> _runtimeDiagnostics = [];
     private bool _allowClose;
     private bool _rendering;
@@ -72,13 +73,13 @@ internal sealed class CensorWindow : Form
     private string? _mediaPath;
     private string? _sourcePath;
 
-    public CensorWindow(ExtensionSettings settings, string recoveryPath)
+    public CensorWindow(ExtensionSettings settings, string localDataRoot)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(localDataRoot);
+        localDataRoot = Path.GetFullPath(localDataRoot);
         _settings = settings;
-        _recoveryPath = recoveryPath;
-        _uiStatePath = Path.Combine(
-            Directory.GetParent(Path.GetDirectoryName(recoveryPath)!)!.FullName,
-            "UiState.json");
+        _recoveryPath = Path.Combine(localDataRoot, "Recovery", "draft.json");
+        _uiStatePath = Path.Combine(localDataRoot, "UiState.json");
         Text = "CensorPlayer — редактор цензуры";
         AccessibleName = Text;
         MinimumSize = new(760, 520);
@@ -201,7 +202,18 @@ internal sealed class CensorWindow : Form
         _runtimeDiagnostics = diagnostics;
 
         if (ReferenceEquals(_sourceIntervals, intervals))
+        {
+            if (_draft is null)
+            {
+                _warnings.Items.Clear();
+                RenderDiagnostics(_runtimeDiagnostics);
+            }
+            else
+            {
+                RenderDraftSummary(_draftDiagnostics);
+            }
             return;
+        }
         if (document is not null && _draft?.Matches(document) == true)
         {
             _sourceIntervals = intervals;
@@ -839,6 +851,7 @@ internal sealed class CensorWindow : Form
             _warnings.Items.Clear();
             if (_draft is null)
             {
+                _draftDiagnostics = [];
                 _draftState.Text = "Нет черновика";
                 return;
             }
@@ -917,6 +930,7 @@ internal sealed class CensorWindow : Form
 
     private void RenderDraftSummary(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
+        _draftDiagnostics = diagnostics;
         _warnings.Items.Clear();
         foreach (var diagnostic in diagnostics.Where(item => item.Line > 0))
             _warnings.Items.Add($"#{diagnostic.Line}: {diagnostic.Message}");

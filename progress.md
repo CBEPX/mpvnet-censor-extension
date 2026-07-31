@@ -2,6 +2,24 @@
 
 ## 2026-08-01
 
+- Третий полный `cc review` на `claude-opus-5` нашёл один блокирующий риск:
+  installer smoke мог удалить настоящую локальную установку и данные. Скрипт
+  теперь работает только в GitHub Actions, отказывается идти поверх
+  существующих каталогов и закрепляет `/DIR` для каждого install/update.
+- В CI добавлена исполняемая проверка локального safety guard до настоящего
+  installer smoke.
+- Аудиопресет больше не вызывает `af remove`, если метки нет. OSD ждёт filter
+  gate не дольше 250 мс, поэтому уведомление не блокирует lifecycle.
+- Runtime diagnostics обновляются без полной перерисовки таблицы; пути recovery
+  и UI state строятся от переданного local-data root. Dispose operation token
+  выполняется под `_stateLock`, а filter gate намеренно остаётся доступным для
+  уже поставленных в очередь callbacks.
+- README очищен от удалённой команды, в Core project пояснена single-DLL
+  компиляция. Вынос apply/rollback в отдельный state machine и замена Node.js
+  не сделаны: сейчас они добавят код и второй источник сборочной логики, не
+  закрывая нового подтверждённого дефекта.
+- Локально: Release build без предупреждений, 64/64 теста — PASS. Loader smoke
+  собран, но его запуск и installer guard остаются Windows CI evidence.
 - Повторный полный `cc review` на `claude-opus-5` после первого remediation
   нашёл case-sensitive preset ID, disk I/O под `_stateLock`, потерю текста
   ошибок диагностики и запись draft до compile, а также семь low findings.
@@ -144,7 +162,7 @@
 
 ## Следующий шаг
 
-Зафиксировать и отправить исправления второго Opus-review, дождаться двух
+Зафиксировать и отправить исправления третьего Opus-review, дождаться двух
 Windows CI, затем снова выполнить полный review Claude Opus 5 через `cc`.
 После зелёного verdict физически проверить точный SHA DLL на Windows. PR
 остаётся draft; полный portable/installer не публикуется до закрытия issue #4.

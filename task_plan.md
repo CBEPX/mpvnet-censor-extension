@@ -1,11 +1,11 @@
 # План разработки Censor Extension v1.3.1
 
-**Статус:** findings второго Claude Opus 5 review исправлены локально в
-`codex/implement-censor-p0`. Проходят 64 Core-теста, Release-сборка без
-предупреждений и проверка закреплённой compile reference. Осталось подтвердить
-Windows runtime/installer smoke в CI, получить чистый следующий review через
-Claude Opus 5 и физически проверить новый DLL. Полный portable/installer
-по-прежнему нельзя публиковать до закрытия source-provenance gate.
+**Статус:** замечания третьего Claude Opus 5 review исправлены локально в
+`codex/implement-censor-p0`. Проходят 64 Core-теста и Release-сборка без
+предупреждений. Осталось подтвердить Windows runtime/installer smoke в CI,
+получить чистый review через Claude Opus 5 и физически проверить новый DLL.
+Полный portable/installer по-прежнему нельзя публиковать до закрытия
+source-provenance gate.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения
@@ -178,6 +178,25 @@ actionable findings.
 **Выход:** второй набор findings закрыт минимальными регрессионными проверками,
 два Windows CI зелёные, следующий `cc review` на `claude-opus-5` не оставляет
 actionable findings.
+
+### 11. Исправления после третьего Claude Opus 5 review
+
+- Разрешить destructive installer smoke только в GitHub Actions, отказаться
+  работать поверх существующей установки и всегда передавать тестовый `/DIR`.
+- Проверять CI-only guard отдельным исполняемым шагом до настоящего smoke.
+- Не удалять отсутствующий аудиофильтр; перед remove/add читать `af` и сохранять
+  обязательный readback после изменения.
+- Ограничить ожидание OSD на filter gate до 250 мс: потеря уведомления не должна
+  задерживать media lifecycle.
+- Обновлять runtime warnings без перерисовки 10 000 строк, передавать окну
+  корневой каталог данных напрямую и синхронизировать dispose operation token.
+- Удалить устаревшую команду из README и пояснить намеренную single-DLL
+  компиляцию Core. Node.js оставить: он читает единый `deps.lock.json`, а его
+  замена только перенесёт build dependency в другой инструмент.
+
+**Выход:** destructive smoke имеет исполняемый safety gate, локальные
+build/tests зелёные, оба Windows CI подтверждают installer/runtime, итоговый
+`cc review` на `claude-opus-5` не оставляет actionable findings.
 
 ## Обязательные проверки и review gates
 

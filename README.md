@@ -88,7 +88,6 @@ censor-mark-start / censor-mark-end
 censor-set-start / censor-set-end
 censor-previous / censor-next
 censor-save
-censor-diagnostics
 ```
 
 ## Формат расписания

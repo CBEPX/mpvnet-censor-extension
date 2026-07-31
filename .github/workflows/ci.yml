@@ -59,6 +59,24 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-release-artifacts.ps1 -ArtifactDirectory artifacts/windows/release
 
+      - name: Verify installer smoke local safety guard
+        shell: pwsh
+        run: |
+          $env:GITHUB_ACTIONS = ""
+          $blocked = $false
+          try {
+            ./scripts/smoke-installer.ps1 -InstallerPath "not-used.exe"
+          }
+          catch {
+            if ($_.Exception.Message -notlike "Installer smoke is CI-only*") {
+              throw
+            }
+            $blocked = $true
+          }
+          if (-not $blocked) {
+            throw "Installer smoke accepted local execution."
+          }
+
       - name: Smoke installer
         shell: pwsh
         run: >-

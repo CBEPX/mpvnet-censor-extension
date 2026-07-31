@@ -90,6 +90,25 @@
   и SHA-256 `4d11e8050b6185e0d49bd9e8cc661a7a59f44959a621d31d11033124c4e8a7b0`.
   CI больше не зависит от изменяемого Chocolatey-состояния Windows runner.
 
+## Третий Claude Opus 5 review
+
+- Блокирующее замечание: `smoke-installer.ps1` использовал настоящие пути
+  `%LOCALAPPDATA%` и завершался удалением данных. Исправление состоит из
+  CI-only guard, отказа работать поверх существующих каталогов и явного
+  `/DIR`; guard проверяется отдельным шагом workflow.
+- Устаревшая `censor-diagnostics` удалена из README.
+- `EnsureSavedAudioCompression` больше не удаляет отсутствующую метку, а OSD
+  не ждёт занятую цепочку фильтров бесконечно.
+- При неизменном наборе интервалов окно заново выводит runtime diagnostics из
+  кеша, не перестраивая grid. Путь `UiState.json` больше не выводится из пути
+  recovery через nullable parent traversal.
+- `_filterGate` намеренно не освобождается в `Dispose`: callbacks уже могли
+  встать в очередь до `_stopping` и должны безопасно увидеть остановку. Текущий
+  operation token освобождается под `_stateLock`.
+- Отдельный apply/rollback state machine отложен до воспроизводимого дефекта
+  или второй реализации. Node.js сохранён как минимальный читатель единого
+  `deps.lock.json`.
+
 ## Граница доказательств
 
 - Физический Windows smoke на `440269a` доказал extension API, filter timeline,

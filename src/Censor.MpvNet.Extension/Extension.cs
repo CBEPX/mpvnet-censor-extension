@@ -16,6 +16,7 @@ public sealed class Extension : IExtension, IDisposable
     private const int MaxPendingWindowActions = 32;
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly TimeSpan OsdGateTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ShutdownWaitTimeout = TimeSpan.FromSeconds(5);
 
     // Nested runtime acquisition order: _filterGate -> _stateLock -> _windowLock.
@@ -94,8 +95,10 @@ public sealed class Extension : IExtension, IDisposable
         StopRuntime(removeFilters: true);
         CloseWindow();
         _watchdog.Dispose();
-        _operationCancellation.Dispose();
+        lock (_stateLock)
+            _operationCancellation.Dispose();
         _revisions.Dispose();
+        // Queued callbacks can still observe _stopping after Dispose, so keep their gate alive.
         _log.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -1400,12 +1403,18 @@ public sealed class Extension : IExtension, IDisposable
 
     private void ApplyAudioCompressionPreset(AudioCompressionPresetDefinition preset)
     {
-        Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
-        if (!TryGetPropertyString("af", out var filters) ||
-            ContainsLabel(filters, AudioCompressionPresets.FilterLabel))
+        if (!TryGetPropertyString("af", out var filters))
+            throw new InvalidOperationException("mpv не сообщил текущее состояние компрессии звука.");
+
+        if (ContainsLabel(filters, AudioCompressionPresets.FilterLabel))
         {
-            throw new InvalidOperationException(
-                "mpv не подтвердил удаление прежнего фильтра компрессии звука.");
+            Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
+            if (!TryGetPropertyString("af", out filters) ||
+                ContainsLabel(filters, AudioCompressionPresets.FilterLabel))
+            {
+                throw new InvalidOperationException(
+                    "mpv не подтвердил удаление прежнего фильтра компрессии звука.");
+            }
         }
         if (preset.Filter is null)
             return;
@@ -1543,7 +1552,7 @@ public sealed class Extension : IExtension, IDisposable
                     {
                         using var window = new CensorWindow(
                             _settings,
-                            Path.Combine(_localDataRoot, "Recovery", "draft.json"));
+                            _localDataRoot);
                         window.ScheduleSelected += path =>
                             QueueSafely(() => LoadManualSchedule(path));
                         window.ReloadRequested += () => QueueSafely(ReloadSchedule);
@@ -1920,7 +1929,8 @@ public sealed class Extension : IExtension, IDisposable
         if (Volatile.Read(ref _stopping) != 0 || token.IsCancellationRequested)
             return;
 
-        _filterGate.Wait(CancellationToken.None);
+        if (!_filterGate.Wait(OsdGateTimeout, CancellationToken.None))
+            return;
         try
         {
             if (Volatile.Read(ref _stopping) == 0 &&
@@ -2179,16 +2189,20 @@ public sealed class Extension : IExtension, IDisposable
             try
             {
                 ActiveSchedule? active;
+                bool removeAudioFilter;
                 lock (_stateLock)
                 {
                     active = _activeSchedule;
                     _activeSchedule = null;
                     _pendingSchedule = null;
+                    removeAudioFilter =
+                        AudioCompressionPresets.Find(_settings.AudioCompressionPreset)?.Filter is not null;
                 }
                 if (removeFilters)
                 {
                     RemoveFilters(active?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
-                    Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
+                    if (removeAudioFilter)
+                        Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
                 }
             }
             finally
