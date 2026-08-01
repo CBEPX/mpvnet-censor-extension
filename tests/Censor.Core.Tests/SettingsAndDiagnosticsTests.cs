@@ -199,6 +199,9 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.Contains(
             restored.Warnings,
             warning => warning.Contains("резервная копия", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(
+            restored.Warnings,
+            warning => warning.Contains("Не удалось прочитать settings.json", StringComparison.Ordinal));
 
         var warnings = ExtensionSettingsStore.Validate(new ExtensionSettings
         {
@@ -258,6 +261,15 @@ public sealed class SettingsAndDiagnosticsTests
         File.WriteAllText(path, """{"schema":1,"document":null}""");
         var before = File.ReadAllBytes(path);
         var unreadable = DraftRecoveryStore.Load(path);
+        Assert.Equal(DraftRecoveryStatus.Unreadable, unreadable.Status);
+        Assert.NotNull(unreadable.Warning);
+        Assert.Equal(before, File.ReadAllBytes(path));
+
+        File.WriteAllText(
+            path,
+            """{"schema":1,"document":{"metadata":{},"intervals":[],"preservedHeaderLines":[null]}}""");
+        before = File.ReadAllBytes(path);
+        unreadable = DraftRecoveryStore.Load(path);
         Assert.Equal(DraftRecoveryStatus.Unreadable, unreadable.Status);
         Assert.NotNull(unreadable.Warning);
         Assert.Equal(before, File.ReadAllBytes(path));

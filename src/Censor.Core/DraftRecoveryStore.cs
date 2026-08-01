@@ -59,7 +59,8 @@ public static class DraftRecoveryStore
                 document.Metadata is null ||
                 document.Intervals is null ||
                 document.PreservedHeaderLines is null ||
-                document.Intervals.Any(interval => interval is null))
+                document.Intervals.Any(interval => interval is null) ||
+                document.PreservedHeaderLines.Any(line => line is null))
             {
                 return new(
                     DraftRecoveryStatus.Unreadable,

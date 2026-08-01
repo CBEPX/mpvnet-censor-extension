@@ -91,7 +91,11 @@ public static class ExtensionSettingsStore
                 var backup = LoadFile(backupPath);
                 return new(
                     backup.Settings,
-                    [$"Основной settings.json повреждён. Загружена резервная копия.", .. backup.Warnings]);
+                    [
+                        primaryWarning,
+                        "Основной settings.json повреждён. Загружена резервная копия.",
+                        .. backup.Warnings,
+                    ]);
             }
             catch (Exception backupException) when (
                 backupException is IOException or UnauthorizedAccessException or JsonException)

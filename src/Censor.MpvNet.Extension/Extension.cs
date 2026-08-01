@@ -87,17 +87,29 @@ public sealed class Extension : IExtension, IDisposable
             _log.Dispose();
             throw;
         }
-        _watchdog = new(CheckFilters, null, Timeout.Infinite, Timeout.Infinite);
-        Player.StartFile += OnStartFile;
-        Player.FileLoaded += OnFileLoaded;
-        Player.EndFile += OnEndFile;
-        Player.Shutdown += OnShutdown;
-        Player.ClientMessage += OnClientMessage;
-        Global.Player.Shutdown += OnShutdown;
-        Player.ObservePropertyString("vf", OnFiltersChanged);
-        if (_settings.WatchdogEnabled)
-            _watchdog.Change(_settings.WatchdogIntervalMs, _settings.WatchdogIntervalMs);
-        Player.SetPropertyString(ReadyProperty, "yes");
+        System.Threading.Timer? watchdog = null;
+        try
+        {
+            watchdog = new(CheckFilters, null, Timeout.Infinite, Timeout.Infinite);
+            _watchdog = watchdog;
+            Player.StartFile += OnStartFile;
+            Player.FileLoaded += OnFileLoaded;
+            Player.EndFile += OnEndFile;
+            Player.Shutdown += OnShutdown;
+            Player.ClientMessage += OnClientMessage;
+            Global.Player.Shutdown += OnShutdown;
+            Player.ObservePropertyString("vf", OnFiltersChanged);
+            if (_settings.WatchdogEnabled)
+                _watchdog.Change(_settings.WatchdogIntervalMs, _settings.WatchdogIntervalMs);
+            Player.SetPropertyString(ReadyProperty, "yes");
+        }
+        catch
+        {
+            UnsubscribePlayerEvents();
+            watchdog?.Dispose();
+            _log.Dispose();
+            throw;
+        }
     }
 
     public MpvClient Player { get; }
@@ -107,12 +119,7 @@ public sealed class Extension : IExtension, IDisposable
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
 
-        Player.StartFile -= OnStartFile;
-        Player.FileLoaded -= OnFileLoaded;
-        Player.EndFile -= OnEndFile;
-        Player.Shutdown -= OnShutdown;
-        Player.ClientMessage -= OnClientMessage;
-        Global.Player.Shutdown -= OnShutdown;
+        UnsubscribePlayerEvents();
 
         StopRuntime(removeFilters: true);
         CloseWindow();
@@ -126,6 +133,21 @@ public sealed class Extension : IExtension, IDisposable
         // _stopping after Dispose, so keep their gate alive for the remaining process lifetime.
         _log.Dispose();
         GC.SuppressFinalize(this);
+    }
+
+    private void UnsubscribePlayerEvents()
+    {
+        Player.StartFile -= OnStartFile;
+        Player.FileLoaded -= OnFileLoaded;
+        Player.EndFile -= OnEndFile;
+        Player.Shutdown -= OnShutdown;
+        Player.ClientMessage -= OnClientMessage;
+        Global.Player.Shutdown -= OnShutdown;
+        lock (Player.StringPropChangeActions)
+        {
+            if (Player.StringPropChangeActions.TryGetValue("vf", out var actions))
+                actions.Remove(OnFiltersChanged);
+        }
     }
 
     private void OnStartFile() => RunSafely(() => BeginSession("NO SCHEDULE"));
@@ -1080,7 +1102,6 @@ public sealed class Extension : IExtension, IDisposable
         var savedHash = ComputeHash(savedBytes);
 
         var markWindowSaved = false;
-        var updateRuntime = false;
         var saveSettings = false;
         string? savedScheduleDirectory;
         _filterGate.Wait();
@@ -1095,7 +1116,6 @@ public sealed class Extension : IExtension, IDisposable
                     _pendingSchedule is not null,
                     _activeSchedule is not null);
                 markWindowSaved = decision.MarkWindowSaved;
-                updateRuntime = decision.UpdateRuntime;
                 switch (decision.RuntimeAction)
                 {
                     case SavedDraftRuntimeAction.ClearPending:
@@ -1158,8 +1178,6 @@ public sealed class Extension : IExtension, IDisposable
                 if (IsCurrent(saveTicket))
                     window.MarkSaved(path, document, savedScheduleDirectory);
             });
-            if (updateRuntime)
-                UpdateWindow("SAVED", saveTicket);
         }
         Show(markWindowSaved
             ? $"Файл {Path.GetFileName(path)} сохранён."

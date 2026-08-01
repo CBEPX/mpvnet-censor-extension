@@ -93,6 +93,9 @@ SPDX SBOM.
 аудиофильтры. Для обработки нужен декодированный PCM-звук: при HDMI/S/PDIF
 passthrough компрессия не работает.
 
+Префикс видеофильтров `@censor_blur_*` зарезервирован расширением. Не
+используйте его для собственных фильтров `vf`.
+
 Расширение принимает следующие сообщения `script-message`:
 
 ```text
@@ -165,6 +168,9 @@ dotnet restore CensorPlayer.sln --locked-mode
 dotnet build CensorPlayer.sln --configuration Release --no-restore
 dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 ```
+
+Скрипт подготовки зависимости для сборки работает на macOS arm64 и Windows
+x64. Сборка на Linux пока не поддерживается.
 
 Чтобы собрать пакет для Windows:
 

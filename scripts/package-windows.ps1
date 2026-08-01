@@ -45,6 +45,13 @@ if (-not $OutputRoot.Equals($ArtifactsRoot, [StringComparison]::OrdinalIgnoreCas
     throw "OutputDirectory must resolve to $ArtifactsRoot or one of its subdirectories."
 }
 if ([string]::IsNullOrWhiteSpace($Commit)) {
+    $Dirty = @(& git -C $RepoRoot status --porcelain --untracked-files=all)
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to inspect the Git working tree."
+    }
+    if ($Dirty.Count -ne 0) {
+        throw "Working tree must be clean when Commit is omitted."
+    }
     $Commit = (& git -C $RepoRoot rev-parse HEAD).Trim()
 }
 if ($Commit -notmatch '^[0-9a-fA-F]{40}$') {
