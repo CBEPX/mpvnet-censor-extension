@@ -321,7 +321,9 @@ internal sealed class CensorWindow : Form
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;
-        PopulateSettings(settings);
+        SetBlurPreset(settings.Blur);
+        SetAudioCompressionPreset(settings.AudioCompressionPreset);
+        PopulateSettings(_settings);
     }
 
     public void HandleAuthoringCommand(string command, long? capturedTimeMs = null)
@@ -905,6 +907,8 @@ internal sealed class CensorWindow : Form
                 .Select(item => item.Line - 1)
                 .ToHashSet();
             var intervals = _draft.Document.Intervals;
+            // ponytail: Full rebuild targets normal 10–20-scene drafts; use
+            // VirtualMode only if measured projects grow beyond that workload.
             for (var index = 0; index < intervals.Count; index++)
             {
                 var rowIndex = _intervals.Rows.Add();
@@ -1063,7 +1067,7 @@ internal sealed class CensorWindow : Form
 
         if (MessageBox.Show(
                 this,
-                "Файл settings.json создан более новой версией CensorPlayer. Перезаписать его настройками, которые сейчас показаны в окне? Неизвестные параметры будут удалены, а исходный файл останется в settings.json.bak.",
+                "Файл settings.json создан более новой версией CensorPlayer. Перезаписать его настройками, которые сейчас показаны в окне? Неизвестные параметры будут удалены, а исходный файл останется в settings.json.pre-repair.",
                 "CensorPlayer",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,

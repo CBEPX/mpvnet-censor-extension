@@ -10,11 +10,12 @@ public sealed class ScheduleTextTests
     [Theory]
     [InlineData("00:00:01.250", 1_250)]
     [InlineData("-00:00:01.250", -1_250)]
+    [InlineData("100:00:00.000", 360_000_000)]
     public void ParsesDraftTimestampsRenderedByTheEditor(string text, long expected)
     {
         Assert.True(ScheduleText.TryParseDraftTimestamp(text, out var actual));
         Assert.Equal(expected, actual);
-        if (expected < 0)
+        if (expected < 0 || expected >= 360_000_000)
             Assert.False(ScheduleText.TryParseTimestamp(text, out _));
     }
 
@@ -93,13 +94,16 @@ public sealed class ScheduleTextTests
         const string text = """
             # media-duration-ms: 2000
             # см. https://example.com
+            # note: handwritten comment
             00:00:01.000 --> 00:00:02.000
             """;
 
         var result = ScheduleText.Parse(text);
 
         Assert.True(result.IsSuccess);
-        Assert.Equal(["# см. https://example.com"], result.Document!.PreservedHeaderLines);
+        Assert.Equal(
+            ["# см. https://example.com", "# note: handwritten comment"],
+            result.Document!.PreservedHeaderLines);
         Assert.DoesNotContain(
             result.Diagnostics,
             diagnostic => diagnostic.Message.Contains("Неизвестное необязательное поле metadata", StringComparison.Ordinal));

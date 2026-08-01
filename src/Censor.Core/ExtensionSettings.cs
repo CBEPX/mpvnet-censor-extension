@@ -120,6 +120,24 @@ public static class ExtensionSettingsStore
             Path.GetFullPath(path) + ".bak");
     }
 
+    public static void SaveAfterRepair(string path, ExtensionSettings settings)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        ArgumentNullException.ThrowIfNull(settings);
+        var warnings = Validate(settings);
+        if (warnings.Count > 0)
+            throw new ArgumentException(string.Join(" ", warnings), nameof(settings));
+
+        var fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath))
+            throw new FileNotFoundException("Исходный settings.json для восстановления не найден.", fullPath);
+        AtomicFile.Write(
+            fullPath + ".pre-repair",
+            File.ReadAllBytes(fullPath),
+            createDirectory: false);
+        Save(fullPath, settings);
+    }
+
     public static ExtensionSettings ConvertToCurrentSchema(ExtensionSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);

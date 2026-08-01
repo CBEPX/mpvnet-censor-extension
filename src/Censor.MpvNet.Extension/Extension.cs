@@ -541,7 +541,14 @@ public sealed class Extension : IExtension, IDisposable
                 new Dictionary<string, object?> { ["error"] = ProtectError(exception, schedulePath) },
                 ExtensionLogLevel.Error);
             if (UpdateWindow("ERROR", ticket, token))
-                Show("Не удалось загрузить или применить расписание. Подробности — в журнале mpv.net.", ticket, token);
+            {
+                Show(
+                    exception is DecoderFallbackException
+                        ? "Не удалось прочитать расписание: сохраните файл в кодировке UTF-8."
+                        : "Не удалось загрузить или применить расписание. Подробности — в журнале mpv.net.",
+                    ticket,
+                    token);
+            }
         }
     }
 
@@ -902,7 +909,7 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         InvokeWindow(window => window.SetSettings(settings));
-        if (SaveSettings())
+        if (SaveSettings(preserveBeforeRepair: true))
         {
             Show("Файл настроек перезаписан в формате этой версии CensorPlayer.");
             return;
@@ -1020,47 +1027,47 @@ public sealed class Extension : IExtension, IDisposable
         {
             lock (_stateLock)
             {
-                if (IsCurrent(saveTicket))
+                var decision = DraftReconciliation.DecideAfterSave(
+                    IsCurrent(saveTicket),
+                    sourceMatchesCurrent,
+                    plan.Chunks.Count == 0,
+                    _pendingSchedule is not null,
+                    _activeSchedule is not null);
+                markWindowSaved = decision.MarkWindowSaved;
+                updateRuntime = decision.UpdateRuntime;
+                switch (decision.RuntimeAction)
                 {
-                    markWindowSaved = true;
-                    if (sourceMatchesCurrent)
+                    case SavedDraftRuntimeAction.ClearPending:
+                        _pendingSchedule = null;
+                        break;
+                    case SavedDraftRuntimeAction.UpdatePending when _pendingSchedule is { } pending:
+                        _pendingSchedule = pending with
+                        {
+                            SchedulePath = path,
+                            SourceHash = savedHash,
+                            Document = document,
+                            Plan = plan,
+                            Intervals = normalized,
+                        };
+                        break;
+                    case SavedDraftRuntimeAction.StageFromActive:
+                        _pendingSchedule = new(
+                            saveTicket,
+                            path,
+                            savedHash,
+                            document,
+                            plan,
+                            normalized,
+                            []);
+                        break;
+                }
+                if (decision.UpdateRuntime && _activeSchedule is { } active)
+                {
+                    _activeSchedule = active with
                     {
-                        if (plan.Chunks.Count == 0)
-                        {
-                            _pendingSchedule = null;
-                        }
-                        else if (_pendingSchedule is not null)
-                        {
-                            _pendingSchedule = _pendingSchedule with
-                            {
-                                SchedulePath = path,
-                                SourceHash = savedHash,
-                                Document = document,
-                                Plan = plan,
-                                Intervals = normalized,
-                            };
-                        }
-                        else if (_activeSchedule is not null)
-                        {
-                            _pendingSchedule = new(
-                                saveTicket,
-                                path,
-                                savedHash,
-                                document,
-                                plan,
-                                normalized,
-                                []);
-                        }
-                        if (_activeSchedule is not null)
-                        {
-                            _activeSchedule = _activeSchedule with
-                            {
-                                SchedulePath = path,
-                                SourceHash = savedHash,
-                            };
-                        }
-                        updateRuntime = true;
-                    }
+                        SchedulePath = path,
+                        SourceHash = savedHash,
+                    };
                 }
                 if (_settings.RememberLastScheduleDirectory)
                 {
@@ -2059,7 +2066,7 @@ public sealed class Extension : IExtension, IDisposable
         return result;
     }
 
-    private bool SaveSettings()
+    private bool SaveSettings(bool preserveBeforeRepair = false)
     {
         try
         {
@@ -2068,7 +2075,10 @@ public sealed class Extension : IExtension, IDisposable
                 ExtensionSettings settings;
                 lock (_stateLock)
                     settings = _settings;
-                ExtensionSettingsStore.Save(_settingsPath, settings);
+                if (preserveBeforeRepair)
+                    ExtensionSettingsStore.SaveAfterRepair(_settingsPath, settings);
+                else
+                    ExtensionSettingsStore.Save(_settingsPath, settings);
             }
             return true;
         }
@@ -2224,6 +2234,8 @@ public sealed class Extension : IExtension, IDisposable
                 return;
             }
 
+            // ponytail: String readback is trivial for normal 10–20-scene plans;
+            // scan the native buffer only if measured schedules grow beyond that.
             if (!TryGetPropertyString("vf", out var filters))
             {
                 var readFailures = Interlocked.Increment(ref _vfReadFailures);
@@ -2231,7 +2243,7 @@ public sealed class Extension : IExtension, IDisposable
                     Terminal.WriteError("Не удалось прочитать vf и определить состояние автовосстановления.", LogModule);
                 if (readFailures == MaxRecoveryFailures)
                     QueueShow(
-                        "Не удалось прочитать цепочку видеофильтров. Автовосстановление остановлено.");
+                        "Не удалось прочитать цепочку видеофильтров. Автовосстановление продолжит попытки.");
                 return;
             }
 

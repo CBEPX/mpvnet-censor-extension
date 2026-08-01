@@ -273,6 +273,26 @@
   настоящий закреплённый mpv.net, а dual-compile Core, loader и аудиографы
   остаются отдельными Windows gates.
 
+## Двенадцатый Claude Opus 5 review
+
+- Verdict повторного полного прохода на `f0b4260` — `ship-able`; оба Windows CI
+  `30679852270` и `30679853687` зелёные, включая installer и runtime smoke.
+- Save reconciliation вынесен в уже существующий `DraftReconciliation` и
+  покрыт всеми состояниями без создания fake-mpv слоя. Runtime I/O остаётся в
+  extension, чистое решение теперь проверяется Core-тестом.
+- Strict UTF-8 сохранён, но `DecoderFallbackException` даёт понятную инструкцию
+  пересохранить файл. Draft parser читает собственное отображение времени после
+  99 часов, а обычный `# note:` сохраняется без ложного metadata warning.
+- Явный repair сначала сохраняет точные исходные байты в
+  `settings.json.pre-repair`. Последующие обычные сохранения меняют только
+  rolling `.bak`; форма после SetSettings синхронизирует blur и audio ComboBox.
+- Сообщение о сбое чтения `vf` теперь честно говорит о продолжении попыток.
+  Normalizer возвращает массив и не публикует внутренний mutable list.
+- Замечания о предельном объёме grid и большом `vf` относятся к защитному
+  входному пределу, а не пользовательской нагрузке. Для обычных 10–20 сцен сохранён
+  простой код; места возможного перехода к VirtualMode/native scan отмечены
+  `ponytail`-комментариями.
+
 ## Граница доказательств
 
 - Физический Windows smoke на `440269a` доказал extension API, filter timeline,

@@ -184,7 +184,7 @@ public static class ScheduleText
             }
             return false;
         }
-        return true;
+        return key.Contains('-');
     }
 
     public static string Serialize(ScheduleDocument document)
@@ -265,14 +265,37 @@ public static class ScheduleText
         ReadOnlySpan<char> value,
         out long milliseconds)
     {
+        milliseconds = 0;
         var negative = value.Length > 0 && value[0] == '-';
         if (negative)
             value = value[1..];
-        if (!TryParseTimestamp(value, out milliseconds))
+        var firstColon = value.IndexOf(':');
+        if (firstColon < 2 || value.Length - firstColon != 10)
             return false;
-        if (negative)
-            milliseconds = -milliseconds;
-        return true;
+        var tail = value[firstColon..];
+        if (tail[3] != ':' || tail[6] is not ('.' or ',') ||
+            !long.TryParse(value[..firstColon], NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
+            !int.TryParse(tail.Slice(1, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
+            !int.TryParse(tail.Slice(4, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            !int.TryParse(tail.Slice(7, 3), NumberStyles.None, CultureInfo.InvariantCulture, out var millis) ||
+            minutes > 59 || seconds > 59)
+        {
+            return false;
+        }
+
+        try
+        {
+            milliseconds = checked(
+                ((hours * 60 + minutes) * 60 + seconds) * 1_000 + millis);
+            if (negative)
+                milliseconds = checked(-milliseconds);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            milliseconds = 0;
+            return false;
+        }
     }
 
     internal static string FormatTimestamp(long milliseconds)

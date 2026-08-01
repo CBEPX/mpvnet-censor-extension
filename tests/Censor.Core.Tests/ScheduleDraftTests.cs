@@ -80,6 +80,22 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void SavedDraftReconciliationSeparatesFileSuccessFromRuntimeMutation()
+    {
+        Assert.Equal(default, DraftReconciliation.DecideAfterSave(false, true, false, true, true));
+        Assert.Equal(new(true, false, SavedDraftRuntimeAction.None),
+            DraftReconciliation.DecideAfterSave(true, false, false, true, true));
+        Assert.Equal(new(true, true, SavedDraftRuntimeAction.ClearPending),
+            DraftReconciliation.DecideAfterSave(true, true, true, true, true));
+        Assert.Equal(new(true, true, SavedDraftRuntimeAction.UpdatePending),
+            DraftReconciliation.DecideAfterSave(true, true, false, true, true));
+        Assert.Equal(new(true, true, SavedDraftRuntimeAction.StageFromActive),
+            DraftReconciliation.DecideAfterSave(true, true, false, false, true));
+        Assert.Equal(new(true, true, SavedDraftRuntimeAction.None),
+            DraftReconciliation.DecideAfterSave(true, true, false, false, false));
+    }
+
+    [Fact]
     public void InvalidDraftCanBeCorrectedButCannotBeConsideredValid()
     {
         var draft = new ScheduleDraft(Document(new CensorInterval(1_000, 2_000)));

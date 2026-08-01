@@ -41,7 +41,7 @@ public static class ScheduleNormalizer
         });
 
         if (adjusted.Count < 2)
-            return adjusted;
+            return adjusted.ToArray();
 
         var merged = new List<NormalizedInterval>(adjusted.Count);
         var current = adjusted[0];
@@ -59,7 +59,7 @@ public static class ScheduleNormalizer
         }
 
         merged.Add(current);
-        return merged;
+        return merged.ToArray();
     }
 
     private static void Validate(NormalizationOptions options)

@@ -41,12 +41,16 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.Equal(InvalidSettings, File.ReadAllText(path));
 
         var converted = ExtensionSettingsStore.ConvertToCurrentSchema(invalid.Settings);
-        ExtensionSettingsStore.Save(path, converted);
+        ExtensionSettingsStore.SaveAfterRepair(path, converted);
         var repairedJson = File.ReadAllText(path);
         Assert.Contains("\"schema\": 1", repairedJson, StringComparison.Ordinal);
         Assert.DoesNotContain("futureRoot", repairedJson, StringComparison.Ordinal);
         Assert.DoesNotContain("futureLimit", repairedJson, StringComparison.Ordinal);
         Assert.Equal(InvalidSettings, File.ReadAllText(path + ".bak"));
+        Assert.Equal(InvalidSettings, File.ReadAllText(path + ".pre-repair"));
+
+        ExtensionSettingsStore.Save(path, converted with { Blur = BlurSettings.Maximum });
+        Assert.Equal(InvalidSettings, File.ReadAllText(path + ".pre-repair"));
     }
 
     [Fact]

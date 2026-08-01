@@ -342,6 +342,26 @@ Windows CI, затем полный `cc review` на `claude-opus-5` без acti
 **Выход:** локальные gates, оба Windows CI и новый полный Opus-review проходят
 без actionable findings.
 
+### 20. Исправления после двенадцатого Claude Opus 5 review
+
+- Вынести чистое решение save/runtime reconciliation в существующий Core helper
+  и покрыть stale, detached, pending, active и empty-plan ветви.
+- Для не-UTF-8 расписаний показывать конкретное исправимое сообщение, сохраняя
+  строгий UTF-8 контракт формата.
+- Перед явным repair future-schema сохранять точную отдельную копию
+  `settings.json.pre-repair`; обычный rolling `.bak` больше не является
+  обещанным архивом исходного формата.
+- Не заявлять остановку watchdog, если чтение `vf` продолжает повторяться.
+- Сохранить простую полную перерисовку grid и строковый `vf` readback для
+  реальной нагрузки 10–20 сцен; оставить `ponytail`-границу перехода к
+  VirtualMode/native scanning только после измеренного роста.
+- Закрыть малые round-trip замечания: variable-hour draft timestamp, обычный
+  комментарий `note:`, immutable normalizer result и обновление обоих ComboBox
+  после repair/rollback настроек.
+
+**Выход:** 84 Core-теста, оба Windows CI и следующий полный Opus-review без
+практических findings в согласованной P0-нагрузке.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

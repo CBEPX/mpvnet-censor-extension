@@ -41,6 +41,13 @@
   blocking defects. Исправлены гонка smoke при быстром push-recovery, тихое
   stale-save, нулевая позиция новой сцены, UI-thread OSD wait, сообщение
   future-schema и утечка parser message без diagnostics consent.
+- Commit `f0b4260` подтверждён Windows push `30679852270` и PR
+  `30679853687`: installer выполняется на чистом runner state, затем настоящий
+  mpv.net runtime применяет, восстанавливает и отключает blur.
+- Двенадцатый полный Opus-review признал ветку `ship-able`. Практические
+  замечания закрыты точным pre-repair backup, UTF-8 UX, честным watchdog OSD,
+  variable-hour round-trip, ComboBox refresh и тестируемой save policy.
+  Виртуализация и native scan не добавлены для обычных 10–20 сцен.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.
