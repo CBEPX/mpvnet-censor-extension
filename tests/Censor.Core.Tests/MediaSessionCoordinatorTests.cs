@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using Censor.Core;
 
 namespace Censor.Core.Tests;
@@ -32,5 +33,20 @@ public sealed class MediaSessionCoordinatorTests
         Assert.False(gate.SessionToken.IsCancellationRequested);
         Assert.False(gate.IsCurrentMediaSession(media));
         Assert.True(gate.IsCurrent(nextMedia));
+    }
+
+    [Fact]
+    public void ConcurrentMediaSessionsKeepIdsUniqueAndLatestTicketCurrent()
+    {
+        using var gate = new MediaSessionCoordinator();
+        var tickets = new ConcurrentBag<OperationTicket>();
+
+        Parallel.For(0, 64, _ => tickets.Add(gate.BeginMediaSession()));
+
+        var ordered = tickets.OrderBy(ticket => ticket.MediaSessionId).ToArray();
+        Assert.Equal(64, ordered.Select(ticket => ticket.MediaSessionId).Distinct().Count());
+        Assert.Equal(64, ordered.Select(ticket => ticket.OperationRevision).Distinct().Count());
+        Assert.True(gate.IsCurrent(ordered[^1]));
+        Assert.All(ordered[..^1], ticket => Assert.False(gate.IsCurrent(ticket)));
     }
 }

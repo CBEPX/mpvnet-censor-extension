@@ -1008,6 +1008,22 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
+        if (!SaveSettings())
+        {
+            var reverted = false;
+            lock (_stateLock)
+            {
+                if (ReferenceEquals(_settings, settings))
+                {
+                    _settings = previousSettings;
+                    reverted = true;
+                }
+            }
+            if (reverted)
+                InvokeWindow(window => window.SetSettings(previousSettings));
+            return;
+        }
+
         InvokeWindow(window => window.SetSettings(settings));
         try
         {
@@ -1019,12 +1035,9 @@ public sealed class Extension : IExtension, IDisposable
             Volatile.Read(ref _stopping) != 0 || Volatile.Read(ref _disposed) != 0)
         {
         }
-        if (SaveSettings())
-        {
-            Show(normalizationChanged && hasSchedule
-                ? "Настройки сохранены. Запас до и после интервала и порог объединения применятся после перезагрузки расписания."
-                : "Настройки сохранены.");
-        }
+        Show(normalizationChanged && hasSchedule
+            ? "Настройки сохранены. Запас до и после интервала и порог объединения применятся после перезагрузки расписания."
+            : "Настройки сохранены.");
     }
 
     private void RepairSettings()
@@ -1185,6 +1198,7 @@ public sealed class Extension : IExtension, IDisposable
 
         var markWindowSaved = false;
         var saveSettings = false;
+        var runtimeAction = SavedDraftRuntimeAction.None;
         string? savedScheduleDirectory;
         // This gate prevents ApplyAsync from committing between the save decision
         // and the corresponding pending/active state update.
@@ -1200,6 +1214,7 @@ public sealed class Extension : IExtension, IDisposable
                     _pendingSchedule is not null,
                     _activeSchedule is not null);
                 markWindowSaved = decision.MarkWindowSaved;
+                runtimeAction = decision.RuntimeAction;
                 switch (decision.RuntimeAction)
                 {
                     case SavedDraftRuntimeAction.ClearPending:
@@ -1255,6 +1270,8 @@ public sealed class Extension : IExtension, IDisposable
         }
         if (saveSettings)
             SaveSettings(skipUnsupportedSchema: true);
+        if (runtimeAction == SavedDraftRuntimeAction.StageFromActive)
+            UpdateWindow("READY TO APPLY", saveTicket);
         var windowMarkedSaved = markWindowSaved && TryMarkWindowSaved(
             path,
             document,
@@ -1483,7 +1500,7 @@ public sealed class Extension : IExtension, IDisposable
     {
         string? path;
         lock (_stateLock)
-            path = _activeSchedule?.SchedulePath;
+            path = _pendingSchedule?.SchedulePath ?? _activeSchedule?.SchedulePath;
         if (path is null)
         {
             UpdateWindow("NO SCHEDULE TO RELOAD");
@@ -1502,8 +1519,10 @@ public sealed class Extension : IExtension, IDisposable
     {
         ActiveSchedule? active = null;
         PendingSchedule? pending = null;
+        PendingSchedule? previousPending = null;
         FilterPlan? activePlan = null;
         BlurSettings previousBlur;
+        BlurSettings previousSelection;
         BlurSettings settings;
         CancellationToken token = default;
         OperationTicket ticket = default;
@@ -1522,7 +1541,8 @@ public sealed class Extension : IExtension, IDisposable
             if (!useCurrentSelection && !selectionChanged)
                 return;
 
-            previousBlur = _activeSchedule?.Plan.Blur ?? _settings.Blur;
+            previousSelection = _settings.Blur;
+            previousBlur = _activeSchedule?.Plan.Blur ?? previousSelection;
             hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
             loadInProgress = _scheduleLoadTicket is { } loadTicket &&
                 _revisions.IsCurrent(loadTicket);
@@ -1538,6 +1558,7 @@ public sealed class Extension : IExtension, IDisposable
                 // ponytail: Compiling under the state lock is bounded and trivial for
                 // normal 10–20-scene plans; revisit only if measured workloads grow.
                 var pendingPlan = FilterCompiler.Compile(currentPending.Intervals, settings);
+                previousPending = currentPending;
                 // Invalidate an ApplyPendingScheduleAsync snapshot before replacing its plan.
                 var operation = BeginOperationUnsafe(clearPending: false, scheduleLoad: false);
                 ticket = operation.Ticket;
@@ -1573,29 +1594,45 @@ public sealed class Extension : IExtension, IDisposable
         if (previousCancellation is not null)
             CancelSupersededOperation(previousCancellation);
 
+        if (selectionChanged && !SaveSettings())
+        {
+            var reverted = false;
+            lock (_stateLock)
+            {
+                if (IsCurrent(ticket) && _settings.Blur == settings)
+                {
+                    _settings = _settings with { Blur = previousSelection };
+                    if (previousPending is not null &&
+                        _pendingSchedule?.Ticket == ticket)
+                    {
+                        _pendingSchedule = previousPending with { Ticket = ticket };
+                    }
+                    reverted = true;
+                }
+            }
+            if (reverted)
+                InvokeWindow(window => window.SetBlurPreset(previousSelection));
+            return;
+        }
+
         if (loadInProgress)
         {
-            if (selectionChanged && SaveSettings())
-            {
+            if (selectionChanged)
                 Show("Пресет размытия сохранён. Текущая загрузка расписания продолжится.");
-            }
             return;
         }
 
         if (!hasMedia)
         {
-            if (selectionChanged && SaveSettings())
-            {
+            if (selectionChanged)
                 Show("Пресет размытия сохранён и применится после открытия фильма.");
-            }
             return;
         }
 
         if (pending is not null)
         {
-            var saved = !selectionChanged || SaveSettings();
             UpdateWindow("READY TO APPLY", ticket, token);
-            if (selectionChanged && saved)
+            if (selectionChanged)
             {
                 Show(
                     "Новый пресет размытия сохранён. Чтобы применить его к подготовленному расписанию, нажмите «Применить».",
@@ -1606,11 +1643,7 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         if (active is null)
-        {
-            if (selectionChanged)
-                SaveSettings();
             return;
-        }
 
         UpdateWindow("APPLYING", ticket, token);
         _ = ApplyBlurPresetAsync(
@@ -1659,16 +1692,12 @@ public sealed class Extension : IExtension, IDisposable
                 active.Intervals,
                 active.Diagnostics,
                 token).ConfigureAwait(false);
-            if (UpdateWindow("ACTIVE", ticket, token))
-                SaveSettings();
-            else
-                SaveBlurPresetIfStillSelected(requestedBlur);
+            UpdateWindow("ACTIVE", ticket, token);
         }
         catch (Exception exception) when (
             token.IsCancellationRequested &&
             exception is OperationCanceledException or ObjectDisposedException)
         {
-            SaveBlurPresetIfStillSelected(requestedBlur);
         }
         catch (Exception exception)
         {
@@ -1701,16 +1730,6 @@ public sealed class Extension : IExtension, IDisposable
         InvokeWindow(window => window.SetBlurPreset(previousBlur));
         SaveSettings();
         return true;
-    }
-
-    private void SaveBlurPresetIfStillSelected(BlurSettings requestedBlur)
-    {
-        lock (_stateLock)
-        {
-            if (Volatile.Read(ref _stopping) != 0 || _settings.Blur != requestedBlur)
-                return;
-        }
-        SaveSettings();
     }
 
     private void ChangeAudioCompressionPreset(string presetId)
@@ -1767,26 +1786,23 @@ public sealed class Extension : IExtension, IDisposable
             _filterGate.Release();
         }
 
-        if (!hasMedia)
-        {
-            if (!SaveSettings())
-                return;
-            _log.Write(
-                "audio-preset-saved",
-                _revisions.Snapshot(),
-                new Dictionary<string, object?> { ["presetId"] = preset.Id });
-            Show($"Пресет «{preset.DisplayName}» будет применён после открытия фильма.");
-            return;
-        }
-
         if (applyError is null)
         {
-            SaveSettings();
+            if (!SaveSettings())
+            {
+                RollbackAudioPresetAfterSettingsWriteFailure(
+                    preset,
+                    previousPreset,
+                    restoreFilter: hasMedia);
+                return;
+            }
             _log.Write(
-                "audio-preset-applied",
+                hasMedia ? "audio-preset-applied" : "audio-preset-saved",
                 _revisions.Snapshot(),
                 new Dictionary<string, object?> { ["presetId"] = preset.Id });
-            Show($"Компрессия звука: {preset.DisplayName}.");
+            Show(hasMedia
+                ? $"Компрессия звука: {preset.DisplayName}."
+                : $"Пресет «{preset.DisplayName}» будет применён после открытия фильма.");
             return;
         }
 
@@ -1807,6 +1823,59 @@ public sealed class Extension : IExtension, IDisposable
         Show(rollbackError is null
             ? $"Не удалось применить компрессию звука. Возвращён пресет «{previousPreset.DisplayName}»."
             : "Не удалось применить или восстановить компрессию звука. Проверьте аудиофильтры.");
+    }
+
+    private void RollbackAudioPresetAfterSettingsWriteFailure(
+        AudioCompressionPresetDefinition requestedPreset,
+        AudioCompressionPresetDefinition previousPreset,
+        bool restoreFilter)
+    {
+        var reverted = false;
+        Exception? rollbackError = null;
+        _filterGate.Wait();
+        try
+        {
+            lock (_stateLock)
+            {
+                if (_settings.AudioCompressionPreset != requestedPreset.Id)
+                    return;
+            }
+            if (restoreFilter)
+                ApplyAudioCompressionPreset(previousPreset);
+            lock (_stateLock)
+            {
+                if (_settings.AudioCompressionPreset == requestedPreset.Id)
+                {
+                    _settings = _settings with
+                    {
+                        AudioCompressionPreset = previousPreset.Id,
+                    };
+                    reverted = true;
+                }
+            }
+            ResetAudioWatchdogState();
+        }
+        catch (Exception exception)
+        {
+            rollbackError = exception;
+        }
+        finally
+        {
+            _filterGate.Release();
+        }
+
+        if (reverted)
+            InvokeWindow(window => window.SetAudioCompressionPreset(previousPreset.Id));
+        if (rollbackError is null)
+            return;
+
+        Terminal.WriteError(rollbackError, LogModule);
+        _log.Write(
+            "audio-preset-persistence-rollback-error",
+            _revisions.Snapshot(),
+            new Dictionary<string, object?> { ["error"] = ProtectError(rollbackError) },
+            ExtensionLogLevel.Error);
+        Show("Не удалось вернуть прежний пресет после ошибки сохранения настроек. Проверьте аудиофильтры.");
     }
 
     private void EnsureSavedAudioCompression()

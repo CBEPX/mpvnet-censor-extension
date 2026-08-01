@@ -42,9 +42,9 @@ if [[ ! -d "$source_dir/.git" ]]; then
   git clone --depth 1 --branch "$tag" https://github.com/mpvnet-player/mpv.net.git "$source_dir"
 fi
 
-if ! git -C "$source_dir" diff --quiet ||
-  ! git -C "$source_dir" diff --cached --quiet; then
-  echo "mpv.net source checkout contains tracked modifications" >&2
+if [[ -n "$(git -C "$source_dir" status --porcelain --untracked-files=all -- \
+  . ':(exclude).serena/**')" ]]; then
+  echo "mpv.net source checkout contains tracked or untracked modifications" >&2
   exit 1
 fi
 actual_commit="$(git -C "$source_dir" rev-parse HEAD)"

@@ -25,6 +25,18 @@ jobs:
       - name: Restore pinned mpv.net reference
         run: bash scripts/restore-mpvnet.sh
 
+      - name: Verify restore rejects an untracked source file
+        shell: bash
+        run: |
+          touch .deps/mpvnet-source/untracked-restore-probe
+          if bash scripts/restore-mpvnet.sh 2>restore-error.log; then
+            exit 1
+          fi
+          grep -F \
+            "mpv.net source checkout contains tracked or untracked modifications" \
+            restore-error.log
+          rm .deps/mpvnet-source/untracked-restore-probe
+
       - name: Verify restore refreshes a stale clean checkout
         shell: bash
         run: |
