@@ -58,14 +58,13 @@ public sealed class ScheduleDraftTests
     }
 
     [Theory]
-    [InlineData(true, false, true, false, DraftReconciliationAction.RefreshWarnings)]
-    [InlineData(true, true, false, false, DraftReconciliationAction.RefreshWarnings)]
-    [InlineData(false, false, false, true, DraftReconciliationAction.LinkMatchingDraft)]
-    [InlineData(false, false, true, false, DraftReconciliationAction.KeepDirtyDraft)]
-    [InlineData(false, false, false, false, DraftReconciliationAction.ReplaceDraft)]
+    [InlineData(true, true, false, DraftReconciliationAction.RefreshWarnings)]
+    [InlineData(true, false, true, DraftReconciliationAction.RefreshWarnings)]
+    [InlineData(false, false, true, DraftReconciliationAction.LinkMatchingDraft)]
+    [InlineData(false, true, false, DraftReconciliationAction.KeepDirtyDraft)]
+    [InlineData(false, false, false, DraftReconciliationAction.ReplaceDraft)]
     public void DraftReconciliationChoosesOneExplicitUiAction(
         bool runtimeIntervalsUnchanged,
-        bool sourceIntervalsUnchanged,
         bool draftDirty,
         bool draftMatchesDocument,
         DraftReconciliationAction expected)
@@ -74,9 +73,19 @@ public sealed class ScheduleDraftTests
             expected,
             DraftReconciliation.Decide(
                 runtimeIntervalsUnchanged,
-                sourceIntervalsUnchanged,
                 draftDirty,
                 draftMatchesDocument));
+    }
+
+    [Fact]
+    public void SavedDetachedDraftIsKeptWhenRuntimeDoesNotChange()
+    {
+        Assert.Equal(
+            DraftReconciliationAction.RefreshWarnings,
+            DraftReconciliation.Decide(
+                runtimeIntervalsUnchanged: true,
+                draftDirty: false,
+                draftMatchesDocument: false));
     }
 
     [Fact]

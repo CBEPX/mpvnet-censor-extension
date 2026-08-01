@@ -205,13 +205,12 @@ internal sealed class CensorWindow : Form
 
         var reconciliation = DraftReconciliation.Decide(
             ReferenceEquals(_runtimeIntervals, intervals),
-            ReferenceEquals(_sourceIntervals, intervals),
             _draft?.IsDirty == true,
             document is not null && _draft?.Matches(document) == true);
         _runtimeIntervals = intervals;
         if ((reconciliation == DraftReconciliationAction.RefreshWarnings ||
              reconciliation == DraftReconciliationAction.KeepDirtyDraft) &&
-            HasDetachedDirtyDraft())
+            HasDetachedDraft())
         {
             _schedule.Text =
                 $"{_schedule.Text} (черновик: {(string.IsNullOrEmpty(_sourcePath) ? "новый" : _sourcePath)})";
@@ -1024,15 +1023,17 @@ internal sealed class CensorWindow : Form
         {
             _rendering = wasRendering;
         }
-        _draftState.Text = HasDetachedDirtyDraft()
-            ? "Несохранённый черновик не связан с текущим расписанием"
+        _draftState.Text = HasDetachedDraft()
+            ? _draft.IsDirty
+                ? "Несохранённый черновик не связан с текущим расписанием"
+                : "Сохранённый черновик не связан с текущим расписанием"
             : _draft.IsDirty
                 ? "Изменения не применены и не сохранены"
                 : "Сохранено";
     }
 
-    private bool HasDetachedDirtyDraft() =>
-        _draft?.IsDirty == true &&
+    private bool HasDetachedDraft() =>
+        _draft is not null &&
         !ReferenceEquals(_sourceIntervals, _runtimeIntervals);
 
     private void RenderWarnings(IReadOnlyList<ParseDiagnostic> diagnostics)

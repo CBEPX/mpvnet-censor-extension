@@ -25,11 +25,10 @@ public static class DraftReconciliation
 {
     public static DraftReconciliationAction Decide(
         bool runtimeIntervalsUnchanged,
-        bool sourceIntervalsUnchanged,
         bool draftDirty,
         bool draftMatchesDocument)
     {
-        if (runtimeIntervalsUnchanged && (draftDirty || sourceIntervalsUnchanged))
+        if (runtimeIntervalsUnchanged)
             return DraftReconciliationAction.RefreshWarnings;
         if (draftMatchesDocument)
             return DraftReconciliationAction.LinkMatchingDraft;

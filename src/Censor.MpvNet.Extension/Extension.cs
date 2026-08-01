@@ -15,6 +15,7 @@ public sealed class Extension : IExtension, IDisposable
     private const string LogModule = "CensorExtension";
     private const int MaxRecoveryFailures = 3;
     private const int MaxPendingWindowActions = 32;
+    private const ulong FilterObserverUserData = 0x43454E534F52UL;
     private const string ReadyProperty = "user-data/censor/ready";
     private const string FutureSettingsMessage =
         "Настройки не сохранены: файл создан более новой версией CensorPlayer. " +
@@ -102,8 +103,8 @@ public sealed class Extension : IExtension, IDisposable
             Player.Shutdown += OnShutdown;
             Player.ClientMessage += OnClientMessage;
             Global.Player.Shutdown += OnShutdown;
-            Player.ObservePropertyString("vf", OnFiltersChanged);
-            Player.ObservePropertyString("af", OnFiltersChanged);
+            ObserveFilterProperty("vf");
+            ObserveFilterProperty("af");
             if (_settings.WatchdogEnabled)
                 _watchdog.Change(_settings.WatchdogIntervalMs, _settings.WatchdogIntervalMs);
             Player.SetPropertyString(ReadyProperty, "yes");
@@ -155,9 +156,26 @@ public sealed class Extension : IExtension, IDisposable
             if (Player.StringPropChangeActions.TryGetValue("af", out actions))
                 actions.Remove(OnFiltersChanged);
         }
-        // Pinned mpv.net 7.1.2.0 registers these observers with reply_userdata == 0.
         if (Player.Handle != IntPtr.Zero)
-            _ = mpv_unobserve_property(Player.Handle, 0);
+            _ = mpv_unobserve_property(Player.Handle, FilterObserverUserData);
+    }
+
+    private void ObserveFilterProperty(string name)
+    {
+        lock (Player.StringPropChangeActions)
+        {
+            if (Player.StringPropChangeActions.ContainsKey(name))
+                throw new InvalidOperationException($"Наблюдение свойства mpv «{name}» уже зарегистрировано.");
+            var error = mpv_observe_property(
+                Player.Handle,
+                FilterObserverUserData,
+                name,
+                mpv_format.MPV_FORMAT_STRING);
+            if (error < 0)
+                throw new InvalidOperationException(
+                    $"Не удалось наблюдать свойство mpv «{name}»: {GetError(error)}");
+            Player.StringPropChangeActions[name] = [OnFiltersChanged];
+        }
     }
 
     private void OnStartFile() => RunSafely(() => BeginSession("NO SCHEDULE"));
@@ -1476,9 +1494,8 @@ public sealed class Extension : IExtension, IDisposable
 
         if (loadInProgress)
         {
-            if (selectionChanged)
+            if (selectionChanged && SaveSettings())
             {
-                SaveSettings();
                 Show("Пресет размытия сохранён. Текущая загрузка расписания продолжится.");
             }
             return;
@@ -1486,9 +1503,8 @@ public sealed class Extension : IExtension, IDisposable
 
         if (!hasMedia)
         {
-            if (selectionChanged)
+            if (selectionChanged && SaveSettings())
             {
-                SaveSettings();
                 Show("Пресет размытия сохранён и применится после открытия фильма.");
             }
             return;
@@ -1672,7 +1688,8 @@ public sealed class Extension : IExtension, IDisposable
 
         if (!hasMedia)
         {
-            SaveSettings();
+            if (!SaveSettings())
+                return;
             _log.Write(
                 "audio-preset-saved",
                 _revisions.Snapshot(),
