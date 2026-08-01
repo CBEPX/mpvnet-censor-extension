@@ -52,6 +52,9 @@ public sealed class Extension : IExtension, IDisposable
     private CensorWindow? _window;
     private Thread? _windowThread;
     private string _windowStatus = "NO SCHEDULE";
+    private int _afReadFailures;
+    private int _audioMismatchReported;
+    private int _audioRecoveryFailures;
     private int _disposed;
     private bool _pauseHeldByExtension;
     private bool _pendingWindowActionDropReported;
@@ -99,6 +102,7 @@ public sealed class Extension : IExtension, IDisposable
             Player.ClientMessage += OnClientMessage;
             Global.Player.Shutdown += OnShutdown;
             Player.ObservePropertyString("vf", OnFiltersChanged);
+            Player.ObservePropertyString("af", OnFiltersChanged);
             if (_settings.WatchdogEnabled)
                 _watchdog.Change(_settings.WatchdogIntervalMs, _settings.WatchdogIntervalMs);
             Player.SetPropertyString(ReadyProperty, "yes");
@@ -147,7 +151,11 @@ public sealed class Extension : IExtension, IDisposable
         {
             if (Player.StringPropChangeActions.TryGetValue("vf", out var actions))
                 actions.Remove(OnFiltersChanged);
+            if (Player.StringPropChangeActions.TryGetValue("af", out actions))
+                actions.Remove(OnFiltersChanged);
         }
+        if (Player.Handle != IntPtr.Zero)
+            _ = mpv_unobserve_property(Player.Handle, 0);
     }
 
     private void OnStartFile() => RunSafely(() => BeginSession("NO SCHEDULE"));
@@ -273,6 +281,7 @@ public sealed class Extension : IExtension, IDisposable
             RemoveFilters(active?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
             Interlocked.Exchange(ref _recoveryFailures, 0);
             Interlocked.Exchange(ref _vfReadFailures, 0);
+            ResetAudioWatchdogState();
         }
         finally
         {
@@ -1610,7 +1619,10 @@ public sealed class Extension : IExtension, IDisposable
                     _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
                 if (!hasMedia)
+                {
                     _settings = _settings with { AudioCompressionPreset = preset.Id };
+                    ResetAudioWatchdogState();
+                }
             }
 
             if (hasMedia)
@@ -1618,6 +1630,7 @@ public sealed class Extension : IExtension, IDisposable
                 try
                 {
                     ApplyAudioCompressionPreset(preset);
+                    ResetAudioWatchdogState();
                     lock (_stateLock)
                         _settings = _settings with { AudioCompressionPreset = preset.Id };
                 }
@@ -1627,6 +1640,7 @@ public sealed class Extension : IExtension, IDisposable
                     try
                     {
                         ApplyAudioCompressionPreset(previousPreset);
+                        ResetAudioWatchdogState();
                     }
                     catch (Exception rollbackException)
                     {
@@ -1691,12 +1705,11 @@ public sealed class Extension : IExtension, IDisposable
             {
                 lock (_stateLock)
                 {
-                    if (string.IsNullOrWhiteSpace(_currentMediaPath))
-                        return;
                     preset = AudioCompressionPresets.Find(
                         _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 }
                 ApplyAudioCompressionPreset(preset);
+                ResetAudioWatchdogState();
             }
             finally
             {
@@ -2077,10 +2090,11 @@ public sealed class Extension : IExtension, IDisposable
         if (window is null || window.IsDisposed || !window.IsHandleCreated)
             return true;
 
-        var snapshot = SnapshotWindow();
         try
         {
             window.BeginInvoke(new Action(() =>
+            {
+                var snapshot = SnapshotWindow();
                 window.UpdateState(
                     snapshot.MediaPath,
                     snapshot.SchedulePath,
@@ -2088,7 +2102,8 @@ public sealed class Extension : IExtension, IDisposable
                     snapshot.MediaDurationMs,
                     snapshot.Document,
                     snapshot.Diagnostics,
-                    snapshot.HasActiveSchedule)));
+                    snapshot.HasActiveSchedule);
+            }));
         }
         catch (InvalidOperationException)
         {
@@ -2444,77 +2459,23 @@ public sealed class Extension : IExtension, IDisposable
                 return;
 
             ActiveSchedule? active;
-            lock (_stateLock)
-                active = _activeSchedule;
-            if (active is null ||
-                !IsCurrent(active.Ticket))
-            {
-                return;
-            }
-
-            // ponytail: String readback plus per-chunk comparison is trivial for
-            // normal 10–20-scene plans; precompute only after measured growth.
-            if (!TryGetPropertyString("vf", out var filters))
-            {
-                var readFailures = Interlocked.Increment(ref _vfReadFailures);
-                if (readFailures == 1)
-                    Terminal.WriteError("Не удалось прочитать vf и определить состояние автовосстановления.", LogModule);
-                if (readFailures == MaxRecoveryFailures)
-                    QueueShow(
-                        "Не удалось прочитать цепочку видеофильтров. Автовосстановление продолжит попытки.");
-                return;
-            }
-
-            Interlocked.Exchange(ref _vfReadFailures, 0);
-            if (FilterReadback.MatchesBlurPlan(filters, active.Plan))
-            {
-                Interlocked.Exchange(ref _recoveryFailures, 0);
-                bool clearWarning;
-                lock (_stateLock)
-                    clearWarning = _windowStatus == "WARNING";
-                if (clearWarning)
-                    UpdateWindow("ACTIVE", active.Ticket);
-                return;
-            }
-
-            bool warningAlreadyShown;
+            AudioCompressionPresetDefinition audioPreset;
             bool watchdogEnabled;
             lock (_stateLock)
             {
-                warningAlreadyShown = _windowStatus == "WARNING";
+                active = _activeSchedule;
+                audioPreset = AudioCompressionPresets.Find(
+                    _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 watchdogEnabled = _settings.WatchdogEnabled;
             }
-            if (!warningAlreadyShown)
-                UpdateWindow("WARNING", active.Ticket);
-            if (!watchdogEnabled)
-                return;
-            if (Volatile.Read(ref _recoveryFailures) >= MaxRecoveryFailures)
-                return;
+            var ticket = _revisions.Snapshot();
 
-            try
-            {
-                if (!RecoverFilters(active))
-                    return;
-                Interlocked.Exchange(ref _recoveryFailures, 0);
-                UpdateWindow("ACTIVE", active.Ticket);
-                _log.Write("watchdog-recovered", active.Ticket);
-            }
-            catch (Exception exception)
-            {
-                var recoveryFailures = Interlocked.Increment(ref _recoveryFailures);
-                Terminal.WriteError(exception, LogModule);
-                _log.Write(
-                    "watchdog-recovery-error",
-                    active.Ticket,
-                    new Dictionary<string, object?>
-                    {
-                        ["consecutiveFailures"] = recoveryFailures,
-                        ["error"] = ProtectError(exception, active.SchedulePath),
-                    },
-                    ExtensionLogLevel.Error);
-                if (recoveryFailures == MaxRecoveryFailures)
-                    QueueShow("Не удалось восстановить фильтры. Автовосстановление остановлено.");
-            }
+            if (active is not null && IsCurrent(active.Ticket))
+                CheckVideoFilters(active, watchdogEnabled);
+            if (audioPreset.Filter is not null)
+                CheckAudioFilter(audioPreset, ticket, watchdogEnabled);
+            else
+                ResetAudioWatchdogState();
         }
         catch (Exception exception)
         {
@@ -2525,6 +2486,143 @@ public sealed class Extension : IExtension, IDisposable
             if (entered)
                 _filterGate.Release();
         }
+    }
+
+    private void CheckVideoFilters(ActiveSchedule active, bool watchdogEnabled)
+    {
+        // ponytail: String readback plus per-chunk comparison is trivial for
+        // normal 10–20-scene plans; precompute only after measured growth.
+        if (!TryGetPropertyString("vf", out var filters))
+        {
+            var readFailures = Interlocked.Increment(ref _vfReadFailures);
+            if (readFailures == 1)
+                Terminal.WriteError("Не удалось прочитать vf и определить состояние автовосстановления.", LogModule);
+            if (readFailures == MaxRecoveryFailures)
+                QueueShow(
+                    "Не удалось прочитать цепочку видеофильтров. Автовосстановление продолжит попытки.");
+            return;
+        }
+
+        Interlocked.Exchange(ref _vfReadFailures, 0);
+        if (FilterReadback.MatchesBlurPlan(filters, active.Plan))
+        {
+            Interlocked.Exchange(ref _recoveryFailures, 0);
+            bool clearWarning;
+            lock (_stateLock)
+                clearWarning = _windowStatus == "WARNING";
+            if (clearWarning)
+                UpdateWindow("ACTIVE", active.Ticket);
+            return;
+        }
+
+        bool warningAlreadyShown;
+        lock (_stateLock)
+            warningAlreadyShown = _windowStatus == "WARNING";
+        if (!warningAlreadyShown)
+            UpdateWindow("WARNING", active.Ticket);
+        if (!watchdogEnabled || Volatile.Read(ref _recoveryFailures) >= MaxRecoveryFailures)
+            return;
+
+        try
+        {
+            if (!RecoverFilters(active))
+                return;
+            Interlocked.Exchange(ref _recoveryFailures, 0);
+            UpdateWindow("ACTIVE", active.Ticket);
+            _log.Write("watchdog-recovered", active.Ticket);
+        }
+        catch (Exception exception)
+        {
+            var recoveryFailures = Interlocked.Increment(ref _recoveryFailures);
+            Terminal.WriteError(exception, LogModule);
+            _log.Write(
+                "watchdog-recovery-error",
+                active.Ticket,
+                new Dictionary<string, object?>
+                {
+                    ["consecutiveFailures"] = recoveryFailures,
+                    ["error"] = ProtectError(exception, active.SchedulePath),
+                },
+                ExtensionLogLevel.Error);
+            if (recoveryFailures == MaxRecoveryFailures)
+                QueueShow("Не удалось восстановить фильтры. Автовосстановление остановлено.");
+        }
+    }
+
+    private void CheckAudioFilter(
+        AudioCompressionPresetDefinition preset,
+        OperationTicket ticket,
+        bool watchdogEnabled)
+    {
+        if (!_revisions.IsCurrentMediaSession(ticket))
+            return;
+        if (!TryGetPropertyString("af", out var filters))
+        {
+            var readFailures = Interlocked.Increment(ref _afReadFailures);
+            if (readFailures == 1)
+                Terminal.WriteError("Не удалось прочитать af и проверить компрессию звука.", LogModule);
+            if (readFailures == MaxRecoveryFailures)
+                QueueShow("Не удалось прочитать цепочку аудиофильтров. Автовосстановление продолжит попытки.");
+            return;
+        }
+
+        Interlocked.Exchange(ref _afReadFailures, 0);
+        if (FilterReadback.MatchesSingle(
+                filters,
+                AudioCompressionPresets.FilterLabel,
+                preset.Filter!))
+        {
+            Interlocked.Exchange(ref _audioMismatchReported, 0);
+            Interlocked.Exchange(ref _audioRecoveryFailures, 0);
+            return;
+        }
+
+        var firstMismatch = Interlocked.Exchange(ref _audioMismatchReported, 1) == 0;
+        if (!watchdogEnabled)
+        {
+            if (firstMismatch)
+                QueueShow("Фильтр компрессии звука изменён. Автовосстановление выключено.");
+            return;
+        }
+        if (Volatile.Read(ref _audioRecoveryFailures) >= MaxRecoveryFailures)
+            return;
+
+        try
+        {
+            if (!_revisions.IsCurrentMediaSession(ticket))
+                return;
+            ApplyAudioCompressionPreset(preset);
+            ResetAudioWatchdogState();
+            _log.Write(
+                "audio-watchdog-recovered",
+                ticket,
+                new Dictionary<string, object?> { ["presetId"] = preset.Id });
+            QueueShow($"Компрессия звука восстановлена: {preset.DisplayName}.");
+        }
+        catch (Exception exception)
+        {
+            var recoveryFailures = Interlocked.Increment(ref _audioRecoveryFailures);
+            Terminal.WriteError(exception, LogModule);
+            _log.Write(
+                "audio-watchdog-recovery-error",
+                ticket,
+                new Dictionary<string, object?>
+                {
+                    ["presetId"] = preset.Id,
+                    ["consecutiveFailures"] = recoveryFailures,
+                    ["error"] = ProtectError(exception),
+                },
+                ExtensionLogLevel.Error);
+            if (recoveryFailures == MaxRecoveryFailures)
+                QueueShow("Не удалось восстановить компрессию звука. Автовосстановление остановлено.");
+        }
+    }
+
+    private void ResetAudioWatchdogState()
+    {
+        Interlocked.Exchange(ref _afReadFailures, 0);
+        Interlocked.Exchange(ref _audioMismatchReported, 0);
+        Interlocked.Exchange(ref _audioRecoveryFailures, 0);
     }
 
     private string ProtectError(Exception exception, string? additionalPath = null)

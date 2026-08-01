@@ -306,6 +306,8 @@ public static class DiagnosticsExporter
 
     private static int FindRootedPathEnd(string value, int start)
     {
+        // ponytail: an unquoted path may contain spaces, so redact through the
+        // message end rather than guess a boundary and leak part of the path.
         var terminator = start > 0
             ? value[start - 1] switch
             {

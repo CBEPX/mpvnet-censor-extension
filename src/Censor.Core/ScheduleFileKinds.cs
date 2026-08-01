@@ -46,7 +46,7 @@ public static class ScheduleFileKinds
         ArgumentNullException.ThrowIfNull(text);
         ArgumentNullException.ThrowIfNull(limits);
 
-        var result = TryGetSubtitleFormat(path, out var subtitleFormat)
+        return TryGetSubtitleFormat(path, out var subtitleFormat)
             ? SubtitleScheduleText.Import(
                 text,
                 subtitleFormat,
@@ -56,16 +56,5 @@ public static class ScheduleFileKinds
                 text,
                 limits.MaxTextFileBytes,
                 limits.MaxIntervals);
-        if (!result.IsSuccess || result.Document!.Intervals.Count <= limits.MaxIntervals)
-            return result;
-
-        return new(null,
-        [
-            new(
-                DiagnosticSeverity.Error,
-                1,
-                1,
-                $"В расписании больше {limits.MaxIntervals} интервалов."),
-        ]);
     }
 }

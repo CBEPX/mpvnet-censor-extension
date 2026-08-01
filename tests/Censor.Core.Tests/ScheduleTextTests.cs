@@ -72,6 +72,15 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void ParseRejectsInvalidSafetyLimits()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ScheduleText.Parse("", maxTextFileBytes: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ScheduleText.Parse("", maxIntervals: 0));
+    }
+
+    [Fact]
     public void RejectsDuplicateKnownMetadata()
     {
         const string text = """

@@ -272,6 +272,7 @@ internal sealed class CensorWindow : Form
         string? lastScheduleDirectory)
     {
         _sourcePath = path;
+        _sourceIntervals = savedDocument.Intervals;
         _schedule.Text = path;
         _settings = _settings with { LastScheduleDirectory = lastScheduleDirectory };
         if (_draft?.MarkSaved(savedDocument) == true)
@@ -1177,6 +1178,9 @@ internal sealed class CensorWindow : Form
         {
             _draft = new(recovered.Document!);
             _draft.MarkDirty();
+            _sourcePath = null;
+            _sourceIntervals = null;
+            _schedule.Text = "Восстановленный черновик (не связан с файлом)";
             _draftState.Text = "Восстановлен несохранённый черновик";
             RenderDraft();
         }

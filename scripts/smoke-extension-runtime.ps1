@@ -3,7 +3,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$MpvNetPath
+    [string]$MpvNetPath,
+    [switch]$VerifyAudioWatchdog
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,6 +24,8 @@ $Pipe = $null
 $Reader = $null
 $Writer = $null
 $RequestId = 0
+$DataRoot = $null
+$CreatedDataRoot = $false
 New-Item -ItemType Directory $TempRoot | Out-Null
 
 function Invoke-MpvCommand {
@@ -62,26 +65,29 @@ function Send-CensorMessage {
 }
 
 function Get-FilterText {
-    $Response = Invoke-MpvCommand @("get_property", "vf")
+    param([string]$Property = "vf")
+
+    $Response = Invoke-MpvCommand @("get_property", $Property)
     return $Response.data | ConvertTo-Json -Compress -Depth 20
 }
 
 function Wait-ForFilter {
     param(
         [Parameter(Mandatory)][string]$Label,
-        [Parameter(Mandatory)][bool]$Present
+        [Parameter(Mandatory)][bool]$Present,
+        [string]$Property = "vf"
     )
 
     $Deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
-        $Found = (Get-FilterText).Contains($Label, [StringComparison]::Ordinal)
+        $Found = (Get-FilterText $Property).Contains($Label, [StringComparison]::Ordinal)
         if ($Found -eq $Present) {
             return
         }
         Start-Sleep -Milliseconds 200
     } while ([DateTime]::UtcNow -lt $Deadline)
 
-    throw "Filter '$Label' did not reach expected presence '$Present'. Current vf: $(Get-FilterText)"
+    throw "Filter '$Label' did not reach expected presence '$Present'. Current ${Property}: $(Get-FilterText $Property)"
 }
 
 function Wait-ForBlurIdentity {
@@ -97,6 +103,22 @@ function Wait-ForBlurIdentity {
     } while ([DateTime]::UtcNow -lt $Deadline)
 
     throw "Blur filter did not return to the expected 40/2 identity. Current vf: $(Get-FilterText)"
+}
+
+function Wait-ForAudioIdentity {
+    $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $Filters = Get-FilterText "af"
+        if ($Filters.Contains("censor_audio_compression", [StringComparison]::Ordinal) -and
+            $Filters.Contains("acompressor", [StringComparison]::Ordinal) -and
+            $Filters.Contains("alimiter", [StringComparison]::Ordinal) -and
+            -not $Filters.Contains("volume=0.5", [StringComparison]::Ordinal)) {
+            return
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "Audio filter did not return to the Film Balanced identity. Current af: $(Get-FilterText 'af')"
 }
 
 function Wait-ForMedia {
@@ -138,6 +160,26 @@ function Wait-ForExtension {
 }
 
 try {
+    if ($VerifyAudioWatchdog) {
+        if ($env:GITHUB_ACTIONS -ne "true") {
+            throw "Audio watchdog smoke is CI-only because it creates temporary CensorPlayer settings."
+        }
+        $LocalData = [Environment]::GetFolderPath([Environment+SpecialFolder]::LocalApplicationData)
+        if ([string]::IsNullOrWhiteSpace($LocalData)) {
+            throw "Windows LocalApplicationData is unavailable."
+        }
+        $DataRoot = Join-Path $LocalData "CensorPlayer"
+        if (Test-Path $DataRoot) {
+            throw "Audio watchdog smoke refuses to overwrite an existing CensorPlayer data directory."
+        }
+        New-Item -ItemType Directory $DataRoot | Out-Null
+        $CreatedDataRoot = $true
+        [IO.File]::WriteAllText(
+            (Join-Path $DataRoot "settings.json"),
+            '{"schema":1,"watchdogEnabled":true,"watchdogIntervalMs":250,"audioCompressionPreset":"film-balanced"}',
+            [Text.UTF8Encoding]::new($false))
+    }
+
     $Header = [Text.Encoding]::ASCII.GetBytes("P6`n64 64`n255`n")
     $Pixels = [byte[]]::new(64 * 64 * 3)
     for ($Index = 0; $Index -lt $Pixels.Length; $Index++) {
@@ -202,6 +244,16 @@ try {
     Wait-ForBlurIdentity
     Wait-ForFilter "censor_blur_stale" $false
 
+    if ($VerifyAudioWatchdog) {
+        Wait-ForAudioIdentity
+        [void](Invoke-MpvCommand @("af", "remove", "@censor_audio_compression"))
+        [void](Invoke-MpvCommand @(
+            "af",
+            "add",
+            "@censor_audio_compression:lavfi=[volume=0.5]"))
+        Wait-ForAudioIdentity
+    }
+
     Send-CensorMessage @("censor-disable")
     Wait-ForFilter "censor_blur_000" $false
     Wait-ForFilter "censor_smoke_user" $true
@@ -228,6 +280,9 @@ finally {
     if ($null -ne $Process -and -not $Process.HasExited) {
         Stop-Process -Id $Process.Id -Force -ErrorAction SilentlyContinue
         $Process.WaitForExit()
+    }
+    if ($CreatedDataRoot) {
+        Remove-Item $DataRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     Remove-Item $TempRoot -Recurse -Force -ErrorAction SilentlyContinue
 }

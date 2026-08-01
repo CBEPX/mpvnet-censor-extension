@@ -26,6 +26,10 @@ public static class ScheduleText
         int maxIntervals = MaxIntervals)
     {
         ArgumentNullException.ThrowIfNull(text);
+        if (maxTextFileBytes is < 1 or > MaxTextFileBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
+        if (maxIntervals is < 1 or > MaxIntervals)
+            throw new ArgumentOutOfRangeException(nameof(maxIntervals));
 
         var diagnostics = new List<ParseDiagnostic>();
         if (Encoding.UTF8.GetByteCount(text) > maxTextFileBytes)

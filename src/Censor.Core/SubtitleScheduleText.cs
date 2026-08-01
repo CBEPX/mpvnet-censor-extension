@@ -109,17 +109,17 @@ public static class SubtitleScheduleText
             intervals.Add(new(startMs, endMs, note.Length == 0 ? null : note));
         }
 
+        if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+            return new(null, diagnostics);
+
         diagnostics.Add(new(
             DiagnosticSeverity.Warning,
             1,
             1,
             "Поле media-duration-ms отсутствует в формате субтитров: соответствие фильму проверить нельзя."));
-
-        return diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error)
-            ? new(null, diagnostics)
-            : new(
-                new ScheduleDocument(new ScheduleMetadata(), intervals, []),
-                diagnostics);
+        return new(
+            new ScheduleDocument(new ScheduleMetadata(), intervals, []),
+            diagnostics);
     }
 
     public static string Export(ScheduleDocument document, SubtitleFormat format)

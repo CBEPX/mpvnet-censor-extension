@@ -79,6 +79,8 @@ public sealed class SubtitleScheduleTextTests
         Assert.False(result.IsSuccess);
         Assert.Null(result.Document);
         Assert.Contains(result.Diagnostics, item => item.Line == 6);
+        Assert.DoesNotContain(result.Diagnostics, item =>
+            item.Message.Contains("media-duration-ms", StringComparison.Ordinal));
     }
 
     [Theory]
