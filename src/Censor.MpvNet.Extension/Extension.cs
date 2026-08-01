@@ -58,7 +58,10 @@ public sealed class Extension : IExtension, IDisposable
         _settingsPath = Path.Combine(_localDataRoot, "settings.json");
         var loadedSettings = ExtensionSettingsStore.Load(_settingsPath);
         _settings = loadedSettings.Settings;
-        _log = new(Path.Combine(_localDataRoot, "Logs"), _settings.Logging.RetentionDays);
+        _log = new(
+            Path.Combine(_localDataRoot, "Logs"),
+            _settings.Logging.RetentionDays,
+            _settings.Logging.Level);
         if (!_log.IsEnabled)
             Terminal.WriteError("Журнал CensorPlayer отключён: не удалось открыть каталог для записи.", LogModule);
         foreach (var warning in loadedSettings.Warnings)
@@ -97,7 +100,8 @@ public sealed class Extension : IExtension, IDisposable
         lock (_stateLock)
             _operationCancellation.Dispose();
         _revisions.Dispose();
-        // Queued callbacks can still observe _stopping after Dispose, so keep their gate alive.
+        // mpv.net creates one Extension per process. Queued callbacks can still observe
+        // _stopping after Dispose, so keep their gate alive for the remaining process lifetime.
         _log.Dispose();
         GC.SuppressFinalize(this);
     }
@@ -439,7 +443,8 @@ public sealed class Extension : IExtension, IDisposable
                     settings.DurationToleranceMs))
             {
                 token.ThrowIfCancellationRequested();
-                var applyAnyway = !automatic && ConfirmDurationMismatch();
+                var applyAnyway = !automatic &&
+                    await ConfirmDurationMismatchAsync(token).ConfigureAwait(false);
                 token.ThrowIfCancellationRequested();
                 if (!applyAnyway)
                 {
@@ -530,7 +535,8 @@ public sealed class Extension : IExtension, IDisposable
             _log.Write(
                 "schedule-load-error",
                 ticket,
-                new Dictionary<string, object?> { ["error"] = ProtectError(exception, schedulePath) });
+                new Dictionary<string, object?> { ["error"] = ProtectError(exception, schedulePath) },
+                ExtensionLogLevel.Error);
             if (UpdateWindow("ERROR", ticket, token))
                 Show("Не удалось загрузить или применить расписание. Подробности — в журнале mpv.net.", ticket, token);
         }
@@ -645,7 +651,8 @@ public sealed class Extension : IExtension, IDisposable
                     {
                         ["applyError"] = ProtectError(exception, schedulePath),
                         ["rollbackError"] = ProtectError(rollbackException, schedulePath),
-                    });
+                    },
+                    ExtensionLogLevel.Error);
             }
             throw;
         }
@@ -1414,7 +1421,7 @@ public sealed class Extension : IExtension, IDisposable
                 if (_settings.AudioCompressionPreset == preset.Id)
                     return;
                 previousPreset = AudioCompressionPresets.Find(
-                    _settings.AudioCompressionPreset)!;
+                    _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
                 if (!hasMedia)
                     _settings = _settings with { AudioCompressionPreset = preset.Id };
@@ -1481,7 +1488,8 @@ public sealed class Extension : IExtension, IDisposable
                 ["presetId"] = preset.Id,
                 ["error"] = ProtectError(applyError),
                 ["rollbackError"] = rollbackError is null ? null : ProtectError(rollbackError),
-            });
+            },
+            ExtensionLogLevel.Error);
         Show(rollbackError is null
             ? $"Не удалось применить компрессию звука. Возвращён пресет «{previousPreset.DisplayName}»."
             : "Не удалось применить или восстановить компрессию звука. Проверьте аудиофильтры.");
@@ -1500,7 +1508,7 @@ public sealed class Extension : IExtension, IDisposable
                     if (string.IsNullOrWhiteSpace(_currentMediaPath))
                         return;
                     preset = AudioCompressionPresets.Find(
-                        _settings.AudioCompressionPreset)!;
+                        _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 }
                 ApplyAudioCompressionPreset(preset);
             }
@@ -1523,7 +1531,8 @@ public sealed class Extension : IExtension, IDisposable
                 {
                     ["presetId"] = preset?.Id,
                     ["error"] = ProtectError(exception),
-                });
+                },
+                ExtensionLogLevel.Error);
             Show(preset is null
                 ? "Не удалось применить сохранённый пресет компрессии звука."
                 : $"Не удалось применить пресет компрессии звука «{preset.DisplayName}».");
@@ -1634,23 +1643,32 @@ public sealed class Extension : IExtension, IDisposable
         return (ticket, token);
     }
 
-    private bool ConfirmDurationMismatch()
+    private async Task<bool> ConfirmDurationMismatchAsync(CancellationToken token)
     {
-        CensorWindow? window;
-        lock (_windowLock)
-            window = _window;
-
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return false;
-
-        try
+        var result = new TaskCompletionSource<bool>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!QueueWindowAction(window =>
         {
-            return (bool)window.Invoke(new Func<bool>(window.ConfirmDurationMismatch));
-        }
-        catch (InvalidOperationException)
+            try
+            {
+                if (token.IsCancellationRequested)
+                {
+                    result.TrySetCanceled(token);
+                    return;
+                }
+                result.TrySetResult(window.ConfirmDurationMismatch());
+            }
+            catch (Exception exception)
+            {
+                result.TrySetException(exception);
+            }
+        }))
         {
             return false;
         }
+
+        using var registration = token.Register(() => result.TrySetCanceled(token));
+        return await result.Task.WaitAsync(token).ConfigureAwait(false);
     }
 
     private DialogResult ConfirmExternalChange()
@@ -2085,7 +2103,8 @@ public sealed class Extension : IExtension, IDisposable
                     _log.Write(
                         "callback-error",
                         _revisions.Snapshot(),
-                        new Dictionary<string, object?> { ["error"] = ProtectError(exception) });
+                        new Dictionary<string, object?> { ["error"] = ProtectError(exception) },
+                        ExtensionLogLevel.Error);
                     Show("Ошибка расширения CensorPlayer. Подробности — в журнале mpv.net.");
                 }
             }
@@ -2108,19 +2127,66 @@ public sealed class Extension : IExtension, IDisposable
             return;
 
         if (!_filterGate.Wait(OsdGateTimeout, CancellationToken.None))
+        {
+            ThreadPool.QueueUserWorkItem(static state =>
+            {
+                var (extension, text, ticket, cancellationToken) =
+                    ((Extension, string, OperationTicket?, CancellationToken))state!;
+                extension.ShowDeferred(text, ticket, cancellationToken);
+            }, (this, message, expectedTicket, token));
             return;
+        }
         try
         {
-            if (Volatile.Read(ref _stopping) == 0 &&
-                !token.IsCancellationRequested &&
-                (!expectedTicket.HasValue || IsCurrent(expectedTicket.Value)))
-            {
-                Player.CommandV("show-text", $"Censor: {message}", "5000");
-            }
+            ShowUnderGate(message, expectedTicket, token);
         }
         finally
         {
             _filterGate.Release();
+        }
+    }
+
+    private void ShowDeferred(
+        string message,
+        OperationTicket? expectedTicket,
+        CancellationToken token)
+    {
+        try
+        {
+            if (Volatile.Read(ref _stopping) != 0 || token.IsCancellationRequested)
+                return;
+            if (!_filterGate.Wait(ShutdownWaitTimeout, CancellationToken.None))
+            {
+                Terminal.WriteError(
+                    "Не удалось показать сообщение: цепочка фильтров занята дольше 5 секунд.",
+                    LogModule);
+                return;
+            }
+            try
+            {
+                ShowUnderGate(message, expectedTicket, token);
+            }
+            finally
+            {
+                _filterGate.Release();
+            }
+        }
+        catch (Exception exception)
+        {
+            Terminal.WriteError(exception, LogModule);
+        }
+    }
+
+    private void ShowUnderGate(
+        string message,
+        OperationTicket? expectedTicket,
+        CancellationToken token)
+    {
+        if (Volatile.Read(ref _stopping) == 0 &&
+            !token.IsCancellationRequested &&
+            (!expectedTicket.HasValue || IsCurrent(expectedTicket.Value)))
+        {
+            Player.CommandV("show-text", $"Censor: {message}", "5000");
         }
     }
 
@@ -2203,7 +2269,8 @@ public sealed class Extension : IExtension, IDisposable
                     {
                         ["consecutiveFailures"] = recoveryFailures,
                         ["error"] = ProtectError(exception, active.SchedulePath),
-                    });
+                    },
+                    ExtensionLogLevel.Error);
                 if (recoveryFailures == MaxRecoveryFailures)
                     QueueShow("Не удалось восстановить фильтры. Автовосстановление остановлено.");
             }

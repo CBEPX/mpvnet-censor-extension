@@ -306,6 +306,22 @@ merge.
 **Выход:** 81 Core-тест, Release build, оба Windows CI и повторный полный
 `cc review` на `claude-opus-5` проходят без actionable findings.
 
+### 18. Исправления после десятого Claude Opus 5 review
+
+- Применять `logging.level` как настоящий минимальный уровень JSONL-журнала и
+  отмечать ошибочные события уровнем `error`.
+- Не терять OSD при краткой конкуренции за общий filter gate: выполнить одну
+  ограниченную отложенную попытку без второго lock-домена mpv.
+- При ручном `censor-load` автоматически открывать окно для подтверждения
+  несовпадения длительности и отменять ожидание вместе с media session.
+- Изолировать фактический mpv.net runtime-smoke временным `%LOCALAPPDATA%`, чтобы
+  он не оставлял состояние для следующего installer-smoke.
+- Закрыть оставшиеся мелкие контракты: безопасный `off`-пресет, русские кавычки
+  при обезличивании путей, описание `.bak` и явный комментарий dual-compile.
+
+**Выход:** 82 Core-теста, Release build, runtime и installer smoke в обоих
+Windows CI, затем полный `cc review` на `claude-opus-5` без actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

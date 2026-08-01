@@ -1270,7 +1270,7 @@ internal sealed class CensorWindow : Form
         string? presetId)
     {
         var preset = AudioCompressionPresets.Find(presetId) ??
-            AudioCompressionPresets.Find(AudioCompressionPresets.OffId)!;
+            AudioCompressionPresets.Off;
         for (var index = 0; index < AudioCompressionPresets.All.Count; index++)
         {
             if (AudioCompressionPresets.All[index].Id == preset.Id)

@@ -21,8 +21,20 @@
   гонку самого теста: файл из командной строки загружался до подписки extension
   на lifecycle. Smoke теперь запускает пустой mpv.net и загружает файл через
   IPC после подключения.
-- Локально: Release build без предупреждений, format и 81/81 тест — PASS;
-  Windows runtime smoke и повторный Opus review ожидают следующего push.
+- Runtime-smoke на `6b582b5` прошёл в push `30678953180` и PR `30678955090`,
+  но созданный им `%LOCALAPPDATA%\CensorPlayer` корректно заблокировал
+  installer-smoke. Дочерний mpv.net теперь получает отдельный временный
+  `%LOCALAPPDATA%`; защитный guard установщика не ослаблен.
+- Десятый полный `cc review` на `claude-opus-5` признал ветку ship-able и нашёл
+  мёртвый `logging.level`, потерю OSD при занятом gate, отсутствие окна для
+  duration-confirmation из `censor-load` и несколько малых контрактов.
+- Уровень журнала теперь применяется, OSD получает одну bounded deferred
+  попытку, duration-dialog открывает штатное окно, а redactor поддерживает
+  русские кавычки. Синхронная запись и обычная таблица сохранены для реальных
+  10–20 сцен без ненужной виртуализации.
+- Локально: закреплённый restore SHA и его failure path, locked restore,
+  Release build без предупреждений, 82/82 теста, format, JSON/YAML и shell
+  syntax — PASS. PowerShell/runtime/installer остаются Windows CI evidence.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.
@@ -265,7 +277,8 @@
 
 ## Следующий шаг
 
-Зафиксировать и отправить исправления седьмого Opus-review, дождаться двух
-Windows CI, затем снова выполнить полный review Claude Opus 5 через `cc`.
-После зелёного verdict физически проверить точный SHA DLL на Windows. PR
-остаётся draft; полный portable/installer не публикуется до закрытия issue #4.
+Локально завершить проверки исправлений десятого Opus-review, отправить ветку и
+дождаться двух Windows CI. Затем повторять полный review Claude Opus 5 через
+`cc` и исправления до чистого verdict. После зелёного verdict физически
+проверить точный SHA DLL на Windows. PR остаётся draft; полный
+portable/installer не публикуется до закрытия issue #4.

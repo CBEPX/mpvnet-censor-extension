@@ -6,9 +6,18 @@ using System.Threading.Channels;
 
 namespace Censor.Core;
 
+public enum ExtensionLogLevel
+{
+    Debug,
+    Info,
+    Warning,
+    Error,
+}
+
 public sealed record ExtensionLogEvent(
     DateTimeOffset Timestamp,
     string Event,
+    string Level,
     long MediaSessionId,
     long OperationRevision,
     IReadOnlyDictionary<string, object?> Fields);
@@ -32,11 +41,15 @@ public sealed class ExtensionLog : IDisposable
             });
     private readonly string _directory;
     private readonly int _retentionDays;
+    private readonly ExtensionLogLevel _minimumLevel;
     private readonly Task _writer;
     private DateOnly _lastPrunedDate;
     private int _disposed;
 
-    public ExtensionLog(string directory, int retentionDays)
+    public ExtensionLog(
+        string directory,
+        int retentionDays,
+        string minimumLevel = "info")
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         if (retentionDays is < 1 or > 365)
@@ -44,6 +57,7 @@ public sealed class ExtensionLog : IDisposable
 
         _directory = Path.GetFullPath(directory);
         _retentionDays = retentionDays;
+        _minimumLevel = ParseLevel(minimumLevel);
         _lastPrunedDate = DateOnly.FromDateTime(DateTime.UtcNow);
         try
         {
@@ -67,14 +81,16 @@ public sealed class ExtensionLog : IDisposable
     public void Write(
         string eventName,
         OperationTicket ticket,
-        IReadOnlyDictionary<string, object?>? fields = null)
+        IReadOnlyDictionary<string, object?>? fields = null,
+        ExtensionLogLevel level = ExtensionLogLevel.Info)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(eventName);
-        if (!IsEnabled || Volatile.Read(ref _disposed) != 0)
+        if (!IsEnabled || Volatile.Read(ref _disposed) != 0 || level < _minimumLevel)
             return;
         _channel.Writer.TryWrite(new(
             DateTimeOffset.UtcNow,
             eventName,
+            level.ToString().ToLowerInvariant(),
             ticket.MediaSessionId,
             ticket.OperationRevision,
             fields ?? new Dictionary<string, object?>()));
@@ -202,4 +218,14 @@ public sealed class ExtensionLog : IDisposable
             }
         }
     }
+
+    private static ExtensionLogLevel ParseLevel(string level) =>
+        (string.IsNullOrWhiteSpace(level) ? null : level.ToLowerInvariant()) switch
+        {
+            "debug" => ExtensionLogLevel.Debug,
+            "info" => ExtensionLogLevel.Info,
+            "warning" => ExtensionLogLevel.Warning,
+            "error" => ExtensionLogLevel.Error,
+            _ => throw new ArgumentException("Неизвестный уровень журнала.", nameof(level)),
+        };
 }

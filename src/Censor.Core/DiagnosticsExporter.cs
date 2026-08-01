@@ -215,18 +215,26 @@ public static class DiagnosticsExporter
     }
 
     private static bool IsPathBoundary(char value) =>
-        char.IsWhiteSpace(value) || value is '"' or '\'' or '(' or '[' or '{' or '=' or ':';
+        char.IsWhiteSpace(value) ||
+        value is '"' or '\'' or '«' or '»' or '(' or '[' or '{' or '=' or ':';
 
     private static int FindRootedPathEnd(string value, int start)
     {
-        var quote = start > 0 && value[start - 1] is '"' or '\''
-            ? value[start - 1]
+        var terminator = start > 0
+            ? value[start - 1] switch
+            {
+                '"' => '"',
+                '\'' => '\'',
+                '«' => '»',
+                _ => '\0',
+            }
             : '\0';
         for (var index = start; index < value.Length; index++)
         {
-            if (value[index] is '\r' or '\n' || quote != '\0' && value[index] == quote)
+            if (value[index] is '\r' or '\n' ||
+                terminator != '\0' && value[index] == terminator)
                 return index;
-            if (quote == '\0' &&
+            if (terminator == '\0' &&
                 (value.AsSpan(index).StartsWith(":line ", StringComparison.OrdinalIgnoreCase) ||
                  value.AsSpan(index).StartsWith(" (code ", StringComparison.OrdinalIgnoreCase)))
             {

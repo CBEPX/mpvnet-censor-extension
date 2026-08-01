@@ -23,6 +23,7 @@ $Pipe = $null
 $Reader = $null
 $Writer = $null
 $RequestId = 0
+$OriginalLocalAppData = $env:LOCALAPPDATA
 New-Item -ItemType Directory $TempRoot | Out-Null
 
 function Invoke-MpvCommand {
@@ -123,21 +124,27 @@ try {
         "# censor-timeline: 1`n00:00:00.000 --> 00:00:30.000`n",
         [Text.UTF8Encoding]::new($false))
 
-    $Process = Start-Process $MpvNetPath `
-        -ArgumentList @(
-            "--idle=yes",
-            "--keep-open=yes",
-            "--input-terminal=no",
-            "--vo=null",
-            "--ao=null",
-            "--msg-level=all=warn",
-            "--image-display-duration=60",
-            "--loop-file=inf",
-            "--input-ipc-server=\\.\pipe\$PipeName"
-        ) `
-        -RedirectStandardOutput $StdOut `
-        -RedirectStandardError $StdErr `
-        -PassThru
+    $env:LOCALAPPDATA = Join-Path $TempRoot "LocalAppData"
+    try {
+        $Process = Start-Process $MpvNetPath `
+            -ArgumentList @(
+                "--idle=yes",
+                "--keep-open=yes",
+                "--input-terminal=no",
+                "--vo=null",
+                "--ao=null",
+                "--msg-level=all=warn",
+                "--image-display-duration=60",
+                "--loop-file=inf",
+                "--input-ipc-server=\\.\pipe\$PipeName"
+            ) `
+            -RedirectStandardOutput $StdOut `
+            -RedirectStandardError $StdErr `
+            -PassThru
+    }
+    finally {
+        $env:LOCALAPPDATA = $OriginalLocalAppData
+    }
 
     $Pipe = [IO.Pipes.NamedPipeClientStream]::new(
         ".",
@@ -186,6 +193,7 @@ catch {
     throw "$($_.Exception.Message)`n$Output"
 }
 finally {
+    $env:LOCALAPPDATA = $OriginalLocalAppData
     if ($null -ne $Writer) { $Writer.Dispose() }
     if ($null -ne $Reader) { $Reader.Dispose() }
     if ($null -ne $Pipe) { $Pipe.Dispose() }

@@ -36,6 +36,7 @@ public static class AudioCompressionPresets
     ];
 
     public static IReadOnlyList<AudioCompressionPresetDefinition> All => Definitions;
+    public static AudioCompressionPresetDefinition Off => Definitions[0];
 
     public static AudioCompressionPresetDefinition? Find(string? id) =>
         Definitions.FirstOrDefault(item =>

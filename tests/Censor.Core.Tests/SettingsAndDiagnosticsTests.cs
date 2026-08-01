@@ -300,6 +300,25 @@ public sealed class SettingsAndDiagnosticsTests
     }
 
     [Fact]
+    public void LogHonorsConfiguredMinimumLevel()
+    {
+        using var directory = new TemporaryDirectory();
+        using (var log = new ExtensionLog(directory.Path, 30, "error"))
+        {
+            log.Write("info-event", new(1, 1));
+            log.Write(
+                "error-event",
+                new(1, 2),
+                level: ExtensionLogLevel.Error);
+        }
+
+        var text = File.ReadAllText(Directory.GetFiles(directory.Path, "*.log").Single());
+        Assert.DoesNotContain("info-event", text, StringComparison.Ordinal);
+        Assert.Contains("error-event", text, StringComparison.Ordinal);
+        Assert.Contains("\"level\":\"error\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LogDisablesItselfWhenDirectoryCannotBeCreated()
     {
         using var directory = new TemporaryDirectory();
@@ -402,6 +421,9 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.Equal(
             $"at Decoder in {protectedPath}:line 42",
             DiagnosticsExporter.RedactRootedPaths($"at Decoder in {path}:line 42"));
+        Assert.Equal(
+            $"Ошибка: «{protectedPath}»",
+            DiagnosticsExporter.RedactRootedPaths($"Ошибка: «{path}»"));
     }
 
     [Fact]
