@@ -139,7 +139,6 @@ public sealed class Extension : IExtension, IDisposable
         }
         lock (_stateLock)
         {
-            _operationCancellation.Dispose();
             _revisions.Dispose();
         }
         // mpv.net creates one Extension per process. Queued callbacks can still observe
@@ -980,7 +979,10 @@ public sealed class Extension : IExtension, IDisposable
         if (warnings.Count > 0)
         {
             InvokeWindow(window => window.SetSettings(previousSettings));
-            Show(settings.Schema == 1 ? warnings[0] : FutureSettingsMessage);
+            var message = settings.Schema == 1 ? warnings[0] : FutureSettingsMessage;
+            if (settings.Schema != 1 && warnings.Count > 1)
+                message += Environment.NewLine + warnings[1];
+            Show(message);
             return;
         }
 
@@ -1566,8 +1568,9 @@ public sealed class Extension : IExtension, IDisposable
             {
                 if (useCurrentSelection && currentPending.Plan.Blur == settings)
                     return;
-                // ponytail: Compiling under the state lock is bounded and trivial for
-                // normal 10–20-scene plans; revisit only if measured workloads grow.
+                // ponytail: Compiling here keeps replacement atomic for normal
+                // 10–20-scene drafts; move it outside the lock only if profiling
+                // finds watchdog contention on unusually large imported files.
                 var pendingPlan = FilterCompiler.Compile(currentPending.Intervals, settings);
                 previousPending = currentPending;
                 // Invalidate an ApplyPendingScheduleAsync snapshot before replacing its plan.
@@ -1586,6 +1589,7 @@ public sealed class Extension : IExtension, IDisposable
             {
                 if (useCurrentSelection && currentActive.Plan.Blur == settings)
                     return;
+                // ponytail: Same tradeoff as the pending-plan branch above.
                 activePlan = FilterCompiler.Compile(currentActive.Intervals, settings);
                 var operation = BeginOperationUnsafe(clearPending: false, scheduleLoad: false);
                 ticket = operation.Ticket;

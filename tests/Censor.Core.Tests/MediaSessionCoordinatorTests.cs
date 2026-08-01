@@ -49,4 +49,20 @@ public sealed class MediaSessionCoordinatorTests
         Assert.True(gate.IsCurrent(ordered[^1]));
         Assert.All(ordered[..^1], ticket => Assert.False(gate.IsCurrent(ticket)));
     }
+
+    [Fact]
+    public void CapturedSessionTokenRemainsUsableAfterDispose()
+    {
+        var gate = new MediaSessionCoordinator();
+        gate.BeginMediaSession();
+        var token = gate.SessionToken;
+
+        gate.Dispose();
+
+        Assert.True(token.IsCancellationRequested);
+        var callbackRan = false;
+        using var registration = token.Register(() => callbackRan = true);
+        Assert.True(callbackRan);
+        Assert.Throws<ObjectDisposedException>(() => gate.BeginOperation());
+    }
 }

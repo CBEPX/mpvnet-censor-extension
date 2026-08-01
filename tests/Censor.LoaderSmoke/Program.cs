@@ -83,6 +83,8 @@ static void RunUiContractSmoke(Assembly assembly)
                 if (!buttonNames.Contains(required))
                     throw new InvalidOperationException($"The editor is missing the required action: {required}");
             }
+
+            VerifyDiscardClearsEditor(assembly, window);
         }
         catch (Exception exception)
         {
@@ -98,6 +100,53 @@ static void RunUiContractSmoke(Assembly assembly)
     thread.Join();
     if (failure is not null)
         throw new InvalidOperationException("The Windows editor contract smoke failed.", failure);
+}
+
+static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
+{
+    var parse = assembly.GetType("Censor.Core.ScheduleText", throwOnError: true)!
+        .GetMethod("Parse", BindingFlags.Public | BindingFlags.Static)!;
+    var parsed = parse.Invoke(
+        null,
+        [
+            "# censor-timeline: 1\n# title: Film\n# media-duration-ms: 6000\n\n" +
+            "00:00:01.000 --> 00:00:02.000\n",
+            2 * 1024 * 1024,
+            10_000,
+        ])!;
+    var parsedType = parsed.GetType();
+    var document = parsedType.GetProperty("Document")!.GetValue(parsed)!;
+    var diagnostics = parsedType.GetProperty("Diagnostics")!.GetValue(parsed)!;
+    window.GetType().GetMethod("UpdateState")!.Invoke(
+        window,
+        [
+            @"C:\Video\Film.mkv",
+            1L,
+            @"C:\Video\Film.mkv.censor.txt",
+            "hash",
+            "READY",
+            6_000L,
+            document,
+            null,
+            diagnostics,
+            false,
+        ]);
+
+    var grid = Descendants(window).OfType<DataGridView>().Single();
+    if (grid.Rows.Count != 1)
+        throw new InvalidOperationException("The discard smoke could not seed one interval.");
+
+    window.GetType()
+        .GetMethod("DiscardDraft", BindingFlags.Instance | BindingFlags.NonPublic)!
+        .Invoke(window, null);
+
+    var enabledPrimaryActions = Descendants(window).OfType<Button>()
+        .Where(button => button.Text is "Применить интервалы" or "Сохранить файл")
+        .Where(button => button.Enabled)
+        .Select(button => button.Text)
+        .ToArray();
+    if (grid.Rows.Count != 0 || enabledPrimaryActions.Length != 0)
+        throw new InvalidOperationException("Discard left stale intervals or enabled primary actions.");
 }
 
 static IEnumerable<Control> Descendants(Control root)

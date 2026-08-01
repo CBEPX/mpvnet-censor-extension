@@ -201,6 +201,12 @@ public static class ScheduleText
         {
             throw new ArgumentException("Заголовок должен помещаться в одну строку.", nameof(document));
         }
+        if (document.Metadata.Title is { } title && title != title.Trim())
+        {
+            throw new ArgumentException(
+                "Заголовок не должен начинаться или заканчиваться пробелом.",
+                nameof(document));
+        }
 
         var builder = new StringBuilder();
         builder.Append("# censor-timeline: ")

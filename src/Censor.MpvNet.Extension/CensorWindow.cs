@@ -523,10 +523,7 @@ internal sealed class CensorWindow : Form
                 ? "schedule" + ScheduleFileKinds.CanonicalSuffix
                 : Path.GetFileName(initialPath),
             Filter = $"Файл интервалов CensorPlayer|*{ScheduleFileKinds.CanonicalSuffix}",
-            InitialDirectory = Path.GetDirectoryName(initialPath) ??
-                (_settings.RememberLastScheduleDirectory
-                    ? _settings.LastScheduleDirectory
-                    : null),
+            InitialDirectory = ResolveInitialDirectory(initialPath),
             OverwritePrompt = true,
             Title = "Сохранить файл интервалов",
         };
@@ -555,10 +552,7 @@ internal sealed class CensorWindow : Form
             DefaultExt = extension[1..],
             FileName = fileName,
             Filter = format == SubtitleFormat.Srt ? "SubRip|*.srt" : "WebVTT|*.vtt",
-            InitialDirectory = Path.GetDirectoryName(suggested) ??
-                (_settings.RememberLastScheduleDirectory
-                    ? _settings.LastScheduleDirectory
-                    : null),
+            InitialDirectory = ResolveInitialDirectory(suggested),
             OverwritePrompt = true,
             Title = "Экспортировать копию",
         };
@@ -1181,7 +1175,10 @@ internal sealed class CensorWindow : Form
             .Where(index => index >= 0 && index < _intervals.Rows.Count)
             .ToArray();
         if (validIndices.Length == 0)
+        {
+            UpdateActionStates();
             return;
+        }
         _intervals.ClearSelection();
         foreach (var index in validIndices)
             _intervals.Rows[index].Selected = true;
@@ -1514,7 +1511,10 @@ internal sealed class CensorWindow : Form
         if (_runtimeSchedulePath is null)
             ReplaceDraftFromRuntime();
         else
+        {
+            RenderDraft();
             ReloadRequested?.Invoke();
+        }
     }
 
     private void UseDraftForCurrentMedia()
@@ -1608,17 +1608,28 @@ internal sealed class CensorWindow : Form
             if (Uri.TryCreate(mediaPath, UriKind.Absolute, out var uri) && !uri.IsFile)
             {
                 var segment = uri.Segments.LastOrDefault()?.Trim('/');
-                return string.IsNullOrWhiteSpace(segment)
+                var title = string.IsNullOrWhiteSpace(segment)
                     ? uri.Host
                     : Path.GetFileNameWithoutExtension(Uri.UnescapeDataString(segment));
+                return title.Trim();
             }
-            return Path.GetFileNameWithoutExtension(mediaPath);
+            return Path.GetFileNameWithoutExtension(mediaPath).Trim();
         }
         catch (Exception exception) when (
             exception is ArgumentException or NotSupportedException or UriFormatException)
         {
-            return mediaPath;
+            return mediaPath.Trim();
         }
+    }
+
+    private string? ResolveInitialDirectory(string? path)
+    {
+        var directory = Path.GetDirectoryName(path);
+        return !string.IsNullOrWhiteSpace(directory)
+            ? directory
+            : _settings.RememberLastScheduleDirectory
+                ? _settings.LastScheduleDirectory
+                : null;
     }
 
     private static bool MediaPathsEqual(string? left, string? right) =>

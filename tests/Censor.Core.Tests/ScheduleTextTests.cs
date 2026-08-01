@@ -217,6 +217,16 @@ public sealed class ScheduleTextTests
         Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
     }
 
+    [Theory]
+    [InlineData(" Film")]
+    [InlineData("Film ")]
+    public void RejectsTitleWhitespaceThatParserWouldDiscard(string title)
+    {
+        var document = new ScheduleDocument(new ScheduleMetadata(Title: title), [], []);
+
+        Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
+    }
+
     [Fact]
     public void RejectsMultilineIntervalNote()
     {

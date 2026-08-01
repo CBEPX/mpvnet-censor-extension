@@ -89,7 +89,9 @@ public sealed class MediaSessionCoordinator : IDisposable
             cancellation = _sessionCancellation;
         }
         cancellation.Cancel();
-        cancellation.Dispose();
+        // Already handed-out tokens may still register during shutdown. Keeping
+        // the canceled source undisposed preserves that contract until the
+        // coordinator and its remaining consumers become collectible.
     }
 
     private OperationTicket SnapshotUnsafe() =>
