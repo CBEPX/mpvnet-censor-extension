@@ -14,7 +14,7 @@ if (-not (Test-Path $MpvNetPath -PathType Leaf)) {
 }
 
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("censor-runtime-smoke-" + [Guid]::NewGuid().ToString("N"))
-$MediaPath = Join-Path $TempRoot "frame.ppm"
+$MediaPath = Join-Path $TempRoot "clip.y4m"
 $StdOut = Join-Path $TempRoot "stdout.log"
 $StdErr = Join-Path $TempRoot "stderr.log"
 $PipeName = "censor-runtime-" + [Guid]::NewGuid().ToString("N")
@@ -179,15 +179,21 @@ try {
             [Text.UTF8Encoding]::new($false))
     }
 
-    $Header = [Text.Encoding]::ASCII.GetBytes("P6`n64 64`n255`n")
-    $Pixels = [byte[]]::new(64 * 64 * 3)
-    for ($Index = 0; $Index -lt $Pixels.Length; $Index++) {
-        $Pixels[$Index] = 128
+    $Header = [Text.Encoding]::ASCII.GetBytes("YUV4MPEG2 W64 H64 F10:1 Ip A1:1 C420jpeg`n")
+    $FrameHeader = [Text.Encoding]::ASCII.GetBytes("FRAME`n")
+    $Frame = [byte[]]::new(64 * 64 * 3 / 2)
+    [Array]::Fill($Frame, [byte]128)
+    $Video = [IO.File]::Create($MediaPath)
+    try {
+        $Video.Write($Header, 0, $Header.Length)
+        for ($Index = 0; $Index -lt 60; $Index++) {
+            $Video.Write($FrameHeader, 0, $FrameHeader.Length)
+            $Video.Write($Frame, 0, $Frame.Length)
+        }
     }
-    $Image = [byte[]]::new($Header.Length + $Pixels.Length)
-    [Buffer]::BlockCopy($Header, 0, $Image, 0, $Header.Length)
-    [Buffer]::BlockCopy($Pixels, 0, $Image, $Header.Length, $Pixels.Length)
-    [IO.File]::WriteAllBytes($MediaPath, $Image)
+    finally {
+        $Video.Dispose()
+    }
     $Process = Start-Process $MpvNetPath `
         -ArgumentList @(
             "--idle=yes",
