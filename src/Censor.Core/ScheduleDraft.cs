@@ -124,7 +124,7 @@ public sealed class ScheduleDraft
                             DiagnosticSeverity.Error,
                             0,
                             1,
-                            $"Черновик нельзя сохранить: {parseError.Message}"));
+                            $"Изменения нельзя сохранить: {parseError.Message}"));
                     }
                 }
             }
@@ -135,7 +135,7 @@ public sealed class ScheduleDraft
                     DiagnosticSeverity.Error,
                     0,
                     1,
-                    $"Черновик нельзя сохранить: {exception.Message}"));
+                    $"Изменения нельзя сохранить: {exception.Message}"));
             }
         }
 
@@ -285,6 +285,21 @@ public sealed class ScheduleDraft
         {
             Metadata = document.Metadata with { OffsetMs = offsetMs },
         });
+    }
+
+    public void RetargetMedia(string? title, long? mediaDurationMs)
+    {
+        _document = Freeze(_document with
+        {
+            Metadata = _document.Metadata with
+            {
+                Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim(),
+                MediaDurationMs = mediaDurationMs,
+            },
+        });
+        _undo.Clear();
+        _redo.Clear();
+        _forceDirty = true;
     }
 
     public bool Undo()

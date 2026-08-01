@@ -4,6 +4,21 @@ using Censor.Core;
 
 namespace Censor.MpvNet.Extension;
 
+internal sealed record AuthoringSnapshot(
+    ScheduleDocument Document,
+    string? SourcePath,
+    string? SourceHash,
+    string? MediaPath,
+    long? MediaSessionId);
+
+internal enum AuthoringSaveMode
+{
+    Save,
+    SaveAs,
+    ExportSrt,
+    ExportWebVtt,
+}
+
 internal sealed class CensorWindow : Form
 {
     // Draft reconciliation uses reference identity to recognize unchanged empty state.
@@ -21,9 +36,35 @@ internal sealed class CensorWindow : Form
     private readonly Label _schedule = ValueLabel();
     private readonly Label _status = ValueLabel();
     private readonly Label _duration = ValueLabel();
-    private readonly Label _filterState = ValueLabel();
-    private readonly Label _draftState = ValueLabel();
-    private readonly ListBox _warnings = new() { Dock = DockStyle.Fill };
+    private readonly Label _filterState = new() { AutoSize = true };
+    private readonly Label _draftState = new() { AutoSize = true };
+    private readonly Label _mediaHeading = new()
+    {
+        AutoEllipsis = true,
+        AutoSize = true,
+        Font = new("Segoe UI", 11, FontStyle.Bold),
+        Text = "Фильм не открыт",
+    };
+    private readonly Label _intervalCount = new() { AutoSize = true };
+    private readonly Label _detachedMessage = new()
+    {
+        AutoEllipsis = true,
+        AutoSize = true,
+        ForeColor = Color.DarkGoldenrod,
+    };
+    private readonly Label _emptyState = new()
+    {
+        Dock = DockStyle.Fill,
+        Text = "Интервалов пока нет. Во время просмотра отметьте начало и конец сцены",
+        TextAlign = ContentAlignment.MiddleCenter,
+    };
+    private readonly ListBox _warnings = new()
+    {
+        Dock = DockStyle.Top,
+        Height = 64,
+        IntegralHeight = false,
+        Visible = false,
+    };
     private readonly DataGridView _intervals = CreateGrid();
     private readonly ComboBox _blurPreset = new()
     {
@@ -40,9 +81,13 @@ internal sealed class CensorWindow : Form
     private readonly CheckBox _autoSidecar = new()
     {
         AutoSize = true,
-        Text = "Автозагрузка расписания рядом с фильмом",
+        Text = "Автоматически загружать файл интервалов рядом с фильмом",
     };
-    private readonly CheckBox _watchdog = new() { AutoSize = true, Text = "Автоматически восстанавливать фильтры цензуры" };
+    private readonly CheckBox _watchdog = new()
+    {
+        AutoSize = true,
+        Text = "Автоматически восстанавливать размытие",
+    };
     private readonly NumericUpDown _watchdogInterval = Milliseconds(250, 60_000);
     private readonly NumericUpDown _leadIn = Milliseconds(0, 86_400_000);
     private readonly NumericUpDown _leadOut = Milliseconds(0, 86_400_000);
@@ -54,7 +99,7 @@ internal sealed class CensorWindow : Form
     private readonly CheckBox _includeSchedule = new()
     {
         AutoSize = true,
-        Text = "Добавить расписание в диагностический ZIP-архив",
+        Text = "Добавить файл интервалов в диагностический ZIP-архив",
     };
     private readonly TextBox _diagnostics = new()
     {
@@ -68,15 +113,35 @@ internal sealed class CensorWindow : Form
     private readonly string _uiStatePath;
     private ExtensionSettings _settings;
     private ScheduleDraft? _draft;
-    private IReadOnlyList<CensorInterval>? _sourceIntervals;
     private IReadOnlyList<CensorInterval>? _runtimeIntervals;
     private IReadOnlyList<ParseDiagnostic> _draftDiagnostics = [];
     private IReadOnlyList<ParseDiagnostic> _runtimeDiagnostics = [];
+    private Button _addButton = null!;
+    private Button _advancedToggleButton = null!;
+    private Button _applyButton = null!;
+    private Button _deleteButton = null!;
+    private Button _markEndButton = null!;
+    private Button _markStartButton = null!;
+    private Button _saveButton = null!;
+    private Button _saveDetachedButton = null!;
+    private Button _useForCurrentButton = null!;
+    private FlowLayoutPanel _advancedActions = null!;
+    private FlowLayoutPanel _detachedActions = null!;
+    private FlowLayoutPanel _primaryActions = null!;
     private bool _allowClose;
     private bool _rendering;
     private long? _pendingStartMs;
     private string? _mediaPath;
+    private long _mediaSessionId;
+    private long? _mediaDurationMs;
+    private string? _draftMediaPath;
+    private long? _draftMediaSessionId;
     private string? _sourcePath;
+    private string? _sourceHash;
+    private string? _runtimeSchedulePath;
+    private string? _runtimeSourceHash;
+    private ScheduleDocument? _runtimeDocument;
+    private ScheduleDocument? _runtimeActiveDocument;
 
     public CensorWindow(ExtensionSettings settings, string localDataRoot)
     {
@@ -133,13 +198,13 @@ internal sealed class CensorWindow : Form
         PopulateSettings(settings);
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
-        tabs.TabPages.Add(new TabPage("Текущий фильм") { Controls = { BuildCurrentTab() } });
         tabs.TabPages.Add(new TabPage("Интервалы") { Controls = { BuildIntervalsTab() } });
         tabs.TabPages.Add(new TabPage("Настройки") { Controls = { BuildSettingsTab() } });
         tabs.TabPages.Add(new TabPage("Диагностика") { Controls = { BuildDiagnosticsTab() } });
         Controls.Add(tabs);
 
         _intervals.CellEndEdit += OnCellEndEdit;
+        _intervals.SelectionChanged += (_, _) => UpdateActionStates();
         _offset.ValueChanged += (_, _) =>
         {
             if (_rendering || _draft is null)
@@ -158,15 +223,14 @@ internal sealed class CensorWindow : Form
     }
 
     public event Action<string>? ScheduleSelected;
-    public event Action<ScheduleDocument>? ApplyRequested;
-    public event Action<ScheduleDocument, string?, bool>? SaveRequested;
+    public event Action<AuthoringSnapshot>? ApplyRequested;
+    public event Action<AuthoringSnapshot, AuthoringSaveMode>? SaveRequested;
     public event Action? ReloadRequested;
     public event Action? DisableRequested;
     public event Action<BlurSettings>? BlurPresetSelected;
     public event Action<string>? AudioCompressionPresetSelected;
     public event Action<SettingsFormValues>? SettingsChanged;
     public event Action<long>? SeekRequested;
-    public event Action<long>? PreviewRequested;
     public event Action<bool>? DiagnosticsRequested;
     public event Action? SettingsRepairRequested;
     public event Action<string, Exception>? PersistenceError;
@@ -175,50 +239,82 @@ internal sealed class CensorWindow : Form
 
     public void UpdateState(
         string? mediaPath,
+        long mediaSessionId,
         string? schedulePath,
+        string? sourceHash,
         string status,
         long? mediaDurationMs,
         ScheduleDocument? document,
+        ScheduleDocument? activeDocument,
         IReadOnlyList<ParseDiagnostic> diagnostics,
         bool hasActiveSchedule)
     {
         var intervals = document?.Intervals ?? EmptyIntervals;
-        if (!string.Equals(_mediaPath, mediaPath, StringComparison.OrdinalIgnoreCase))
+        var mediaChanged = _mediaSessionId != mediaSessionId ||
+            !MediaPathsEqual(_mediaPath, mediaPath);
+        var keepDetachedDraft = mediaChanged && _draft?.IsDirty == true;
+        var runtimeIntervalsUnchanged = ReferenceEquals(_runtimeIntervals, intervals);
+        if (mediaChanged)
         {
             _mediaPath = mediaPath;
             _pendingStartMs = null;
         }
+        _mediaSessionId = mediaSessionId;
+        _mediaDurationMs = mediaDurationMs;
+        _runtimeSchedulePath = schedulePath;
+        _runtimeSourceHash = sourceHash;
+        _runtimeDocument = document;
+        _runtimeActiveDocument = activeDocument;
+        _runtimeIntervals = intervals;
         _media.Text = string.IsNullOrEmpty(mediaPath) ? "Нет открытого фильма" : mediaPath;
-        _schedule.Text = string.IsNullOrEmpty(schedulePath) ? "Не выбрано" : schedulePath;
+        _mediaHeading.Text = string.IsNullOrEmpty(mediaPath)
+            ? "Фильм не открыт"
+            : GetMediaTitle(mediaPath) ?? mediaPath;
+        _schedule.Text = string.IsNullOrEmpty(schedulePath) ? "Не выбран" : schedulePath;
         var localizedStatus = LocalizeStatus(status);
         _status.Text = localizedStatus;
         _duration.Text = mediaDurationMs.HasValue
             ? FormatTimestamp(mediaDurationMs.Value)
             : "Неизвестна";
         _filterState.Text = status == "WARNING"
-            ? localizedStatus
+            ? "Размытие: требуется внимание"
             : hasActiveSchedule
-                ? "Активна"
-                : "Нет активной цепочки фильтров";
+                ? "Размытие: включено"
+                : "Размытие: выключено";
         _diagnostics.Text =
             $"Статус: {localizedStatus}{Environment.NewLine}" +
             $"Фильм: {_media.Text}{Environment.NewLine}" +
-            $"Расписание: {_schedule.Text}{Environment.NewLine}" +
-            $"Интервалов: {intervals.Count}";
+            $"Длительность: {_duration.Text}{Environment.NewLine}" +
+            $"Файл интервалов: {_schedule.Text}{Environment.NewLine}" +
+            $"Фильтры: {_filterState.Text}{Environment.NewLine}" +
+            $"Интервалов: {intervals.Count}" +
+            (diagnostics.Count == 0
+                ? ""
+                : Environment.NewLine + Environment.NewLine +
+                  string.Join(
+                      Environment.NewLine,
+                      diagnostics.Select(item =>
+                          $"{item.Severity}: {item.Line}:{item.Column} {item.Message}")));
         _runtimeDiagnostics = diagnostics;
 
+        if (mediaChanged)
+        {
+            if (keepDetachedDraft)
+                RenderDraft();
+            else
+                ReplaceDraftFromRuntime();
+            return;
+        }
+        if (HasDetachedDraft())
+        {
+            RenderDraft();
+            return;
+        }
+
         var reconciliation = DraftReconciliation.Decide(
-            ReferenceEquals(_runtimeIntervals, intervals),
+            runtimeIntervalsUnchanged,
             _draft?.IsDirty == true,
             document is not null && _draft?.Matches(document) == true);
-        _runtimeIntervals = intervals;
-        if ((reconciliation == DraftReconciliationAction.RefreshWarnings ||
-             reconciliation == DraftReconciliationAction.KeepDirtyDraft) &&
-            HasDetachedDraft())
-        {
-            _schedule.Text =
-                $"{_schedule.Text} (черновик: {(string.IsNullOrEmpty(_sourcePath) ? "новый" : _sourcePath)})";
-        }
         if (reconciliation == DraftReconciliationAction.RefreshWarnings)
         {
             if (_draft is null)
@@ -229,8 +325,10 @@ internal sealed class CensorWindow : Form
         }
         if (reconciliation == DraftReconciliationAction.LinkMatchingDraft)
         {
-            _sourceIntervals = intervals;
             _sourcePath = schedulePath;
+            _sourceHash = sourceHash;
+            _draftMediaPath = mediaPath;
+            _draftMediaSessionId = mediaSessionId;
             RenderDraft();
             return;
         }
@@ -240,16 +338,13 @@ internal sealed class CensorWindow : Form
             return;
         }
 
-        _sourceIntervals = intervals;
-        _sourcePath = schedulePath;
-        _draft = new(document ?? new(new(), [], []));
-        RenderDraft();
+        ReplaceDraftFromRuntime();
     }
 
     public bool ConfirmDurationMismatch() =>
         MessageBox.Show(
             this,
-            "Длительность расписания отличается от фильма. Применить всё равно?",
+            "Длительность в файле интервалов отличается от фильма. Применить всё равно?",
             "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
@@ -267,7 +362,7 @@ internal sealed class CensorWindow : Form
     public bool ConfirmSubtitleExport() =>
         MessageBox.Show(
             this,
-            "SRT и WebVTT сохраняют только интервалы и текст. Название, смещение, запас до и после интервала и служебные строки в экспорт не попадут.\n\nЭкспортировать копию? Черновик не будет помечен как сохранённый.",
+            "SRT и WebVTT сохраняют только интервалы и текст. Название, смещение, запас до и после интервала и служебные строки в экспорт не попадут.\n\nЭкспортировать копию? Несохранённые изменения останутся без изменений.",
             "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
@@ -275,20 +370,28 @@ internal sealed class CensorWindow : Form
 
     public bool MarkSaved(
         string path,
+        string sourceHash,
         ScheduleDocument savedDocument,
         string? lastScheduleDirectory)
     {
         _settings = _settings with { LastScheduleDirectory = lastScheduleDirectory };
+        var wasDetached = HasDetachedDraft();
         if (_draft?.MarkSaved(savedDocument) != true)
         {
             SaveRecovery();
             return false;
         }
 
-        _sourcePath = path;
-        _sourceIntervals = savedDocument.Intervals;
-        _schedule.Text = path;
         DraftRecoveryStore.Delete(_recoveryPath);
+        if (wasDetached)
+        {
+            ReplaceDraftFromRuntime();
+            return true;
+        }
+
+        _sourcePath = path;
+        _sourceHash = sourceHash;
+        _schedule.Text = path;
         RenderDraft();
         return true;
     }
@@ -346,12 +449,27 @@ internal sealed class CensorWindow : Form
         switch (command)
         {
             case "mark-start":
+                if (!CanEditCurrentMedia())
+                {
+                    Warn(HasDetachedDraft()
+                        ? "Сначала сохраните, перенесите или удалите изменения для другого фильма."
+                        : "Сначала откройте фильм.");
+                    break;
+                }
                 _pendingStartMs = capturedTimeMs ?? CurrentTimeRequested?.Invoke();
                 _draftState.Text = _pendingStartMs.HasValue
                     ? $"Начало отмечено: {FormatTimestamp(_pendingStartMs.Value)}"
                     : "Текущая позиция воспроизведения недоступна";
+                UpdateActionStates();
                 break;
             case "mark-end":
+                if (!CanEditCurrentMedia())
+                {
+                    Warn(HasDetachedDraft()
+                        ? "Сначала сохраните, перенесите или удалите изменения для другого фильма."
+                        : "Сначала откройте фильм.");
+                    break;
+                }
                 if (_pendingStartMs is not { } start)
                 {
                     Warn("Сначала отметьте начало интервала.");
@@ -367,10 +485,11 @@ internal sealed class CensorWindow : Form
                     Warn("Конец интервала должен быть позже отмеченного начала.");
                     break;
                 }
-                EnsureDraft();
+                if (!EnsureDraft())
+                    break;
                 _draft!.Add(start, end);
                 _pendingStartMs = null;
-                Changed();
+                Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
                 break;
             case "set-start":
                 CaptureBoundary(start: true, capturedTimeMs);
@@ -385,36 +504,69 @@ internal sealed class CensorWindow : Form
                 NavigateInterval(1);
                 break;
             case "save":
-                SaveDraft(saveAs: false);
+                SaveDraft(AuthoringSaveMode.Save);
+                break;
+            case "apply":
+                ApplyDraft();
                 break;
         }
     }
 
-    public string? ChooseSavePath(string? currentPath)
+    public string? ChooseSavePath(string? currentPath, string? suggestedPath)
     {
+        var initialPath = string.IsNullOrWhiteSpace(currentPath) ? suggestedPath : currentPath;
         using var dialog = new SaveFileDialog
         {
             AddExtension = true,
             DefaultExt = "censor.txt",
-            FileName = string.IsNullOrWhiteSpace(currentPath)
+            FileName = string.IsNullOrWhiteSpace(initialPath)
                 ? "schedule" + ScheduleFileKinds.CanonicalSuffix
-                : Path.GetFileName(currentPath),
-            Filter =
-                $"Censor TXT|*{ScheduleFileKinds.CanonicalSuffix}|" +
-                $"SubRip|*{ScheduleFileKinds.SrtSuffix}|" +
-                $"WebVTT|*{ScheduleFileKinds.WebVttSuffix}",
-            InitialDirectory = _settings.RememberLastScheduleDirectory
-                ? _settings.LastScheduleDirectory
-                : null,
+                : Path.GetFileName(initialPath),
+            Filter = $"Файл интервалов CensorPlayer|*{ScheduleFileKinds.CanonicalSuffix}",
+            InitialDirectory = Path.GetDirectoryName(initialPath) ??
+                (_settings.RememberLastScheduleDirectory
+                    ? _settings.LastScheduleDirectory
+                    : null),
             OverwritePrompt = true,
-            Title = "Сохранить расписание",
+            Title = "Сохранить файл интервалов",
         };
         while (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            if (ScheduleFileKinds.IsSupportedPath(dialog.FileName))
+            if (ScheduleFileKinds.IsCanonicalPath(dialog.FileName))
                 return dialog.FileName;
 
-            Warn("Допустимы только файлы .censor.txt, .srt и .vtt. Проверьте имя файла.");
+            Warn("Имя файла должно оканчиваться на .censor.txt.");
+        }
+        return null;
+    }
+
+    public string? ChooseExportPath(string? mediaPath, SubtitleFormat format)
+    {
+        var extension = format == SubtitleFormat.Srt
+            ? ScheduleFileKinds.SrtSuffix
+            : ScheduleFileKinds.WebVttSuffix;
+        var suggested = SidecarLocator.SuggestCanonicalPath(mediaPath);
+        var fileName = suggested is null
+            ? "schedule" + extension
+            : Path.GetFileName(suggested)[..^ScheduleFileKinds.CanonicalSuffix.Length] + extension;
+        using var dialog = new SaveFileDialog
+        {
+            AddExtension = true,
+            DefaultExt = extension[1..],
+            FileName = fileName,
+            Filter = format == SubtitleFormat.Srt ? "SubRip|*.srt" : "WebVTT|*.vtt",
+            InitialDirectory = Path.GetDirectoryName(suggested) ??
+                (_settings.RememberLastScheduleDirectory
+                    ? _settings.LastScheduleDirectory
+                    : null),
+            OverwritePrompt = true,
+            Title = "Экспортировать копию",
+        };
+        while (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            if (dialog.FileName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                return dialog.FileName;
+            Warn($"Имя файла должно оканчиваться на {extension}.");
         }
         return null;
     }
@@ -444,7 +596,7 @@ internal sealed class CensorWindow : Form
 
         using var dialog = new Form
         {
-            Text = "Выберите файл расписания",
+            Text = "Выберите файл интервалов",
             StartPosition = FormStartPosition.CenterParent,
             MinimizeBox = false,
             MaximizeBox = false,
@@ -529,89 +681,128 @@ internal sealed class CensorWindow : Form
         base.Dispose(disposing);
     }
 
-    private TableLayoutPanel BuildCurrentTab()
-    {
-        var load = Button("Загрузить файл…", SelectSchedule);
-        var apply = Button("Применить", ApplyDraft);
-        var reload = Button("Перезагрузить", () => ReloadRequested?.Invoke());
-        var disable = Button("Отключить", () => DisableRequested?.Invoke());
-        var next = Button("Следующий интервал", () => NavigateInterval(1));
-        var buttons = Flow(load, apply, reload, disable, next);
-
-        var layout = new TableLayoutPanel
-        {
-            ColumnCount = 2,
-            Dock = DockStyle.Fill,
-            Padding = new(12),
-            RowCount = 8,
-        };
-        layout.ColumnStyles.Add(new(SizeType.AutoSize));
-        layout.ColumnStyles.Add(new(SizeType.Percent, 100));
-        AddRow(layout, 0, "Фильм:", _media);
-        AddRow(layout, 1, "Длительность:", _duration);
-        AddRow(layout, 2, "Расписание:", _schedule);
-        AddRow(layout, 3, "Состояние:", _status);
-        AddRow(layout, 4, "Цепочка фильтров:", _filterState);
-        AddRow(layout, 5, "Черновик:", _draftState);
-        layout.Controls.Add(buttons, 0, 6);
-        layout.SetColumnSpan(buttons, 2);
-        layout.Controls.Add(_warnings, 0, 7);
-        layout.SetColumnSpan(_warnings, 2);
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.AutoSize));
-        layout.RowStyles.Add(new(SizeType.Percent, 100));
-        return layout;
-    }
-
     private TableLayoutPanel BuildIntervalsTab()
     {
-        var toolbar = Flow(
-            Button("Добавить", AddInterval),
-            Button("Удалить", DeleteSelected),
+        _markStartButton = Button("Отметить начало (F7)", () =>
+            HandleAuthoringCommand("mark-start"));
+        _markEndButton = Button("Отметить конец (F8)", () =>
+            HandleAuthoringCommand("mark-end"));
+        _deleteButton = Button("Удалить", DeleteSelected);
+        _applyButton = Button("Применить интервалы", ApplyDraft);
+        _saveButton = Button("Сохранить файл", () => SaveDraft(AuthoringSaveMode.Save));
+        _primaryActions = Flow(
+            _markStartButton,
+            _markEndButton,
+            _deleteButton,
+            Button("Отменить", Undo),
+            Button("Повторить", Redo),
+            Button("Перейти к началу", GoToSelectedStart),
+            _applyButton,
+            _saveButton);
+
+        _addButton = Button("Добавить вручную", AddInterval);
+        _advancedActions = Flow(
+            Button("Импортировать файл…", SelectSchedule),
+            Button("Перезагрузить файл", () => ReloadRequested?.Invoke()),
+            _addButton,
             Button("Дублировать", DuplicateSelected),
             Button("Объединить", MergeSelected),
-            Button("Разрезать", SplitSelected),
-            Button("Отменить", Undo),
-            Button("Повторить", Redo));
-        var capture = Flow(
+            Button("Разделить", SplitSelected),
             Button("Начало = текущая позиция", () => CaptureBoundary(start: true)),
             Button("Конец = текущая позиция", () => CaptureBoundary(start: false)),
             Button("Начало −100", () => ShiftSelected(start: true, -100)),
             Button("Начало +100", () => ShiftSelected(start: true, 100)),
             Button("Конец −100", () => ShiftSelected(start: false, -100)),
-            Button("Конец +100", () => ShiftSelected(start: false, 100)));
-        var global = Flow(
+            Button("Конец +100", () => ShiftSelected(start: false, 100)),
+            Button("Предыдущий", () => NavigateInterval(-1)),
+            Button("Следующий", () => NavigateInterval(1)),
+            Button("Выключить размытие", () => DisableRequested?.Invoke()),
             new Label { AutoSize = true, Margin = new(3, 8, 3, 0), Text = "Смещение, мс:" },
             _offset,
             new Label { AutoSize = true, Margin = new(12, 8, 3, 0), Text = "Сдвиг всех интервалов, мс:" },
             _shiftAll,
             Button("Сдвинуть", ShiftAll),
-            Button("Предыдущий", () => NavigateInterval(-1)),
-            Button("Следующий", () => NavigateInterval(1)),
-            Button("Предпросмотр", PreviewSelected),
-            Button("Сохранить", () => SaveDraft(saveAs: false)),
-            Button("Сохранить как…", () => SaveDraft(saveAs: true)),
-            Button("Отбросить черновик", DiscardDraft));
+            Button("Сохранить как…", () => SaveDraft(AuthoringSaveMode.SaveAs)),
+            Button("Экспортировать SRT…", () => SaveDraft(AuthoringSaveMode.ExportSrt)),
+            Button("Экспортировать WebVTT…", () => SaveDraft(AuthoringSaveMode.ExportWebVtt)),
+            Button("Удалить несохранённые изменения", DiscardDraft));
+        _advancedActions.Visible = false;
+        _advancedToggleButton = Button("Дополнительно ▾", () =>
+        {
+            _advancedActions.Visible = !_advancedActions.Visible;
+            _advancedToggleButton.Text = _advancedActions.Visible
+                ? "Дополнительно ▴"
+                : "Дополнительно ▾";
+        });
+        _primaryActions.Controls.Add(_advancedToggleButton);
 
-        var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 4 };
+        _saveDetachedButton = Button(
+            "Сохранить изменения",
+            () => SaveDraft(AuthoringSaveMode.Save));
+        _useForCurrentButton = Button(
+            "Использовать для текущего фильма",
+            UseDraftForCurrentMedia);
+        _detachedActions = Flow(
+            _detachedMessage,
+            _saveDetachedButton,
+            _useForCurrentButton,
+            Button("Удалить", DiscardDraft));
+        _detachedActions.BackColor = Color.LemonChiffon;
+        _detachedActions.Padding = new(6);
+        _detachedActions.Visible = false;
+
+        var header = Flow(_mediaHeading, _intervalCount, _filterState, _draftState);
+        header.Padding = new(3, 3, 3, 0);
+
+        var gridHost = new Panel { Dock = DockStyle.Fill };
+        gridHost.Controls.Add(_intervals);
+        gridHost.Controls.Add(_emptyState);
+
+        var layout = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            Padding = new(8),
+            RowCount = 6,
+        };
+        layout.RowStyles.Add(new(SizeType.AutoSize));
+        layout.RowStyles.Add(new(SizeType.AutoSize));
         layout.RowStyles.Add(new(SizeType.AutoSize));
         layout.RowStyles.Add(new(SizeType.AutoSize));
         layout.RowStyles.Add(new(SizeType.AutoSize));
         layout.RowStyles.Add(new(SizeType.Percent, 100));
-        layout.Controls.Add(toolbar, 0, 0);
-        layout.Controls.Add(capture, 0, 1);
-        layout.Controls.Add(global, 0, 2);
-        layout.Controls.Add(_intervals, 0, 3);
+        layout.Controls.Add(header, 0, 0);
+        layout.Controls.Add(_detachedActions, 0, 1);
+        layout.Controls.Add(_warnings, 0, 2);
+        layout.Controls.Add(_primaryActions, 0, 3);
+        layout.Controls.Add(_advancedActions, 0, 4);
+        layout.Controls.Add(gridHost, 0, 5);
         return layout;
     }
 
     private TableLayoutPanel BuildSettingsTab()
     {
+        var advanced = new TableLayoutPanel
+        {
+            ColumnCount = 2,
+            Dock = DockStyle.Top,
+            AutoSize = true,
+        };
+        AddRow(advanced, 0, "Запас перед началом, мс:", _leadIn);
+        AddRow(advanced, 1, "Запас после конца, мс:", _leadOut);
+        AddRow(advanced, 2, "Порог объединения, мс:", _mergeGap);
+        AddRow(advanced, 3, "Допуск длительности, мс:", _durationTolerance);
+        AddRow(advanced, 4, "Защитный запас до интервала, мс:", _earlyGuard);
+        AddRow(advanced, 5, "Период проверки размытия, мс:", _watchdogInterval);
+        advanced.Visible = false;
+        Button advancedToggle = null!;
+        advancedToggle = Button("Расширенные параметры ▾", () =>
+        {
+            advanced.Visible = !advanced.Visible;
+            advancedToggle.Text = advanced.Visible
+                ? "Расширенные параметры ▴"
+                : "Расширенные параметры ▾";
+        });
+
         var layout = new TableLayoutPanel
         {
             ColumnCount = 2,
@@ -621,15 +812,11 @@ internal sealed class CensorWindow : Form
         };
         AddRow(layout, 0, "Размытие:", _blurPreset);
         AddRow(layout, 1, "Компрессия звука:", _audioCompressionPreset);
-        AddRow(layout, 2, "Запас перед началом, мс:", _leadIn);
-        AddRow(layout, 3, "Запас после конца, мс:", _leadOut);
-        AddRow(layout, 4, "Порог объединения, мс:", _mergeGap);
-        AddRow(layout, 5, "Допуск длительности, мс:", _durationTolerance);
-        AddRow(layout, 6, "Защитный запас до интервала, мс:", _earlyGuard);
-        AddRow(layout, 7, "Период проверки фильтра, мс:", _watchdogInterval);
-        layout.Controls.Add(_autoSidecar, 1, 8);
-        layout.Controls.Add(_watchdog, 1, 9);
-        layout.Controls.Add(Button("Сохранить настройки", SaveSettings), 1, 10);
+        layout.Controls.Add(_autoSidecar, 1, 2);
+        layout.Controls.Add(_watchdog, 1, 3);
+        layout.Controls.Add(advancedToggle, 1, 4);
+        layout.Controls.Add(advanced, 1, 5);
+        layout.Controls.Add(Button("Сохранить настройки", SaveSettings), 1, 6);
         return layout;
     }
 
@@ -650,12 +837,18 @@ internal sealed class CensorWindow : Form
 
     private void AddInterval()
     {
+        if (!HasCurrentMedia())
+        {
+            Warn("Сначала откройте фильм.");
+            return;
+        }
         if (CurrentTimeRequested?.Invoke() is not { } start)
         {
             Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
             return;
         }
-        EnsureDraft();
+        if (!EnsureDraft())
+            return;
         _draft!.Add(start, checked(start + 1_000));
         Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
     }
@@ -720,6 +913,8 @@ internal sealed class CensorWindow : Form
 
     private void CaptureBoundary(bool start, long? capturedTimeMs = null)
     {
+        if (!CanEditCurrentMedia())
+            return;
         if (_draft is null || SelectedIndex() is not { } index)
             return;
         if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
@@ -780,27 +975,24 @@ internal sealed class CensorWindow : Form
 
     private void ApplyDraft()
     {
-        if (!TryGetValidDraft(out var document))
+        if (!TryGetValidDraft(out var snapshot))
             return;
-        ApplyRequested?.Invoke(document);
+        ApplyRequested?.Invoke(snapshot);
     }
 
-    private void SaveDraft(bool saveAs)
+    private void SaveDraft(AuthoringSaveMode mode)
     {
-        if (!TryGetValidDraft(out var document))
+        if (!TryGetValidDraft(out var snapshot))
             return;
-        SaveRequested?.Invoke(
-            document,
-            _sourcePath,
-            saveAs || string.IsNullOrWhiteSpace(_sourcePath));
+        SaveRequested?.Invoke(snapshot, mode);
     }
 
-    private bool TryGetValidDraft(out ScheduleDocument document)
+    private bool TryGetValidDraft(out AuthoringSnapshot snapshot)
     {
-        document = new(new(), [], []);
+        snapshot = new(new(new(), [], []), null, null, null, null);
         if (_draft is null)
         {
-            Warn("Сначала загрузите или создайте расписание.");
+            Warn("Сначала откройте фильм и создайте интервалы.");
             return false;
         }
         var diagnostics = _draft.Validate(
@@ -808,15 +1000,22 @@ internal sealed class CensorWindow : Form
             _settings.Limits.MaxTextFileBytes);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
-            Warn("Исправьте ошибки черновика перед применением или сохранением.");
+            Warn("Исправьте ошибки в интервалах перед применением или сохранением.");
             return false;
         }
-        document = _draft.Document;
+        snapshot = new(
+            _draft.Document,
+            _sourcePath,
+            _sourceHash,
+            _draftMediaPath,
+            _draftMediaSessionId);
         return true;
     }
 
     private void NavigateInterval(int direction)
     {
+        if (!CanEditCurrentMedia())
+            return;
         if (_draft is null || _draft.Document.Intervals.Count == 0)
             return;
         var current = SelectedIndex() ?? (direction > 0 ? -1 : 0);
@@ -825,11 +1024,11 @@ internal sealed class CensorWindow : Form
         SeekRequested?.Invoke(_draft.Document.Intervals[next].StartMs);
     }
 
-    private void PreviewSelected()
+    private void GoToSelectedStart()
     {
         if (_draft is null || SelectedIndex() is not { } index)
             return;
-        PreviewRequested?.Invoke(_draft.Document.Intervals[index].StartMs);
+        SeekRequested?.Invoke(_draft.Document.Intervals[index].StartMs);
     }
 
     private void OnCellEndEdit(object? sender, DataGridViewCellEventArgs e)
@@ -928,8 +1127,13 @@ internal sealed class CensorWindow : Form
             if (_draft is null)
             {
                 _draftDiagnostics = [];
-                _draftState.Text = "Нет черновика";
+                _draftState.Text = "Нет интервалов";
+                _intervalCount.Text = "Интервалов: 0";
+                _emptyState.Visible = true;
+                _intervals.Visible = false;
                 RenderWarnings([]);
+                UpdateDetachedState();
+                UpdateActionStates();
                 return;
             }
 
@@ -952,6 +1156,9 @@ internal sealed class CensorWindow : Form
                     intervals[index],
                     errorRows.Contains(index));
             }
+            _intervalCount.Text = $"Интервалов: {intervals.Count}";
+            _emptyState.Visible = intervals.Count == 0;
+            _intervals.Visible = intervals.Count > 0;
             RenderDraftSummary(draftDiagnostics);
         }
         finally
@@ -966,7 +1173,10 @@ internal sealed class CensorWindow : Form
             }
         }
         if (_intervals.Rows.Count == 0)
+        {
+            UpdateActionStates();
             return;
+        }
         var validIndices = restoreIndices
             .Where(index => index >= 0 && index < _intervals.Rows.Count)
             .ToArray();
@@ -980,6 +1190,7 @@ internal sealed class CensorWindow : Form
                 ? restoreCurrent.Value
                 : validIndices[0];
         _intervals.CurrentCell = _intervals.Rows[current].Cells["start"];
+        UpdateActionStates();
     }
 
     private void RenderDraftRow(int index)
@@ -1029,32 +1240,41 @@ internal sealed class CensorWindow : Form
         {
             _rendering = wasRendering;
         }
+        var applied = _runtimeActiveDocument is not null &&
+            _draft.Matches(_runtimeActiveDocument);
+        var saved = !_draft.IsDirty && !string.IsNullOrWhiteSpace(_sourcePath);
         _draftState.Text = HasDetachedDraft()
-            ? _draft.IsDirty
-                ? "Несохранённый черновик не связан с текущим расписанием"
-                : "Сохранённый черновик не связан с текущим расписанием"
-            : _draft.IsDirty
-                ? "Изменения не применены и не сохранены"
-                : "Сохранено";
+            ? "Несохранённые изменения для другого фильма"
+            : $"{(applied ? "Применено" : "Не применено")} · " +
+              $"{(saved ? "Сохранено" : "Не сохранено")}";
+        UpdateDetachedState();
+        UpdateActionStates();
     }
 
     private bool HasDetachedDraft() =>
         _draft is not null &&
-        !ReferenceEquals(_sourceIntervals, _runtimeIntervals);
+        !DraftReconciliation.BelongsToCurrentSession(
+            _draftMediaPath,
+            _draftMediaSessionId,
+            _mediaPath,
+            _mediaSessionId);
 
     private void RenderWarnings(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
         _warnings.Items.Clear();
-        foreach (var diagnostic in diagnostics.Where(item => item.Line > 0))
-            _warnings.Items.Add($"#{diagnostic.Line}: {diagnostic.Message}");
-        foreach (var diagnostic in diagnostics.Where(item => item.Line <= 0))
+        foreach (var diagnostic in diagnostics
+            .Concat(_runtimeDiagnostics)
+            .Distinct()
+            .OrderBy(item => item.Line <= 0 ? int.MaxValue : item.Line))
         {
             var severity = diagnostic.Severity == DiagnosticSeverity.Error
                 ? "Ошибка"
                 : "Предупреждение";
-            _warnings.Items.Add($"{severity}: {diagnostic.Message}");
+            _warnings.Items.Add(diagnostic.Line > 0
+                ? $"#{diagnostic.Line}: {diagnostic.Message}"
+                : $"{severity}: {diagnostic.Message}");
         }
-        RenderDiagnostics(_runtimeDiagnostics);
+        _warnings.Visible = _warnings.Items.Count > 0;
     }
 
     private static void PopulateIntervalRow(
@@ -1071,18 +1291,6 @@ internal sealed class CensorWindow : Form
             : "—";
         row.Cells["note"].Value = interval.Note ?? "";
         row.Cells["status"].Value = hasError ? "Ошибка" : "Корректно";
-    }
-
-    private void RenderDiagnostics(IReadOnlyList<ParseDiagnostic> diagnostics)
-    {
-        foreach (var diagnostic in diagnostics)
-        {
-            var severity = diagnostic.Severity == DiagnosticSeverity.Error
-                ? "Ошибка"
-                : "Предупреждение";
-            _warnings.Items.Add(
-                $"{severity}: {diagnostic.Line}:{diagnostic.Column} {diagnostic.Message}");
-        }
     }
 
     private void SaveSettings()
@@ -1182,12 +1390,12 @@ internal sealed class CensorWindow : Form
             return;
         if (recovered.Status == DraftRecoveryStatus.Unreadable)
         {
-            Warn(recovered.Warning ?? "Не удалось прочитать несохранённый черновик.");
+            Warn(recovered.Warning ?? "Не удалось прочитать несохранённые изменения.");
             return;
         }
         var restore = MessageBox.Show(
             this,
-            "Найден несохранённый черновик. Восстановить его?",
+            "Найдены несохранённые изменения. Восстановить их?",
             "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question) == DialogResult.Yes;
@@ -1196,9 +1404,11 @@ internal sealed class CensorWindow : Form
             _draft = new(recovered.Document!);
             _draft.MarkDirty();
             _sourcePath = null;
-            _sourceIntervals = null;
-            _schedule.Text = "Восстановленный черновик (не связан с файлом)";
-            _draftState.Text = "Восстановлен несохранённый черновик";
+            _sourceHash = null;
+            _draftMediaPath = null;
+            _draftMediaSessionId = null;
+            _schedule.Text = "Восстановленные изменения не связаны с файлом";
+            _draftState.Text = "Восстановлены несохранённые изменения";
             RenderDraft();
         }
         else
@@ -1207,23 +1417,31 @@ internal sealed class CensorWindow : Form
         }
     }
 
-    private void EnsureDraft()
+    private bool EnsureDraft()
     {
-        _draft ??= new(new(new(), [], []));
+        if (!HasCurrentMedia() || HasDetachedDraft())
+            return false;
+        if (_draft is null)
+        {
+            _draft = new(CreateNewDocument(_mediaPath!, _mediaDurationMs));
+            _draftMediaPath = _mediaPath;
+            _draftMediaSessionId = _mediaSessionId;
+        }
+        return true;
     }
 
     private void SelectSchedule()
     {
         if (_draft?.IsDirty == true)
         {
-            Warn("Сначала сохраните или отбросьте текущий черновик.");
+            Warn("Сначала сохраните или удалите несохранённые изменения.");
             return;
         }
         using var dialog = new OpenFileDialog
         {
             CheckFileExists = true,
             Filter =
-                $"Расписания цензуры|*{ScheduleFileKinds.CanonicalSuffix};" +
+                $"Файлы интервалов|*{ScheduleFileKinds.CanonicalSuffix};" +
                 $"*{ScheduleFileKinds.SrtSuffix};*{ScheduleFileKinds.WebVttSuffix}|" +
                 $"Censor TXT|*{ScheduleFileKinds.CanonicalSuffix}|" +
                 $"SubRip|*{ScheduleFileKinds.SrtSuffix}|" +
@@ -1232,7 +1450,7 @@ internal sealed class CensorWindow : Form
                 ? _settings.LastScheduleDirectory
                 : null,
             Multiselect = false,
-            Title = "Загрузить расписание цензуры",
+            Title = "Импортировать файл интервалов",
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
@@ -1260,7 +1478,7 @@ internal sealed class CensorWindow : Form
     {
         if (_draft?.IsDirty == true)
         {
-            Warn("Сначала сохраните или отбросьте текущий черновик.");
+            Warn("Сначала сохраните или удалите несохранённые изменения.");
             return;
         }
         if (TryGetDroppedSchedule(e.Data, out var path) && ConfirmSubtitleImport(path))
@@ -1272,7 +1490,7 @@ internal sealed class CensorWindow : Form
         if (_draft?.IsDirty == true &&
             MessageBox.Show(
                 this,
-                "Отбросить несохранённые изменения?",
+                "Удалить несохранённые изменения?",
                 "CensorPlayer",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
@@ -1280,13 +1498,131 @@ internal sealed class CensorWindow : Form
         {
             return;
         }
+        var wasDetached = HasDetachedDraft();
+        DraftRecoveryStore.Delete(_recoveryPath);
+        if (wasDetached)
+        {
+            ReplaceDraftFromRuntime();
+            return;
+        }
+
         _draft = null;
         _sourcePath = null;
-        _sourceIntervals = null;
-        DraftRecoveryStore.Delete(_recoveryPath);
-        RenderDraft();
-        ReloadRequested?.Invoke();
+        _sourceHash = null;
+        _draftMediaPath = null;
+        _draftMediaSessionId = null;
+        if (_runtimeSchedulePath is null)
+            ReplaceDraftFromRuntime();
+        else
+            ReloadRequested?.Invoke();
     }
+
+    private void UseDraftForCurrentMedia()
+    {
+        if (_draft is null || !HasCurrentMedia() || !HasDetachedDraft())
+            return;
+
+        _draft.RetargetMedia(GetMediaTitle(_mediaPath!), _mediaDurationMs);
+        _draftMediaPath = _mediaPath;
+        _draftMediaSessionId = _mediaSessionId;
+        _sourcePath = null;
+        _sourceHash = null;
+        Changed();
+    }
+
+    private void ReplaceDraftFromRuntime()
+    {
+        _pendingStartMs = null;
+        _sourcePath = _runtimeSchedulePath;
+        _sourceHash = _runtimeSourceHash;
+        _draftMediaPath = _mediaPath;
+        _draftMediaSessionId = HasCurrentMedia() ? _mediaSessionId : null;
+        _draft = !HasCurrentMedia()
+            ? null
+            : new(_runtimeDocument ?? CreateNewDocument(_mediaPath!, _mediaDurationMs));
+        RenderDraft();
+    }
+
+    private void UpdateDetachedState()
+    {
+        var detached = HasDetachedDraft();
+        _detachedActions.Visible = detached;
+        if (!detached)
+            return;
+
+        var owner = GetMediaTitle(_draftMediaPath);
+        var current = GetMediaTitle(_mediaPath);
+        _detachedMessage.Text = owner is null
+            ? "Восстановленные изменения не связаны с открытым фильмом."
+            : $"Есть несохранённые изменения для «{owner}». " +
+              (current is null ? "Сейчас фильм не открыт." : $"Сейчас открыт «{current}».");
+        _saveDetachedButton.Text = owner is null
+            ? "Сохранить файл"
+            : $"Сохранить для «{owner}»";
+        _useForCurrentButton.Text = current is null
+            ? "Использовать для текущего фильма"
+            : $"Использовать для «{current}»";
+        _useForCurrentButton.Enabled = HasCurrentMedia();
+    }
+
+    private void UpdateActionStates()
+    {
+        if (_primaryActions is null)
+            return;
+
+        var canEditCurrent = CanEditCurrentMedia();
+        if (!canEditCurrent)
+        {
+            _advancedActions.Visible = false;
+            _advancedToggleButton.Text = "Дополнительно ▾";
+        }
+        _primaryActions.Enabled = canEditCurrent;
+        _advancedActions.Enabled = canEditCurrent;
+        _markStartButton.Enabled = canEditCurrent;
+        _markEndButton.Enabled = canEditCurrent && _pendingStartMs.HasValue;
+        _addButton.Enabled = canEditCurrent;
+        _deleteButton.Enabled = canEditCurrent && SelectedIndex().HasValue;
+        _applyButton.Enabled = canEditCurrent && _draft is not null;
+        _saveButton.Enabled = canEditCurrent && _draft is not null;
+        _intervals.ReadOnly = !canEditCurrent;
+    }
+
+    private bool HasCurrentMedia() => !string.IsNullOrWhiteSpace(_mediaPath);
+
+    private bool CanEditCurrentMedia() => HasCurrentMedia() && !HasDetachedDraft();
+
+    private static ScheduleDocument CreateNewDocument(
+        string mediaPath,
+        long? mediaDurationMs) =>
+        new(
+            new(Title: GetMediaTitle(mediaPath), MediaDurationMs: mediaDurationMs),
+            [],
+            []);
+
+    private static string? GetMediaTitle(string? mediaPath)
+    {
+        if (string.IsNullOrWhiteSpace(mediaPath))
+            return null;
+        try
+        {
+            if (Uri.TryCreate(mediaPath, UriKind.Absolute, out var uri) && !uri.IsFile)
+            {
+                var segment = uri.Segments.LastOrDefault()?.Trim('/');
+                return string.IsNullOrWhiteSpace(segment)
+                    ? uri.Host
+                    : Path.GetFileNameWithoutExtension(Uri.UnescapeDataString(segment));
+            }
+            return Path.GetFileNameWithoutExtension(mediaPath);
+        }
+        catch (Exception exception) when (
+            exception is ArgumentException or NotSupportedException or UriFormatException)
+        {
+            return mediaPath;
+        }
+    }
+
+    private static bool MediaPathsEqual(string? left, string? right) =>
+        string.Equals(left, right, StringComparison.OrdinalIgnoreCase);
 
     private static bool TryGetDroppedSchedule(IDataObject? data, out string path)
     {
@@ -1304,7 +1640,7 @@ internal sealed class CensorWindow : Form
 
         return MessageBox.Show(
             this,
-            "Этот файл субтитров будет использован как расписание размытия: каждый фрагмент станет отдельным интервалом. Продолжить?",
+            "Каждый фрагмент субтитров станет отдельным интервалом размытия. Импортировать файл?",
             "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
@@ -1432,25 +1768,25 @@ internal sealed class CensorWindow : Form
         {
             "ACTIVE" => "Активно",
             "APPLYING" => "Применение",
-            "DISABLED" => "Отключено",
+            "DISABLED" => "Размытие выключено",
             "DURATION MISMATCH" => "Длительность не совпадает",
-            "EMPTY SCHEDULE" => "Расписание пусто",
+            "EMPTY SCHEDULE" => "Интервалов нет",
             "ERROR" => "Ошибка",
             "IDLE" => "Ожидание",
-            "INVALID DRAFT" => "В черновике есть ошибки",
-            "INVALID SCHEDULE PATH" => "Некорректный путь к расписанию",
+            "INVALID DRAFT" => "В интервалах есть ошибки",
+            "INVALID SCHEDULE PATH" => "Некорректный путь к файлу интервалов",
             "LOADING" => "Загрузка",
-            "LOOKING FOR SIDECAR" => "Поиск расписания рядом с фильмом",
+            "LOOKING FOR SIDECAR" => "Поиск файла интервалов рядом с фильмом",
             "NO CURRENT MEDIA" => "Нет открытого фильма",
             "NO LOCAL MEDIA" => "Открыт не локальный файл",
-            "NO SCHEDULE" => "Расписание не выбрано",
-            "NO SCHEDULE TO APPLY" => "Нет расписания для применения",
-            "NO SCHEDULE TO RELOAD" => "Нет расписания для перезагрузки",
+            "NO SCHEDULE" => "Файл интервалов не выбран",
+            "NO SCHEDULE TO APPLY" => "Нет интервалов для применения",
+            "NO SCHEDULE TO RELOAD" => "Нет файла интервалов для перезагрузки",
             "OPERATION UNAVAILABLE" => "Операция недоступна",
             "READY TO APPLY" => "Готово к применению",
-            "RELOADED" => "Перезагружено — нажмите «Применить»",
+            "RELOADED" => "Перезагружено — нажмите «Применить интервалы»",
             "SAVED" => "Сохранено",
-            "SELECT SIDECAR" => "Выберите файл расписания",
+            "SELECT SIDECAR" => "Выберите файл интервалов",
             "WARNING" => "Требуется внимание",
             _ => status,
         };

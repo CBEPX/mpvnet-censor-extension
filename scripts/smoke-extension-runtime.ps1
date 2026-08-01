@@ -15,7 +15,6 @@ if (-not (Test-Path $MpvNetPath -PathType Leaf)) {
 
 $TempRoot = Join-Path ([IO.Path]::GetTempPath()) ("censor-runtime-smoke-" + [Guid]::NewGuid().ToString("N"))
 $MediaPath = Join-Path $TempRoot "frame.ppm"
-$SchedulePath = Join-Path $TempRoot "frame.censor.txt"
 $StdOut = Join-Path $TempRoot "stdout.log"
 $StdErr = Join-Path $TempRoot "stderr.log"
 $PipeName = "censor-runtime-" + [Guid]::NewGuid().ToString("N")
@@ -141,6 +140,22 @@ function Wait-ForMedia {
     throw "mpv.net did not load the runtime-smoke media file."
 }
 
+function Set-MediaPosition {
+    param([Parameter(Mandatory)][double]$Seconds)
+
+    [void](Invoke-MpvCommand @("seek", $Seconds, "absolute", "exact"))
+    $Deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $Response = Invoke-MpvCommand @("get_property", "time-pos")
+        if ([Math]::Abs(([double]$Response.data) - $Seconds) -lt 0.25) {
+            return
+        }
+        Start-Sleep -Milliseconds 100
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "mpv.net did not seek to $Seconds seconds."
+}
+
 function Wait-ForExtension {
     $Deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -189,11 +204,6 @@ try {
     [Buffer]::BlockCopy($Header, 0, $Image, 0, $Header.Length)
     [Buffer]::BlockCopy($Pixels, 0, $Image, $Header.Length, $Pixels.Length)
     [IO.File]::WriteAllBytes($MediaPath, $Image)
-    [IO.File]::WriteAllText(
-        $SchedulePath,
-        "# censor-timeline: 1`n00:00:00.000 --> 00:00:30.000`n",
-        [Text.UTF8Encoding]::new($false))
-
     $Process = Start-Process $MpvNetPath `
         -ArgumentList @(
             "--idle=yes",
@@ -225,6 +235,14 @@ try {
     Wait-ForMedia $MediaPath
     [void](Invoke-MpvCommand @("vf", "add", "@censor_smoke_user:lavfi=[hflip]"))
     Wait-ForFilter "censor_smoke_user" $true
+    Wait-ForFilter "censor_blur_000" $false
+    Set-MediaPosition 1
+    Send-CensorMessage @("censor-mark-start")
+    Start-Sleep -Milliseconds 1000
+    Set-MediaPosition 3
+    Send-CensorMessage @("censor-mark-end")
+    Start-Sleep -Milliseconds 1000
+    Send-CensorMessage @("censor-apply")
     Wait-ForFilter "censor_blur_000" $true
     Wait-ForFilter "censor_smoke_user" $true
 

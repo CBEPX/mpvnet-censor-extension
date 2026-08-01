@@ -245,7 +245,7 @@ public sealed class Extension : IExtension, IDisposable
                 ReloadSchedule();
                 break;
             case CensorClientCommandKind.Apply:
-                ApplyPendingSchedule();
+                QueueWindowAction(window => window.HandleAuthoringCommand("apply"));
                 break;
             case CensorClientCommandKind.Disable:
                 DisableSchedule();
@@ -431,7 +431,7 @@ public sealed class Extension : IExtension, IDisposable
         {
             Terminal.WriteError(exception, LogModule);
             if (UpdateWindow("ERROR", ticket, token))
-                Show("Не удалось загрузить расписание рядом с фильмом. Подробности — в журнале mpv.net.", ticket, token);
+                Show("Не удалось загрузить файл интервалов рядом с фильмом. Подробности — в журнале mpv.net.", ticket, token);
         }
         finally
         {
@@ -494,7 +494,7 @@ public sealed class Extension : IExtension, IDisposable
             UpdateWindow("LOADING", ticket, token);
             if (new FileInfo(schedulePath).Length > settings.Limits.MaxTextFileBytes)
                 throw new InvalidDataException(
-                    $"Размер расписания превышает {settings.Limits.MaxTextFileBytes} байт.");
+                    $"Размер файла интервалов превышает {settings.Limits.MaxTextFileBytes} байт.");
             var bytes = await File.ReadAllBytesAsync(schedulePath, token).ConfigureAwait(false);
             var text = StrictUtf8.GetString(bytes);
             var sourceHash = ComputeHash(bytes);
@@ -508,7 +508,7 @@ public sealed class Extension : IExtension, IDisposable
                 if (UpdateWindow("ERROR", ticket, token))
                 {
                     Show(
-                        $"Ошибка расписания: {parsed.Diagnostics.First(item => item.Severity == DiagnosticSeverity.Error).Message}",
+                        $"Ошибка в файле интервалов: {parsed.Diagnostics.First(item => item.Severity == DiagnosticSeverity.Error).Message}",
                         ticket,
                         token);
                 }
@@ -543,7 +543,7 @@ public sealed class Extension : IExtension, IDisposable
                     if (UpdateWindow("DURATION MISMATCH", ticket, token))
                     {
                         Show(
-                            "Расписание не применено: его длительность отличается от длительности фильма.",
+                            "Интервалы не применены: длительность в файле отличается от фильма.",
                             ticket,
                             token);
                     }
@@ -579,7 +579,7 @@ public sealed class Extension : IExtension, IDisposable
             if (plan.Chunks.Count == 0)
             {
                 if (ClearSchedule(ticket) && UpdateWindow("EMPTY SCHEDULE", ticket, token))
-                    Show("В расписании нет активных интервалов.", ticket, token);
+                    Show("В файле нет активных интервалов.", ticket, token);
                 return;
             }
 
@@ -614,7 +614,7 @@ public sealed class Extension : IExtension, IDisposable
             if (UpdateWindow("ACTIVE", ticket, token))
             {
                 Show(
-                    $"Расписание из файла {Path.GetFileName(schedulePath)} применено. Интервалов: {plan.IntervalCount}.",
+                    $"Файл {Path.GetFileName(schedulePath)} применён. Интервалов: {plan.IntervalCount}.",
                     ticket,
                     token);
             }
@@ -638,10 +638,10 @@ public sealed class Extension : IExtension, IDisposable
                     exception switch
                     {
                         DecoderFallbackException =>
-                            "Не удалось прочитать расписание: сохраните файл в кодировке UTF-8.",
+                            "Не удалось прочитать файл интервалов: сохраните его в кодировке UTF-8.",
                         InvalidDataException => exception.Message,
                         _ =>
-                            "Не удалось загрузить или применить расписание. Если воспроизведение осталось на паузе, выберите «Цензура → Отключить». Подробности — в журнале mpv.net.",
+                            "Не удалось загрузить или применить интервалы. Если воспроизведение осталось на паузе, выберите «Цензура → Выключить размытие». Подробности — в журнале mpv.net.",
                     },
                     ticket,
                     token);
@@ -799,7 +799,7 @@ public sealed class Extension : IExtension, IDisposable
             !ScheduleFileKinds.IsSupportedPath(schedulePath))
         {
             UpdateWindow("INVALID SCHEDULE PATH");
-            Show("Не удалось открыть расписание: путь некорректен или формат файла не поддерживается.");
+            Show("Не удалось открыть файл интервалов: путь некорректен или формат не поддерживается.");
             return;
         }
 
@@ -809,7 +809,7 @@ public sealed class Extension : IExtension, IDisposable
         if (operation is null)
         {
             UpdateWindow("NO CURRENT MEDIA");
-            Show("Сначала откройте фильм, затем загрузите расписание.");
+            Show("Сначала откройте фильм, затем импортируйте файл интервалов.");
             return;
         }
 
@@ -839,28 +839,6 @@ public sealed class Extension : IExtension, IDisposable
             readyStatus);
     }
 
-    private void ApplyPendingSchedule()
-    {
-        PendingSchedule? pending;
-        CancellationToken token;
-        lock (_stateLock)
-        {
-            if (Volatile.Read(ref _stopping) != 0)
-                return;
-            pending = _pendingSchedule;
-            token = _operationCancellation.Token;
-        }
-
-        if (pending is null || !IsCurrent(pending.Ticket))
-        {
-            UpdateWindow("NO SCHEDULE TO APPLY");
-            return;
-        }
-
-        UpdateWindow("APPLYING", pending.Ticket, token);
-        _ = ApplyPendingScheduleAsync(pending, token);
-    }
-
     private async Task ApplyPendingScheduleAsync(
         PendingSchedule pending,
         CancellationToken token)
@@ -877,7 +855,7 @@ public sealed class Extension : IExtension, IDisposable
                 pending.Diagnostics,
                 token).ConfigureAwait(false);
             if (UpdateWindow("ACTIVE", pending.Ticket, token))
-                Show($"Расписание применено. Интервалов: {pending.Plan.IntervalCount}.", pending.Ticket, token);
+                Show($"Интервалы применены: {pending.Plan.IntervalCount}.", pending.Ticket, token);
         }
         catch (Exception exception) when (
             token.IsCancellationRequested &&
@@ -890,15 +868,17 @@ public sealed class Extension : IExtension, IDisposable
             if (UpdateWindow("ERROR", pending.Ticket, token))
             {
                 Show(
-                    "Не удалось применить расписание. Если воспроизведение осталось на паузе, выберите «Цензура → Отключить».",
+                    "Не удалось применить интервалы. Если воспроизведение осталось на паузе, выберите «Цензура → Выключить размытие».",
                     pending.Ticket,
                     token);
             }
         }
     }
 
-    private void ApplyDraftDocument(ScheduleDocument document)
+    private void ApplyDraftDocument(AuthoringSnapshot snapshot)
     {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var document = snapshot.Document;
         ArgumentNullException.ThrowIfNull(document);
         var settings = _settings;
         var validation = ScheduleDraft.Validate(
@@ -912,19 +892,15 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
-        string? schedulePath;
-        string? sourceHash;
-        lock (_stateLock)
-        {
-            schedulePath = _pendingSchedule?.SchedulePath ??
-                _activeSchedule?.SchedulePath;
-            sourceHash = _pendingSchedule?.SourceHash ?? _activeSchedule?.SourceHash;
-        }
-
-        var operation = StartNewOperation();
+        var operation = StartNewOperationForMedia(
+            snapshot.MediaPath,
+            snapshot.MediaSessionId);
         if (operation is null)
         {
-            UpdateWindow("NO CURRENT MEDIA");
+            UpdateWindow(string.IsNullOrWhiteSpace(snapshot.MediaPath)
+                ? "NO CURRENT MEDIA"
+                : "OPERATION UNAVAILABLE");
+            Show("Интервалы относятся к другому фильму. Сначала выберите, сохранить их или использовать для текущего фильма.");
             return;
         }
 
@@ -937,14 +913,14 @@ public sealed class Extension : IExtension, IDisposable
             if (ClearSchedule(operation.Value.Ticket) &&
                 UpdateWindow("EMPTY SCHEDULE", operation.Value.Ticket, operation.Value.Token))
             {
-                Show("В расписании нет активных интервалов.", operation.Value.Ticket, operation.Value.Token);
+                Show("В файле нет активных интервалов.", operation.Value.Ticket, operation.Value.Token);
             }
             return;
         }
         var pending = new PendingSchedule(
             operation.Value.Ticket,
-            schedulePath,
-            sourceHash,
+            snapshot.SourcePath,
+            snapshot.SourceHash,
             document,
             plan,
             normalized,
@@ -1036,7 +1012,7 @@ public sealed class Extension : IExtension, IDisposable
         {
         }
         Show(normalizationChanged && hasSchedule
-            ? "Настройки сохранены. Запас до и после интервала и порог объединения применятся после перезагрузки расписания."
+            ? "Настройки сохранены. Запас до и после интервала и порог объединения применятся после перезагрузки файла интервалов."
             : "Настройки сохранены.");
     }
 
@@ -1073,41 +1049,55 @@ public sealed class Extension : IExtension, IDisposable
             InvokeWindow(window => window.SetSettings(previous));
     }
 
-    private void SaveDraft(
-        ScheduleDocument document,
-        string? sourcePath,
-        bool choosePath)
+    private void SaveDraft(AuthoringSnapshot snapshot, AuthoringSaveMode mode)
     {
-        string? currentPath;
-        string? expectedHash;
-        bool sourceMatchesCurrent;
-        OperationTicket saveTicket;
+        ArgumentNullException.ThrowIfNull(snapshot);
+        var document = snapshot.Document;
         ExtensionSettings settings;
+        OperationTicket saveTicket;
+        bool sourceMatchesCurrent;
         lock (_stateLock)
         {
+            saveTicket = _revisions.Snapshot();
             var runtimePath =
                 _pendingSchedule?.SchedulePath ?? _activeSchedule?.SchedulePath;
-            sourceMatchesCurrent = string.Equals(
-                sourcePath,
-                runtimePath,
-                StringComparison.OrdinalIgnoreCase);
-            currentPath = sourcePath;
-            expectedHash = sourceMatchesCurrent
-                ? _pendingSchedule?.SourceHash ?? _activeSchedule?.SourceHash
-                : null;
-            saveTicket = _revisions.Snapshot();
+            sourceMatchesCurrent =
+                DraftReconciliation.BelongsToCurrentSession(
+                    snapshot.MediaPath,
+                    snapshot.MediaSessionId,
+                    _currentMediaPath,
+                    saveTicket.MediaSessionId) &&
+                string.Equals(
+                    snapshot.SourcePath,
+                    runtimePath,
+                    StringComparison.OrdinalIgnoreCase);
             settings = _settings;
         }
+
         if (ScheduleDraft.Validate(
                 document,
                 settings.Limits.MaxIntervals,
                 settings.Limits.MaxTextFileBytes)
             .Any(item => item.Severity == DiagnosticSeverity.Error))
         {
-            Show("Расписание не сохранено: исправьте ошибки черновика.");
+            Show("Файл интервалов не сохранён: исправьте ошибки.");
             return;
         }
-        choosePath |= !sourceMatchesCurrent || expectedHash is null;
+
+        if (mode is AuthoringSaveMode.ExportSrt or AuthoringSaveMode.ExportWebVtt)
+        {
+            ExportDraftCopy(
+                document,
+                snapshot.MediaPath,
+                mode == AuthoringSaveMode.ExportSrt
+                    ? SubtitleFormat.Srt
+                    : SubtitleFormat.WebVtt);
+            return;
+        }
+
+        var choosePath = mode == AuthoringSaveMode.SaveAs ||
+            string.IsNullOrWhiteSpace(snapshot.SourcePath);
+        var currentPath = snapshot.SourcePath;
         if (ScheduleFileKinds.TryGetSubtitleFormat(currentPath, out _))
         {
             var baseName = Path.GetFileNameWithoutExtension(currentPath);
@@ -1119,14 +1109,15 @@ public sealed class Extension : IExtension, IDisposable
             choosePath = true;
         }
 
-        var path = choosePath || string.IsNullOrWhiteSpace(currentPath)
-            ? ChooseSavePath(currentPath)
+        var suggestedPath = SidecarLocator.SuggestCanonicalPath(snapshot.MediaPath);
+        var path = choosePath
+            ? ChooseSavePath(currentPath, suggestedPath)
             : currentPath;
         if (string.IsNullOrWhiteSpace(path))
             return;
-        if (!ScheduleFileKinds.IsSupportedPath(path))
+        if (!ScheduleFileKinds.IsCanonicalPath(path))
         {
-            Show("Расписание не сохранено: выберите файл .censor.txt, .srt или .vtt.");
+            Show("Файл интервалов не сохранён: имя должно оканчиваться на .censor.txt.");
             return;
         }
 
@@ -1134,42 +1125,18 @@ public sealed class Extension : IExtension, IDisposable
         {
             if (!TryReadScheduleHash(path, out var currentHash))
                 return;
-            if (!string.Equals(expectedHash, currentHash, StringComparison.Ordinal))
+            if (!string.Equals(snapshot.SourceHash, currentHash, StringComparison.Ordinal))
             {
                 var decision = ConfirmExternalChange();
                 if (decision == DialogResult.Cancel)
                     return;
                 if (decision == DialogResult.No)
                 {
-                    path = ChooseSavePath(path);
+                    path = ChooseSavePath(path, suggestedPath);
                     if (string.IsNullOrWhiteSpace(path))
                         return;
                 }
             }
-        }
-
-        if (ScheduleFileKinds.TryGetSubtitleFormat(path, out var exportFormat))
-        {
-            if (!ConfirmSubtitleExport())
-                return;
-            try
-            {
-                AtomicFile.WriteUtf8Text(
-                    path,
-                    SubtitleScheduleText.Export(document, exportFormat),
-                    Path.GetFullPath(path) + ".bak");
-            }
-            catch (Exception exception) when (IsFileWriteException(exception))
-            {
-                ReportFileWriteError(
-                    "schedule-export-error",
-                    "Не удалось экспортировать файл. Проверьте доступ к папке и свободное место.",
-                    exception,
-                    path);
-                return;
-            }
-            Show($"Файл {Path.GetFileName(path)} экспортирован. Черновик не отмечен как сохранённый.");
-            return;
         }
 
         var normalized = ScheduleNormalizer.Normalize(
@@ -1189,7 +1156,7 @@ public sealed class Extension : IExtension, IDisposable
         {
             ReportFileWriteError(
                 "schedule-save-error",
-                "Не удалось сохранить расписание. Проверьте доступ к файлу, блокировку другой программой и свободное место.",
+                "Не удалось сохранить файл интервалов. Проверьте доступ к файлу, блокировку другой программой и свободное место.",
                 exception,
                 path);
             return;
@@ -1207,9 +1174,21 @@ public sealed class Extension : IExtension, IDisposable
         {
             lock (_stateLock)
             {
+                var runtimePath =
+                    _pendingSchedule?.SchedulePath ?? _activeSchedule?.SchedulePath;
+                var sourceStillMatchesCurrent =
+                    DraftReconciliation.BelongsToCurrentSession(
+                        snapshot.MediaPath,
+                        snapshot.MediaSessionId,
+                        _currentMediaPath,
+                        _revisions.Snapshot().MediaSessionId) &&
+                    string.Equals(
+                        snapshot.SourcePath,
+                        runtimePath,
+                        StringComparison.OrdinalIgnoreCase);
                 var decision = DraftReconciliation.DecideAfterSave(
                     IsCurrent(saveTicket),
-                    sourceMatchesCurrent,
+                    sourceMatchesCurrent && sourceStillMatchesCurrent,
                     plan.Chunks.Count == 0,
                     _pendingSchedule is not null,
                     _activeSchedule is not null);
@@ -1231,6 +1210,7 @@ public sealed class Extension : IExtension, IDisposable
                         };
                         break;
                     case SavedDraftRuntimeAction.StageFromActive:
+                    case SavedDraftRuntimeAction.StageNew:
                         _pendingSchedule = new(
                             saveTicket,
                             path,
@@ -1270,15 +1250,46 @@ public sealed class Extension : IExtension, IDisposable
         }
         if (saveSettings)
             SaveSettings(skipUnsupportedSchema: true);
-        if (runtimeAction == SavedDraftRuntimeAction.StageFromActive)
+        if (runtimeAction is SavedDraftRuntimeAction.StageFromActive or
+            SavedDraftRuntimeAction.StageNew)
+        {
             UpdateWindow("READY TO APPLY", saveTicket);
+        }
         var windowMarkedSaved = markWindowSaved && TryMarkWindowSaved(
             path,
+            savedHash,
             document,
             savedScheduleDirectory);
         Show(windowMarkedSaved
             ? $"Файл {Path.GetFileName(path)} сохранён."
-            : $"Файл {Path.GetFileName(path)} сохранён, но текущий черновик или расписание уже изменились.");
+            : $"Файл {Path.GetFileName(path)} сохранён, но фильм или интервалы уже изменились.");
+    }
+
+    private void ExportDraftCopy(
+        ScheduleDocument document,
+        string? mediaPath,
+        SubtitleFormat format)
+    {
+        var path = ChooseExportPath(mediaPath, format);
+        if (string.IsNullOrWhiteSpace(path) || !ConfirmSubtitleExport())
+            return;
+        try
+        {
+            AtomicFile.WriteUtf8Text(
+                path,
+                SubtitleScheduleText.Export(document, format),
+                Path.GetFullPath(path) + ".bak");
+        }
+        catch (Exception exception) when (IsFileWriteException(exception))
+        {
+            ReportFileWriteError(
+                "schedule-export-error",
+                "Не удалось экспортировать файл. Проверьте доступ к папке и свободное место.",
+                exception,
+                path);
+            return;
+        }
+        Show($"Файл {Path.GetFileName(path)} экспортирован. Несохранённые изменения остались без изменений.");
     }
 
     private bool TryReadScheduleHash(string path, out string hash)
@@ -1304,7 +1315,7 @@ public sealed class Extension : IExtension, IDisposable
                     ["error"] = ProtectError(exception, path),
                 },
                 ExtensionLogLevel.Error);
-            Show("Расписание не сохранено: не удалось проверить, не изменён ли файл другой программой.");
+            Show("Файл интервалов не сохранён: не удалось проверить, не изменён ли он другой программой.");
             return false;
         }
     }
@@ -1487,12 +1498,12 @@ public sealed class Extension : IExtension, IDisposable
         }
         InvokeWindow(window => window.ShowDiagnosticsResult(
             (scheduleSerializationFailed
-                ? "Диагностический ZIP-архив сохранён без расписания:"
+                ? "Диагностический ZIP-архив сохранён без файла интервалов:"
                 : "Диагностический ZIP-архив сохранён:") +
             Environment.NewLine +
             path));
         Show(scheduleSerializationFailed
-            ? "Диагностика экспортирована без расписания: черновик содержит ошибки."
+            ? "Диагностика экспортирована без файла интервалов: в изменениях есть ошибки."
             : "Диагностика экспортирована в ZIP-архив.");
     }
 
@@ -1618,7 +1629,7 @@ public sealed class Extension : IExtension, IDisposable
         if (loadInProgress)
         {
             if (selectionChanged)
-                Show("Пресет размытия сохранён. Текущая загрузка расписания продолжится.");
+                Show("Пресет размытия сохранён. Текущая загрузка файла интервалов продолжится.");
             return;
         }
 
@@ -1635,7 +1646,7 @@ public sealed class Extension : IExtension, IDisposable
             if (selectionChanged)
             {
                 Show(
-                    "Новый пресет размытия сохранён. Чтобы применить его к подготовленному расписанию, нажмите «Применить».",
+                    "Новый пресет размытия сохранён. Чтобы применить его к подготовленным интервалам, нажмите «Применить интервалы».",
                     ticket,
                     token);
             }
@@ -1972,7 +1983,7 @@ public sealed class Extension : IExtension, IDisposable
         if (operation is null)
         {
             UpdateWindow("OPERATION UNAVAILABLE");
-            Show("Нельзя отключить расписание: сейчас нет открытого фильма.");
+            Show("Нельзя выключить размытие: сейчас нет открытого фильма.");
             return;
         }
 
@@ -1980,7 +1991,7 @@ public sealed class Extension : IExtension, IDisposable
             return;
 
         UpdateWindow("DISABLED", operation.Value.Ticket, operation.Value.Token);
-        Show("Расписание для текущего фильма отключено.", operation.Value.Ticket, operation.Value.Token);
+        Show("Размытие для текущего фильма выключено.", operation.Value.Ticket, operation.Value.Token);
     }
 
     private bool ClearSchedule(OperationTicket ticket)
@@ -2033,6 +2044,33 @@ public sealed class Extension : IExtension, IDisposable
 
         CancelSupersededOperation(operation.PreviousCancellation);
 
+        return (operation.Ticket, operation.Token);
+    }
+
+    private (OperationTicket Ticket, CancellationToken Token)? StartNewOperationForMedia(
+        string? expectedMediaPath,
+        long? expectedMediaSessionId)
+    {
+        if (string.IsNullOrWhiteSpace(expectedMediaPath))
+            return null;
+
+        (OperationTicket Ticket, CancellationToken Token, CancellationTokenSource PreviousCancellation)
+            operation;
+        lock (_stateLock)
+        {
+            if (Volatile.Read(ref _stopping) != 0 ||
+                !DraftReconciliation.BelongsToCurrentSession(
+                    expectedMediaPath,
+                    expectedMediaSessionId,
+                    _currentMediaPath,
+                    _revisions.Snapshot().MediaSessionId))
+            {
+                return null;
+            }
+            operation = BeginOperationUnsafe(clearPending: true, scheduleLoad: false);
+        }
+
+        CancelSupersededOperation(operation.PreviousCancellation);
         return (operation.Ticket, operation.Token);
     }
 
@@ -2163,8 +2201,8 @@ public sealed class Extension : IExtension, IDisposable
                         window.ScheduleSelected += path =>
                             QueueSafely(() => LoadManualSchedule(path));
                         window.ReloadRequested += () => QueueSafely(ReloadSchedule);
-                        window.ApplyRequested += document =>
-                            QueueSafely(() => ApplyDraftDocument(document));
+                        window.ApplyRequested += snapshot =>
+                            QueueSafely(() => ApplyDraftDocument(snapshot));
                         window.DisableRequested += () => QueueSafely(DisableSchedule);
                         window.BlurPresetSelected += settings =>
                             QueueSafely(() => ChangeBlurPreset(settings));
@@ -2172,12 +2210,10 @@ public sealed class Extension : IExtension, IDisposable
                             QueueSafely(() => ChangeAudioCompressionPreset(presetId));
                         window.SettingsChanged += settings =>
                             QueueSafely(() => ChangeSettings(settings));
-                        window.SaveRequested += (document, sourcePath, saveAs) =>
-                            QueueSafely(() => SaveDraft(document, sourcePath, saveAs));
+                        window.SaveRequested += (snapshot, mode) =>
+                            QueueSafely(() => SaveDraft(snapshot, mode));
                         window.SeekRequested += milliseconds =>
                             QueueSafely(() => SeekTo(milliseconds));
-                        window.PreviewRequested += milliseconds =>
-                            QueueSafely(() => SeekTo(Math.Max(0, milliseconds - 1_000)));
                         window.DiagnosticsRequested += includeSchedule =>
                             QueueSafely(() => ExportDiagnostics(includeSchedule));
                         window.SettingsRepairRequested += () => QueueSafely(RepairSettings);
@@ -2195,10 +2231,13 @@ public sealed class Extension : IExtension, IDisposable
                             var current = SnapshotWindow();
                             window.UpdateState(
                                 current.MediaPath,
+                                current.MediaSessionId,
                                 current.SchedulePath,
+                                current.SourceHash,
                                 current.Status,
                                 current.MediaDurationMs,
                                 current.Document,
+                                current.ActiveDocument,
                                 current.Diagnostics,
                                 current.HasActiveSchedule);
                             DrainWindowActions(window);
@@ -2210,10 +2249,13 @@ public sealed class Extension : IExtension, IDisposable
                         var snapshot = SnapshotWindow();
                         window.UpdateState(
                             snapshot.MediaPath,
+                            snapshot.MediaSessionId,
                             snapshot.SchedulePath,
+                            snapshot.SourceHash,
                             snapshot.Status,
                             snapshot.MediaDurationMs,
                             snapshot.Document,
+                            snapshot.ActiveDocument,
                             snapshot.Diagnostics,
                             snapshot.HasActiveSchedule);
 
@@ -2316,10 +2358,13 @@ public sealed class Extension : IExtension, IDisposable
                 var snapshot = SnapshotWindow();
                 window.UpdateState(
                     snapshot.MediaPath,
+                    snapshot.MediaSessionId,
                     snapshot.SchedulePath,
+                    snapshot.SourceHash,
                     snapshot.Status,
                     snapshot.MediaDurationMs,
                     snapshot.Document,
+                    snapshot.ActiveDocument,
                     snapshot.Diagnostics,
                     snapshot.HasActiveSchedule);
             }));
@@ -2333,14 +2378,18 @@ public sealed class Extension : IExtension, IDisposable
 
     private (
         string? MediaPath,
+        long MediaSessionId,
         string? SchedulePath,
+        string? SourceHash,
         string Status,
         long? MediaDurationMs,
         ScheduleDocument? Document,
+        ScheduleDocument? ActiveDocument,
         IReadOnlyList<ParseDiagnostic> Diagnostics,
         bool HasActiveSchedule) SnapshotWindow()
     {
         string? mediaPath;
+        long mediaSessionId;
         long? mediaDurationMs;
         string status;
         PendingSchedule? pending;
@@ -2348,6 +2397,7 @@ public sealed class Extension : IExtension, IDisposable
         lock (_stateLock)
         {
             mediaPath = _currentMediaPath;
+            mediaSessionId = _revisions.Snapshot().MediaSessionId;
             mediaDurationMs = _currentDurationMs;
             status = _windowStatus;
             pending = _pendingSchedule;
@@ -2356,15 +2406,18 @@ public sealed class Extension : IExtension, IDisposable
 
         return (
             mediaPath,
+            mediaSessionId,
             pending?.SchedulePath ?? active?.SchedulePath,
+            pending?.SourceHash ?? active?.SourceHash,
             status,
             mediaDurationMs,
             pending?.Document ?? active?.Document,
+            active?.Document,
             pending?.Diagnostics ?? active?.Diagnostics ?? [],
             active is not null);
     }
 
-    private string? ChooseSavePath(string? currentPath)
+    private string? ChooseSavePath(string? currentPath, string? suggestedPath)
     {
         CensorWindow? window;
         lock (_windowLock)
@@ -2374,7 +2427,25 @@ public sealed class Extension : IExtension, IDisposable
         try
         {
             return (string?)window.Invoke(new Func<string?>(() =>
-                window.ChooseSavePath(currentPath)));
+                window.ChooseSavePath(currentPath, suggestedPath)));
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
+    }
+
+    private string? ChooseExportPath(string? mediaPath, SubtitleFormat format)
+    {
+        CensorWindow? window;
+        lock (_windowLock)
+            window = _window;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+            return null;
+        try
+        {
+            return (string?)window.Invoke(new Func<string?>(() =>
+                window.ChooseExportPath(mediaPath, format)));
         }
         catch (InvalidOperationException)
         {
@@ -2402,6 +2473,7 @@ public sealed class Extension : IExtension, IDisposable
 
     private bool TryMarkWindowSaved(
         string path,
+        string sourceHash,
         ScheduleDocument document,
         string? lastScheduleDirectory)
     {
@@ -2413,7 +2485,7 @@ public sealed class Extension : IExtension, IDisposable
         try
         {
             return (bool)window.Invoke(new Func<bool>(() =>
-                window.MarkSaved(path, document, lastScheduleDirectory)));
+                window.MarkSaved(path, sourceHash, document, lastScheduleDirectory)));
         }
         catch (InvalidOperationException)
         {
@@ -2538,7 +2610,7 @@ public sealed class Extension : IExtension, IDisposable
             !windowThread.Join(ShutdownWaitTimeout))
         {
             Terminal.WriteError(
-                "Окно CensorPlayer не закрылось за 5 секунд; последние изменения черновика могли не сохраниться.",
+                "Окно CensorPlayer не закрылось за 5 секунд; последние изменения могли не сохраниться.",
                 LogModule);
         }
     }
@@ -2817,7 +2889,7 @@ public sealed class Extension : IExtension, IDisposable
             {
                 QueueShow(
                     "Не удалось восстановить фильтры. Автовосстановление остановлено. " +
-                    "Если воспроизведение осталось на паузе, выберите «Цензура → Отключить».");
+                    "Если воспроизведение осталось на паузе, выберите «Цензура → Выключить размытие».");
             }
         }
     }

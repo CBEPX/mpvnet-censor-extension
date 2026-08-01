@@ -14,6 +14,7 @@ public enum SavedDraftRuntimeAction
     ClearPending,
     UpdatePending,
     StageFromActive,
+    StageNew,
 }
 
 public readonly record struct SavedDraftDecision(
@@ -23,6 +24,24 @@ public readonly record struct SavedDraftDecision(
 
 public static class DraftReconciliation
 {
+    public static bool BelongsToCurrentMedia(
+        string? draftMediaPath,
+        string? currentMediaPath) =>
+        !string.IsNullOrWhiteSpace(draftMediaPath) &&
+        !string.IsNullOrWhiteSpace(currentMediaPath) &&
+        string.Equals(
+            draftMediaPath,
+            currentMediaPath,
+            StringComparison.OrdinalIgnoreCase);
+
+    public static bool BelongsToCurrentSession(
+        string? draftMediaPath,
+        long? draftMediaSessionId,
+        string? currentMediaPath,
+        long currentMediaSessionId) =>
+        draftMediaSessionId == currentMediaSessionId &&
+        BelongsToCurrentMedia(draftMediaPath, currentMediaPath);
+
     public static DraftReconciliationAction Decide(
         bool runtimeIntervalsUnchanged,
         bool draftDirty,
@@ -54,7 +73,7 @@ public static class DraftReconciliation
                 ? SavedDraftRuntimeAction.UpdatePending
                 : hasActive
                     ? SavedDraftRuntimeAction.StageFromActive
-                    : SavedDraftRuntimeAction.None;
+                    : SavedDraftRuntimeAction.StageNew;
         return new(true, true, action);
     }
 }

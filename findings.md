@@ -2,7 +2,7 @@
 
 ## Источники
 
-- `docs/TZ.md` — нормативная Windows P0 спецификация v1.3.1.
+- `docs/TZ.md` — нормативная Windows P0 спецификация v1.3.2.
 - `docs/adr/ADR-003-session-scoped-schedules-no-database.md` — принятое решение о session-scoped расписаниях без БД.
 - `tests/fixtures/example.censor.txt` — пример schema 1 с metadata и тремя интервалами.
 

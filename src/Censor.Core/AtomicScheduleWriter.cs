@@ -15,7 +15,7 @@ public static class AtomicScheduleWriter
 
         var validation = ScheduleDraft.Validate(document, maxIntervals, maxTextFileBytes);
         if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
-            throw new InvalidOperationException("Расписание не записано: исправьте ошибки черновика.");
+            throw new InvalidOperationException("Файл интервалов не записан: исправьте ошибки.");
 
         var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ??
             throw new ArgumentException("Путь к расписанию должен включать каталог.", nameof(path));

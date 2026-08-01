@@ -100,6 +100,41 @@ public sealed class ScheduleDraftTests
                 draftMatchesDocument: false));
     }
 
+    [Theory]
+    [InlineData("C:\\Films\\A.mkv", "c:\\films\\a.mkv", true)]
+    [InlineData("C:\\Films\\A.mkv", "C:\\Films\\B.mkv", false)]
+    [InlineData(null, "C:\\Films\\B.mkv", false)]
+    [InlineData("C:\\Films\\A.mkv", null, false)]
+    public void DraftOwnershipRequiresTheSameKnownMedia(
+        string? draftMediaPath,
+        string? currentMediaPath,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            DraftReconciliation.BelongsToCurrentMedia(
+                draftMediaPath,
+                currentMediaPath));
+    }
+
+    [Theory]
+    [InlineData(7L, 7L, true)]
+    [InlineData(6L, 7L, false)]
+    [InlineData(null, 7L, false)]
+    public void DraftOwnershipAlsoRequiresTheSameMediaSession(
+        long? draftSessionId,
+        long currentSessionId,
+        bool expected)
+    {
+        Assert.Equal(
+            expected,
+            DraftReconciliation.BelongsToCurrentSession(
+                "C:\\Films\\A.mkv",
+                draftSessionId,
+                "c:\\films\\a.mkv",
+                currentSessionId));
+    }
+
     [Fact]
     public void SavedDraftReconciliationSeparatesFileSuccessFromRuntimeMutation()
     {
@@ -112,8 +147,25 @@ public sealed class ScheduleDraftTests
             DraftReconciliation.DecideAfterSave(true, true, false, true, true));
         Assert.Equal(new(true, true, SavedDraftRuntimeAction.StageFromActive),
             DraftReconciliation.DecideAfterSave(true, true, false, false, true));
-        Assert.Equal(new(true, true, SavedDraftRuntimeAction.None),
+        Assert.Equal(new(true, true, SavedDraftRuntimeAction.StageNew),
             DraftReconciliation.DecideAfterSave(true, true, false, false, false));
+    }
+
+    [Fact]
+    public void MediaMetadataCanBeRetargetedWithoutChangingIntervals()
+    {
+        var draft = new ScheduleDraft(new(
+            new(Title: "Film A", MediaDurationMs: 1_000),
+            [new(100, 200)],
+            []));
+
+        draft.RetargetMedia(" Film B ", 2_000);
+
+        Assert.True(draft.IsDirty);
+        Assert.Equal("Film B", draft.Document.Metadata.Title);
+        Assert.Equal(2_000, draft.Document.Metadata.MediaDurationMs);
+        Assert.Equal(new CensorInterval(100, 200), draft.Document.Intervals.Single());
+        Assert.False(draft.CanUndo);
     }
 
     [Fact]

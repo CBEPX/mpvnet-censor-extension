@@ -4,6 +4,27 @@ namespace Censor.Core.Tests;
 
 public sealed class SidecarLocatorTests
 {
+    [Fact]
+    public void SuggestsCanonicalSidecarBesideLocalMedia()
+    {
+        var mediaPath = Path.Combine(
+            Path.GetTempPath(),
+            "Film.Directors.Cut.2026.mkv");
+
+        Assert.Equal(
+            Path.Combine(Path.GetTempPath(), "Film.Directors.Cut.2026.censor.txt"),
+            SidecarLocator.SuggestCanonicalPath(mediaPath));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("https://example.test/Film.mkv")]
+    public void DoesNotSuggestSidecarForMissingOrRemoteMedia(string? mediaPath)
+    {
+        Assert.Null(SidecarLocator.SuggestCanonicalPath(mediaPath));
+    }
+
     [Theory]
     [InlineData("schedule.censor.txt", true)]
     [InlineData("schedule.srt", true)]
