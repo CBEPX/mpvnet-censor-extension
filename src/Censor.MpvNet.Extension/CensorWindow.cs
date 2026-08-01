@@ -83,7 +83,7 @@ internal sealed class CensorWindow : Form
         _uiStatePath = Path.Combine(localDataRoot, "UiState.json");
         Text = "CensorPlayer — редактор цензуры";
         AccessibleName = Text;
-        MinimumSize = new(760, 520);
+        MinimumSize = new(UiStateStore.MinimumWidth, UiStateStore.MinimumHeight);
         Size = new(980, 680);
         StartPosition = FormStartPosition.CenterScreen;
         AllowDrop = true;

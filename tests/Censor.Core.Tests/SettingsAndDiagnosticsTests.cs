@@ -314,6 +314,34 @@ public sealed class SettingsAndDiagnosticsTests
     }
 
     [Fact]
+    public void ErrorProtectionHidesKnownAndEmbeddedPathsUnlessEnabled()
+    {
+        var pathHashKey = TestPathHashKey();
+        const string KnownPath = "private-film.mkv";
+        const string EmbeddedPath = @"C:\Private\Other.mkv";
+        var exception = new InvalidOperationException(
+            $"Не удалось открыть {KnownPath}; источник: {EmbeddedPath}");
+
+        var protectedText = DiagnosticsExporter.ProtectError(
+            exception,
+            includePaths: false,
+            pathHashKey,
+            [KnownPath]);
+
+        Assert.DoesNotContain(KnownPath, protectedText, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(EmbeddedPath, protectedText, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("hmac-sha256:", protectedText, StringComparison.Ordinal);
+        Assert.Contains(
+            KnownPath,
+            DiagnosticsExporter.ProtectError(
+                exception,
+                includePaths: true,
+                pathHashKey,
+                [KnownPath]),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LogUsesInvariantUtcNameAndDeletesOnlyExpiredMatchingFiles()
     {
         using var directory = new TemporaryDirectory();
@@ -364,6 +392,21 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.DoesNotContain("info-event", text, StringComparison.Ordinal);
         Assert.Contains("error-event", text, StringComparison.Ordinal);
         Assert.Contains("\"level\":\"error\"", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void LogReportsEventsDroppedFromItsBoundedBuffer()
+    {
+        using var directory = new TemporaryDirectory();
+        using (var log = new ExtensionLog(directory.Path, 30))
+        {
+            for (var index = 0; index < 50_000; index++)
+                log.Write("burst", new(1, index));
+        }
+
+        var text = File.ReadAllText(Directory.GetFiles(directory.Path, "*.log").Single());
+        Assert.Contains("\"event\":\"log-events-dropped\"", text, StringComparison.Ordinal);
+        Assert.Contains("\"droppedCount\":", text, StringComparison.Ordinal);
     }
 
     [Fact]

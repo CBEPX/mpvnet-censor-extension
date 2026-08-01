@@ -18,6 +18,33 @@ public sealed record DiagnosticsSnapshot(
 
 public static class DiagnosticsExporter
 {
+    public static string ProtectError(
+        Exception exception,
+        bool includePaths,
+        byte[] pathHashKey,
+        IEnumerable<string?> knownPaths)
+    {
+        ArgumentNullException.ThrowIfNull(exception);
+        ArgumentNullException.ThrowIfNull(pathHashKey);
+        ArgumentNullException.ThrowIfNull(knownPaths);
+
+        var text = exception.ToString();
+        if (includePaths)
+            return text;
+
+        text = RedactRootedPaths(text, pathHashKey);
+        foreach (var path in knownPaths
+                     .Where(path => !string.IsNullOrWhiteSpace(path))
+                     .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            text = text.Replace(
+                path!,
+                ExtensionLog.ProtectPath(path, includePath: false, pathHashKey),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        return text;
+    }
+
     public static void Export(
         string path,
         DiagnosticsSnapshot snapshot,

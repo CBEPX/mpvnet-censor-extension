@@ -16,6 +16,33 @@ public sealed class SidecarLocatorTests
     }
 
     [Fact]
+    public void SharedParserDispatchesTxtSrtAndWebVtt()
+    {
+        var inputs = new Dictionary<string, string>
+        {
+            ["film.censor.txt"] =
+                "# censor-timeline: 1\n00:00:01.000 --> 00:00:02.000\n",
+            ["film.srt"] =
+                "1\n00:00:01,000 --> 00:00:02,000\nblur\n",
+            ["film.vtt"] =
+                "WEBVTT\n\n00:00:01.000 --> 00:00:02.000\nblur\n",
+        };
+
+        foreach (var (path, text) in inputs)
+        {
+            var result = ScheduleFileKinds.Parse(path, text, new());
+
+            Assert.True(result.IsSuccess);
+            Assert.Equal(
+                new CensorInterval(
+                    1_000,
+                    2_000,
+                    path.EndsWith(".txt", StringComparison.Ordinal) ? null : "blur"),
+                result.Document!.Intervals.Single());
+        }
+    }
+
+    [Fact]
     public void ReturnsExistingCensorSidecarsInTxtSrtVttOrder()
     {
         var directory = Directory.CreateTempSubdirectory("censor-sidecar-tests-");

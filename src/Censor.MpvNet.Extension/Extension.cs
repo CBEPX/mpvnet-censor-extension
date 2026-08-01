@@ -21,6 +21,7 @@ public sealed class Extension : IExtension, IDisposable
         "Чтобы перезаписать его, откройте вкладку «Диагностика».";
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly TimeSpan DialogTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OsdGateTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ShutdownWaitTimeout = TimeSpan.FromSeconds(5);
 
@@ -147,49 +148,41 @@ public sealed class Extension : IExtension, IDisposable
 
     private void HandleClientMessage(string[] args)
     {
-        if (args.Length == 0)
+        if (CensorClientMessage.Parse(args) is not { } message)
             return;
 
-        if (args[0].Equals("censor-open", StringComparison.OrdinalIgnoreCase))
+        switch (message.Kind)
         {
-            ShowToolWindow();
-        }
-        else if (args[0].Equals("censor-pick", StringComparison.OrdinalIgnoreCase))
-        {
-            ShowToolWindow();
-            QueueWindowAction(window => window.OpenSchedulePicker());
-        }
-        else if (args[0].Equals("censor-load", StringComparison.OrdinalIgnoreCase))
-        {
-            if (args.Length > 1)
-                LoadManualSchedule(args[1]);
-            else
+            case CensorClientCommandKind.Open:
                 ShowToolWindow();
-        }
-        else if (args[0].Equals("censor-reload", StringComparison.OrdinalIgnoreCase))
-        {
-            ReloadSchedule();
-        }
-        else if (args[0].Equals("censor-apply", StringComparison.OrdinalIgnoreCase))
-        {
-            ApplyPendingSchedule();
-        }
-        else if (args[0].Equals("censor-disable", StringComparison.OrdinalIgnoreCase))
-        {
-            DisableSchedule();
-        }
-        else if (args[0].StartsWith("censor-", StringComparison.OrdinalIgnoreCase) &&
-                 args[0]["censor-".Length..].ToLowerInvariant() is
-                     "mark-start" or "mark-end" or "set-start" or "set-end" or
-                     "previous" or "next" or "save")
-        {
-            var command = args[0]["censor-".Length..].ToLowerInvariant();
-            var capturedTimeMs = command is
-                "mark-start" or "mark-end" or "set-start" or "set-end"
+                break;
+            case CensorClientCommandKind.Pick:
+                ShowToolWindow();
+                QueueWindowAction(window => window.OpenSchedulePicker());
+                break;
+            case CensorClientCommandKind.Load:
+                if (message.Argument is { } path)
+                    LoadManualSchedule(path);
+                else
+                    ShowToolWindow();
+                break;
+            case CensorClientCommandKind.Reload:
+                ReloadSchedule();
+                break;
+            case CensorClientCommandKind.Apply:
+                ApplyPendingSchedule();
+                break;
+            case CensorClientCommandKind.Disable:
+                DisableSchedule();
+                break;
+            case CensorClientCommandKind.Authoring:
+                var capturedTimeMs = message.Argument is
+                    "mark-start" or "mark-end" or "set-start" or "set-end"
                     ? GetCurrentTimeMs()
                     : null;
-            QueueWindowAction(window =>
-                window.HandleAuthoringCommand(command, capturedTimeMs));
+                QueueWindowAction(window =>
+                    window.HandleAuthoringCommand(message.Argument!, capturedTimeMs));
+                break;
         }
     }
 
@@ -362,7 +355,7 @@ public sealed class Extension : IExtension, IDisposable
     {
         using var timeoutCancellation =
             CancellationTokenSource.CreateLinkedTokenSource(token);
-        timeoutCancellation.CancelAfter(TimeSpan.FromSeconds(30));
+        timeoutCancellation.CancelAfter(DialogTimeout);
         var dialogToken = timeoutCancellation.Token;
         var result = new TaskCompletionSource<string?>(
             TaskCreationOptions.RunContinuationsAsynchronously);
@@ -416,7 +409,7 @@ public sealed class Extension : IExtension, IDisposable
             var sourceHash = ComputeHash(bytes);
             token.ThrowIfCancellationRequested();
             var parseTimer = Stopwatch.StartNew();
-            var parsed = Parse(schedulePath, text, settings.Limits);
+            var parsed = ScheduleFileKinds.Parse(schedulePath, text, settings.Limits);
             parseTimer.Stop();
             token.ThrowIfCancellationRequested();
             if (!parsed.IsSuccess)
@@ -1305,58 +1298,39 @@ public sealed class Extension : IExtension, IDisposable
         CancellationToken token;
         OperationTicket ticket;
         CancellationTokenSource previousCancellation;
-        while (true)
+        lock (_stateLock)
         {
-            ActiveSchedule? observedActive;
-            PendingSchedule? observedPending;
-            lock (_stateLock)
-            {
-                if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
-                    return;
-                previousBlur = _settings.Blur;
-                observedActive = _activeSchedule;
-                observedPending = _pendingSchedule;
-            }
-
-            var pendingPlan = observedPending is null
+            if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
+                return;
+            previousBlur = _settings.Blur;
+            // ponytail: Compiling under the state lock is bounded and trivial for
+            // normal 10–20-scene plans; revisit only if measured workloads grow.
+            var pendingPlan = _pendingSchedule is null
                 ? null
-                : FilterCompiler.Compile(observedPending.Intervals, settings);
-            activePlan = observedActive is null
+                : FilterCompiler.Compile(_pendingSchedule.Intervals, settings);
+            activePlan = _activeSchedule is null
                 ? null
-                : FilterCompiler.Compile(observedActive.Intervals, settings);
+                : FilterCompiler.Compile(_activeSchedule.Intervals, settings);
 
-            lock (_stateLock)
+            _settings = _settings with { Blur = settings };
+            ticket = _revisions.BeginOperation();
+            previousCancellation = _operationCancellation;
+            _operationCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(
+                    _revisions.SessionToken);
+            token = _operationCancellation.Token;
+            if (_activeSchedule is not null)
+                _activeSchedule = _activeSchedule with { Ticket = ticket };
+            active = _activeSchedule;
+            if (_pendingSchedule is not null)
             {
-                if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
-                    return;
-                if (_settings.Blur != previousBlur ||
-                    !ReferenceEquals(_activeSchedule, observedActive) ||
-                    !ReferenceEquals(_pendingSchedule, observedPending))
+                _pendingSchedule = _pendingSchedule with
                 {
-                    continue;
-                }
-
-                _settings = _settings with { Blur = settings };
-                ticket = _revisions.BeginOperation();
-                previousCancellation = _operationCancellation;
-                _operationCancellation =
-                    CancellationTokenSource.CreateLinkedTokenSource(
-                        _revisions.SessionToken);
-                token = _operationCancellation.Token;
-                if (_activeSchedule is not null)
-                    _activeSchedule = _activeSchedule with { Ticket = ticket };
-                active = _activeSchedule;
-                if (_pendingSchedule is not null)
-                {
-                    _pendingSchedule = _pendingSchedule with
-                    {
-                        Ticket = ticket,
-                        Plan = pendingPlan!,
-                    };
-                }
-                pending = _pendingSchedule;
+                    Ticket = ticket,
+                    Plan = pendingPlan!,
+                };
             }
-            break;
+            pending = _pendingSchedule;
         }
 
         previousCancellation.Cancel();
@@ -1707,15 +1681,19 @@ public sealed class Extension : IExtension, IDisposable
 
     private async Task<bool> ConfirmDurationMismatchAsync(CancellationToken token)
     {
+        using var timeoutCancellation =
+            CancellationTokenSource.CreateLinkedTokenSource(token);
+        timeoutCancellation.CancelAfter(DialogTimeout);
+        var dialogToken = timeoutCancellation.Token;
         var result = new TaskCompletionSource<bool>(
             TaskCreationOptions.RunContinuationsAsynchronously);
         if (!QueueWindowAction(window =>
         {
             try
             {
-                if (token.IsCancellationRequested)
+                if (dialogToken.IsCancellationRequested)
                 {
-                    result.TrySetCanceled(token);
+                    result.TrySetCanceled(dialogToken);
                     return;
                 }
                 result.TrySetResult(window.ConfirmDurationMismatch());
@@ -1729,8 +1707,16 @@ public sealed class Extension : IExtension, IDisposable
             return false;
         }
 
-        using var registration = token.Register(() => result.TrySetCanceled(token));
-        return await result.Task.WaitAsync(token).ConfigureAwait(false);
+        using var registration =
+            dialogToken.Register(() => result.TrySetCanceled(dialogToken));
+        try
+        {
+            return await result.Task.WaitAsync(dialogToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (!token.IsCancellationRequested)
+        {
+            return false;
+        }
     }
 
     private DialogResult ConfirmExternalChange()
@@ -2081,40 +2067,6 @@ public sealed class Extension : IExtension, IDisposable
     private bool IsCurrent(OperationTicket ticket) =>
         Volatile.Read(ref _stopping) == 0 && _revisions.IsCurrent(ticket);
 
-    private static ParseResult Parse(
-        string path,
-        string text,
-        SettingsLimits limits)
-    {
-        ParseResult result;
-        if (ScheduleFileKinds.TryGetSubtitleFormat(path, out var subtitleFormat))
-            result = SubtitleScheduleText.Import(
-                text,
-                subtitleFormat,
-                limits.MaxTextFileBytes,
-                limits.MaxIntervals);
-        else
-            result = ScheduleText.Parse(
-                text,
-                limits.MaxTextFileBytes,
-                limits.MaxIntervals);
-
-        if (result.IsSuccess &&
-            result.Document!.Intervals.Count > limits.MaxIntervals)
-        {
-            return new(null,
-            [
-                new(
-                    DiagnosticSeverity.Error,
-                    1,
-                    1,
-                    $"В расписании больше {limits.MaxIntervals} интервалов."),
-            ]);
-        }
-
-        return result;
-    }
-
     private bool SaveSettings(bool preserveBeforeRepair = false)
     {
         try
@@ -2286,8 +2238,8 @@ public sealed class Extension : IExtension, IDisposable
                 return;
             }
 
-            // ponytail: String readback is trivial for normal 10–20-scene plans;
-            // scan the native buffer only if measured schedules grow beyond that.
+            // ponytail: String readback plus per-chunk comparison is trivial for
+            // normal 10–20-scene plans; precompute only after measured growth.
             if (!TryGetPropertyString("vf", out var filters))
             {
                 var readFailures = Interlocked.Increment(ref _vfReadFailures);
@@ -2358,7 +2310,6 @@ public sealed class Extension : IExtension, IDisposable
 
     private string ProtectError(Exception exception, string? additionalPath = null)
     {
-        var text = exception.ToString();
         bool includePaths;
         string? mediaPath;
         string? activePath;
@@ -2370,26 +2321,11 @@ public sealed class Extension : IExtension, IDisposable
             activePath = _activeSchedule?.SchedulePath;
             pendingPath = _pendingSchedule?.SchedulePath;
         }
-        if (includePaths)
-            return text;
-
-        text = DiagnosticsExporter.RedactRootedPaths(text, _pathHashKey);
-        foreach (var path in new[]
-                 {
-                     additionalPath,
-                     mediaPath,
-                     activePath,
-                     pendingPath,
-                     _localDataRoot,
-                 }.Where(path => !string.IsNullOrWhiteSpace(path)).Distinct(
-                     StringComparer.OrdinalIgnoreCase))
-        {
-            text = text.Replace(
-                path!,
-                ExtensionLog.ProtectPath(path, includePath: false, _pathHashKey),
-                StringComparison.OrdinalIgnoreCase);
-        }
-        return text;
+        return DiagnosticsExporter.ProtectError(
+            exception,
+            includePaths,
+            _pathHashKey,
+            [additionalPath, mediaPath, activePath, pendingPath, _localDataRoot]);
     }
 
     private bool RecoverFilters(ActiveSchedule active)

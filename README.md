@@ -40,6 +40,11 @@ SPDX SBOM.
 <MPVNET_CONFIG>\extensions\CensorExtension\
 ```
 
+Расширение и точный readback фильтров проверены с mpv.net `7.1.2.0` из
+`deps.lock.json`. Другие версии пока не поддерживаются: их libmpv может иначе
+представлять `vf`/`af`. При несовместимости расширение безопасно оставит
+воспроизведение на паузе; снять её можно через «Цензура → Отключить».
+
 Удалите оставшиеся от ранних сборок `Censor.Core.dll` и
 `CensorExtension.deps.json`, затем объедините [examples/input.conf](examples/input.conf)
 со своим `input.conf`. Portable-сборка уже содержит собственный изолированный

@@ -413,6 +413,23 @@ Opus-review проходят без практических замечаний.
 **Выход:** 91 Core-тест, Release build, оба Windows CI и следующий полный
 Opus-review проходят без actionable findings.
 
+### 24. Исправления после шестнадцатого Claude Opus 5 review
+
+- Указать mpv.net `7.1.2.0` как единственную проверенную версию ручной
+  установки и описать fail-closed действие при несовместимости readback.
+- Ограничить ожидание duration-mismatch dialog тем же 30-секундным timeout, что
+  используется для выбора sidecar.
+- Убрать бесконечный optimistic retry при смене blur preset; для обычного
+  короткого плана выполнить одну компиляцию под state lock.
+- Вынести и покрыть тестами чистые границы: `censor-*` message parsing,
+  TXT/SRT/WebVTT dispatch и privacy-safe exception text.
+- Централизовать минимум окна и предел timestamp; писать в JSONL количество
+  событий, вытесненных bounded-буфером.
+- Не добавлять precompute/virtualization без измеренной необходимости.
+
+**Выход:** 111 Core-тестов, Release build, оба Windows CI и следующий полный
+Opus-review проходят без actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

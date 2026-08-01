@@ -61,7 +61,7 @@ public sealed class ScheduleDraft
                 diagnostics.Add(Error(index, "Начало не может быть отрицательным."));
             if (interval.StartMs >= interval.EndMs)
                 diagnostics.Add(Error(index, "Начало должно быть раньше конца."));
-            if (interval.EndMs > 359_999_999)
+            if (interval.EndMs > ScheduleText.MaxTimestampMs)
                 diagnostics.Add(Error(index, "Время не может быть позже 99:59:59.999."));
         }
 

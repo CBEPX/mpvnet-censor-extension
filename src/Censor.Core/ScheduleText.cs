@@ -8,6 +8,7 @@ public static class ScheduleText
     public const int MaxTextFileBytes = 2 * 1024 * 1024;
     public const int MaxIntervals = 10_000;
     public const long MaxOffsetMs = 86_400_000;
+    public const long MaxTimestampMs = 359_999_999;
 
     private static readonly HashSet<string> KnownMetadataKeys =
     [
@@ -301,7 +302,7 @@ public static class ScheduleText
     internal static string FormatTimestamp(long milliseconds)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
-        if (milliseconds >= 360_000_000)
+        if (milliseconds > MaxTimestampMs)
             throw new ArgumentOutOfRangeException(
                 nameof(milliseconds),
                 "Время не может быть позже 99:59:59.999.");

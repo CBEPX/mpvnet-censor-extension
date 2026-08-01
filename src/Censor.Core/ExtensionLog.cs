@@ -26,25 +26,20 @@ public sealed class ExtensionLog : IDisposable
 {
     public const string FilePattern = "censor-extension-*.log";
     public const int PathHashKeySize = 32;
+    private const int ChannelCapacity = 1_024;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    private readonly Channel<ExtensionLogEvent> _channel =
-        Channel.CreateBounded<ExtensionLogEvent>(
-            new BoundedChannelOptions(1_024)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
-            });
+    private readonly Channel<ExtensionLogEvent> _channel;
     private readonly string _directory;
     private readonly int _retentionDays;
     private readonly ExtensionLogLevel _minimumLevel;
     private readonly Task _writer;
     private DateOnly _lastPrunedDate;
+    private long _droppedEvents;
     private int _disposed;
 
     public ExtensionLog(
@@ -56,6 +51,14 @@ public sealed class ExtensionLog : IDisposable
         if (retentionDays is < 1 or > 365)
             throw new ArgumentOutOfRangeException(nameof(retentionDays));
 
+        _channel = Channel.CreateBounded<ExtensionLogEvent>(
+            new BoundedChannelOptions(ChannelCapacity)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false,
+            },
+            _ => Interlocked.Increment(ref _droppedEvents));
         _directory = Path.GetFullPath(directory);
         _retentionDays = retentionDays;
         _minimumLevel = ParseLevel(minimumLevel);
@@ -203,10 +206,23 @@ public sealed class ExtensionLog : IDisposable
                         streamDate = entryDate;
                     }
 
-                    var bytes = Encoding.UTF8.GetBytes(
-                        JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
-                    await stream.WriteAsync(bytes).ConfigureAwait(false);
-                    await stream.FlushAsync().ConfigureAwait(false);
+                    var droppedEvents = Interlocked.Exchange(ref _droppedEvents, 0);
+                    if (droppedEvents > 0)
+                    {
+                        await WriteEntryAsync(
+                            stream,
+                            new(
+                                entry.Timestamp,
+                                "log-events-dropped",
+                                "warning",
+                                entry.MediaSessionId,
+                                entry.OperationRevision,
+                                new Dictionary<string, object?>
+                                {
+                                    ["droppedCount"] = droppedEvents,
+                                })).ConfigureAwait(false);
+                    }
+                    await WriteEntryAsync(stream, entry).ConfigureAwait(false);
                 }
                 catch
                 {
@@ -221,6 +237,16 @@ public sealed class ExtensionLog : IDisposable
         {
             await DisposeQuietlyAsync(stream).ConfigureAwait(false);
         }
+    }
+
+    private static async Task WriteEntryAsync(
+        FileStream stream,
+        ExtensionLogEvent entry)
+    {
+        var bytes = Encoding.UTF8.GetBytes(
+            JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
+        await stream.WriteAsync(bytes).ConfigureAwait(false);
+        await stream.FlushAsync().ConfigureAwait(false);
     }
 
     private static async ValueTask DisposeQuietlyAsync(FileStream? stream)
