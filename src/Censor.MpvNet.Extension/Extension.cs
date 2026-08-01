@@ -126,11 +126,11 @@ public sealed class Extension : IExtension, IDisposable
 
     private void OnEndFile(mpv_end_file_reason _) => RunSafely(() => BeginSession("IDLE"));
 
-    private void OnShutdown()
+    private void OnShutdown() => RunSafely(() =>
     {
         StopRuntime(removeFilters: false);
         CloseWindow();
-    }
+    });
 
     private void OnClientMessage(string[] args)
     {
@@ -976,6 +976,15 @@ public sealed class Extension : IExtension, IDisposable
             saveTicket = _revisions.Snapshot();
             settings = _settings;
         }
+        if (ScheduleDraft.Validate(
+                document,
+                settings.Limits.MaxIntervals,
+                settings.Limits.MaxTextFileBytes)
+            .Any(item => item.Severity == DiagnosticSeverity.Error))
+        {
+            Show("Расписание не сохранено: исправьте ошибки черновика.");
+            return;
+        }
         choosePath |= !sourceMatchesCurrent;
         if (ScheduleFileKinds.TryGetSubtitleFormat(currentPath, out _))
         {
@@ -1351,8 +1360,15 @@ public sealed class Extension : IExtension, IDisposable
 
         if (pending is not null)
         {
-            SaveSettings();
+            var saved = SaveSettings();
             UpdateWindow("READY TO APPLY", ticket, token);
+            if (saved)
+            {
+                Show(
+                    "Новый пресет размытия сохранён. Чтобы применить его к подготовленному расписанию, нажмите «Применить».",
+                    ticket,
+                    token);
+            }
             return;
         }
 

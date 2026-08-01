@@ -50,6 +50,34 @@ public sealed class SubtitleScheduleTextTests
         Assert.Equal(new CensorInterval(1_250, 2_500, "blur this"), result.Document!.Intervals.Single());
     }
 
+    [Fact]
+    public void ImportsCommonDecimalSeparatorsAndShortFractions()
+    {
+        var srt = SubtitleScheduleText.Import(
+            "1\n00:00:01.25 --> 00:00:02,5\nblur\n",
+            SubtitleFormat.Srt);
+        var webVtt = SubtitleScheduleText.Import(
+            "WEBVTT\n\n00:01,2 --> 00:02.50\nblur\n",
+            SubtitleFormat.WebVtt);
+
+        Assert.True(srt.IsSuccess);
+        Assert.True(webVtt.IsSuccess);
+        Assert.Equal(new CensorInterval(1_250, 2_500, "blur"), srt.Document!.Intervals.Single());
+        Assert.Equal(new CensorInterval(1_200, 2_500, "blur"), webVtt.Document!.Intervals.Single());
+    }
+
+    [Fact]
+    public void RejectsWholeImportWhenAnyCueIsInvalid()
+    {
+        const string text = "1\n00:00:01,000 --> 00:00:02,000\nvalid\n\n2\nbroken --> cue\ninvalid\n";
+
+        var result = SubtitleScheduleText.Import(text, SubtitleFormat.Srt);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.Document);
+        Assert.Contains(result.Diagnostics, item => item.Line == 6);
+    }
+
     [Theory]
     [InlineData(SubtitleFormat.Srt)]
     [InlineData(SubtitleFormat.WebVtt)]

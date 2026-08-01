@@ -173,10 +173,10 @@ actionable findings.
 - Удалить лишний Extension writer wrapper и generic `Dispatch` overloads,
   объединить test helper и зафиксировать порядок блокировок. Validation cache
   и zero-copy `Freeze` сохранить как защиту от чрезмерного входного файла,
-  не считая 10 000 строк целевой нагрузкой UI.
-- Не использовать общий `compileReferenceSha256`: одинаковый source commit и
-  SDK дают разные DLL на macOS и Windows. Закреплять commit и требовать чистый
-  mpv.net source checkout перед каждой сборкой.
+  не считая защитный предел целевой нагрузкой UI.
+- Нормализовать source paths и убрать debug directory из compile reference,
+  чтобы одинаковый source commit и SDK давали один проверяемый SHA независимо
+  от каталога и платформы; чистый mpv.net checkout остаётся обязательным.
 
 **Выход:** второй набор findings закрыт минимальными регрессионными проверками,
 два Windows CI зелёные, следующий `cc review` на `claude-opus-5` не оставляет
@@ -279,9 +279,9 @@ merge.
 - Прерывать filter swap, если mpv не подтвердил состояние паузы; снимать
   watchdog warning после фактического возвращения labels.
 - Дать пользователю явный подтверждаемый repair-flow для future-schema с
-  сохранением `.bak`, без автоматического понижения формата.
-- Проверять собранный `libmpvnet.dll` отдельным SHA-256 на macOS arm64 и Windows
-  x64; читать lock file существующим .NET SDK вместо отдельного Node.js.
+  сохранением `settings.json.pre-repair`, без автоматического понижения формата.
+- Проверять воспроизводимый `libmpvnet.dll` общим SHA-256 на macOS arm64 и
+  Windows x64; читать lock file существующим .NET SDK вместо отдельного Node.js.
 - Держать дневной лог открытым, не сериализовать schedule без consent и
   скрывать/очищать аварийные temp-файлы атомарной записи.
 
@@ -379,6 +379,19 @@ Windows CI, затем полный `cc review` на `claude-opus-5` без acti
 **Выход:** Core-тесты, Release build, оба Windows CI и повторный полный
 Opus-review проходят без практических замечаний.
 
+### 22. Исправления после четырнадцатого Claude Opus 5 review
+
+- Собирать pinned compile reference с `PathMap`, без debug directory и с
+  `ContinuousIntegrationBuild`; проверять один SHA на macOS и Windows.
+- Защитить shutdown callback общим exception boundary.
+- Принимать в SRT/WebVTT обе десятичные запятые и точки и доли секунды длиной
+  от одной до трёх цифр, сохраняя fail-closed отказ всего некорректного файла.
+- Для staged schedule явно просить нажать «Применить» после смены blur preset;
+  валидировать черновик до normalize/compile во всех путях сохранения.
+
+**Выход:** две сборки из разных каталогов дают одинаковый SHA, 88 Core-тестов,
+оба Windows CI и следующий полный Opus-review проходят.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.
@@ -406,4 +419,4 @@ Opus-review проходят без практических замечаний.
 | PR audio smoke passed Film then timed out on Anime while push-run passed all presets | mpv.net defaults to `process-instance=single`, so consecutive smoke processes could race through single-instance forwarding | Added the documented `--process-instance=multi` option to isolate every preset run |
 | Push audio smoke still timed out nondeterministically after process isolation | The WinForms EOF path depends on ordering of separate `end-file` and `playlist-pos` events | Switched the pinned mpv.net smoke to its built-in headless `--o=` event loop and supplied a complete two-second adaptive-analysis window |
 | Local loader smoke requires `Microsoft.WindowsDesktop.App` | macOS can compile the Windows target but cannot execute its WinForms host | Keep loader execution as a required `windows-latest` CI gate; local Release build still verifies compilation |
-| `compileReferenceSha256` passed on macOS but failed Windows CI `30669608246` | `libmpvnet.dll` is not bit-identical across the two build platforms | Removed the misleading cross-platform artifact pin; exact source commit and clean checkout remain enforced |
+| `compileReferenceSha256` passed on macOS but failed Windows CI `30669608246` | Build embedded host/path-specific debug data | Added `PathMap`, `DebugType=none`, and `ContinuousIntegrationBuild`; independent directories now produce one pinned hash |

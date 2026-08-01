@@ -75,7 +75,7 @@ public static class SubtitleScheduleText
                 continue;
             }
 
-            if (!TryParseTiming(block[timingIndex], format, out var startMs, out var endMs))
+            if (!TryParseTiming(block[timingIndex], out var startMs, out var endMs))
             {
                 diagnostics.Add(new(
                     DiagnosticSeverity.Error,
@@ -170,7 +170,6 @@ public static class SubtitleScheduleText
 
     private static bool TryParseTiming(
         string line,
-        SubtitleFormat format,
         out long startMs,
         out long endMs)
     {
@@ -184,15 +183,12 @@ public static class SubtitleScheduleText
         var endAndSettings = line[(separator + 3)..].Trim();
         var settings = endAndSettings.IndexOfAny([' ', '\t']);
         var end = settings >= 0 ? endAndSettings[..settings] : endAndSettings;
-        var decimalSeparator = format == SubtitleFormat.Srt ? ',' : '.';
-
-        return TryParseTimestamp(start, decimalSeparator, out startMs) &&
-            TryParseTimestamp(end, decimalSeparator, out endMs);
+        return TryParseTimestamp(start, out startMs) &&
+            TryParseTimestamp(end, out endMs);
     }
 
     private static bool TryParseTimestamp(
         string value,
-        char decimalSeparator,
         out long milliseconds)
     {
         milliseconds = 0;
@@ -202,7 +198,8 @@ public static class SubtitleScheduleText
 
         var hourText = parts.Length == 3 ? parts[0] : "0";
         var minuteText = parts[^2];
-        var secondParts = parts[^1].Split(decimalSeparator);
+        var secondParts = parts[^1].Split(['.', ',']);
+        var fractionLength = secondParts.Length == 2 ? secondParts[1].Length : 0;
         if (secondParts.Length != 2 ||
             !int.TryParse(hourText, NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
             !int.TryParse(minuteText, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
@@ -211,7 +208,7 @@ public static class SubtitleScheduleText
             hours > 99 ||
             minutes > 59 ||
             seconds > 59 ||
-            secondParts[1].Length != 3)
+            fractionLength is < 1 or > 3)
         {
             return false;
         }
@@ -220,7 +217,7 @@ public static class SubtitleScheduleText
             ((long)hours * 3_600_000) +
             ((long)minutes * 60_000) +
             ((long)seconds * 1_000) +
-            millis;
+            millis * (fractionLength switch { 1 => 100, 2 => 10, _ => 1 });
         return true;
     }
 

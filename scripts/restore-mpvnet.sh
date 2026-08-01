@@ -53,7 +53,11 @@ if ! git -C "$source_dir" diff --quiet ||
   exit 1
 fi
 
-"$dotnet_cmd" build "$source_dir/src/MpvNet/MpvNet.csproj" --configuration Release
+"$dotnet_cmd" build "$source_dir/src/MpvNet/MpvNet.csproj" \
+  --configuration Release \
+  -p:ContinuousIntegrationBuild=true \
+  -p:DebugType=none \
+  -p:PathMap="$source_dir=/_/"
 
 source_dll="$source_dir/src/MpvNet/bin/Release/libmpvnet.dll"
 if [[ ! -f "$source_dll" ]]; then

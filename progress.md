@@ -56,6 +56,14 @@
 - На `900bf6e` PR-run `30681082928` прошёл полностью, а push-run
   `30681082042` воспроизвёл startup race самого runtime-smoke. Вместо секунды
   ожидания тест теперь получает явный ready-marker extension до `loadfile`.
+- Handshake-fix `b432a2c` подтверждён двумя полными Windows CI: push
+  `30681416995` и PR `30681418345` прошли installer и настоящий runtime smoke.
+- Четырнадцатый Opus-review подтвердил продуктовый pipeline и нашёл
+  path-dependent compile hash. Две сборки из разных каталогов воспроизвели
+  проблему; детерминированные параметры дали общий SHA `d796740a…a945`.
+- Закрыты четыре малых finding: shutdown exception boundary, распространённые
+  варианты таймкодов SRT/VTT, понятный staged blur UX и ранняя проверка draft.
+  Локально Release build без предупреждений и 88/88 тестов — PASS.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.
@@ -64,13 +72,13 @@
   compile hash, log I/O и три небольших замечания.
 - Массовый grid render приостанавливает layout, программный offset защищён от
   событий, pause требует readback, а восстановленный `vf` снимает `WARNING`.
-- На вкладке диагностики добавлена явная перезапись future-schema с `.bak`.
+- На вкладке диагностики добавлена явная перезапись future-schema с
+  `settings.json.pre-repair`.
   Логи используют один дневной handle; schedule сериализуется только с consent;
   аварийные temp-файлы скрываются на Windows и очищаются по возрасту.
-- Lock reader переведён с Node.js на file-based .NET 10 helper. macOS arm64
-  compile hash закреплён. Windows x64 hash `e45b85c…f299580` независимо
-  подтверждён push `30677612391` и PR `30677614377` и закреплён как
-  обязательный gate.
+- Lock reader переведён с Node.js на file-based .NET 10 helper. Старые
+  platform-specific hashes были подтверждены CI, но позже заменены общим
+  воспроизводимым hash после нормализации build paths.
 - Локально: Release build без предупреждений и 79/79 тестов — PASS; полный
   набор format/restore/syntax проверок выполняется перед коммитом.
 - Commit `f73be51` подтверждён двумя полными Windows CI: push `30675372654` и
@@ -100,9 +108,9 @@
 - `FilterPlan` хранит фактический blur, неизвестный audio preset откатывается
   на `off`, diagnostics берёт только `censor-extension-*.log`, а future-schema
   получает понятное OSD при отказе записи.
-- Restore script отдельно сообщает об ошибке Node.js/`deps.lock.json`.
+- Restore script отдельно сообщает об ошибке чтения `deps.lock.json`.
   Валидация документа больше не создаёт throwaway draft; политика
-  platform-specific compile-reference записана в lock file.
+  воспроизводимого compile-reference записана в lock file.
 - Пятый полный `cc review` на `claude-opus-5` подтвердил runtime/package
   архитектуру и нашёл два риска потери данных: lossy SRT/VTT считался обычным
   сохранением, а future-schema настроек незаметно понижалась до schema 1.
@@ -167,10 +175,10 @@
 - Исправлены mpv bool readback, ложный watchdog success, двойной `.censor` в
   имени, redo и ложный diagnostic hotkey. Event dispatch и atomic text wrapper
   упрощены, общий temporary-directory helper больше не дублируется.
-- Попытка вернуть общий `compileReferenceSha256` прошла локально, но Windows CI
-  `30669608246` доказал, что DLL не bit-identical между платформами. Binary pin
-  удалён сознательно; точный source commit и чистый checkout обязательны.
-- Node.js явно указан как build prerequisite для чтения `deps.lock.json`.
+- Windows CI `30669608246` доказал, что прежняя сборка не была bit-identical
+  между платформами. Позже выяснилась причина — debug/path data; общий binary
+  pin возвращён только после двух сборок из разных каталогов.
+- `deps.lock.json` читается закреплённым .NET SDK без отдельного Node.js.
 - Large-draft validation cache и zero-copy `Freeze` сохранены как защита от
   чрезмерного входного файла. Целевая UI-нагрузка — обычные 10–20 сцен фильма.
 - Первый полный `cc review` на `claude-opus-5` одобрил session/revision и
