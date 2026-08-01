@@ -336,7 +336,15 @@ public sealed class SettingsAndDiagnosticsTests
     {
         using var directory = new TemporaryDirectory();
         var snapshot = new DiagnosticsSnapshot(
-            "{}", "{}", "{}", "{}", "{}", "{}", "{}", [], "secret schedule");
+            "{}",
+            "{}",
+            """[{"severity":1,"line":1,"column":1,"message":"secret schedule line"}]""",
+            "{}",
+            "{}",
+            "{}",
+            "{}",
+            [],
+            "secret schedule");
         var without = Path.Combine(directory.Path, "without.zip");
         var with = Path.Combine(directory.Path, "with.zip");
 
@@ -349,6 +357,18 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.DoesNotContain(withoutArchive.Entries, entry => entry.FullName == "schedule.censor.txt");
         Assert.Contains(withArchive.Entries, entry => entry.FullName == "schedule.censor.txt");
         Assert.Contains(withArchive.Entries, entry => entry.FullName == "af.json");
+        using var withoutReportReader = new StreamReader(
+            withoutArchive.GetEntry("parse-report.json")!.Open());
+        using var withReportReader = new StreamReader(
+            withArchive.GetEntry("parse-report.json")!.Open());
+        Assert.DoesNotContain(
+            "secret schedule line",
+            withoutReportReader.ReadToEnd(),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "secret schedule line",
+            withReportReader.ReadToEnd(),
+            StringComparison.Ordinal);
     }
 
     [Fact]
@@ -436,6 +456,9 @@ public sealed class SettingsAndDiagnosticsTests
 
         UiStateStore.Save(path, new(30, 40, 900, 700));
         Assert.Equal(new UiState(30, 40, 900, 700), UiStateStore.Load(path));
+
+        File.WriteAllText(path, """{"left":0,"top":0,"width":700,"height":500}""");
+        Assert.Null(UiStateStore.Load(path));
 
         File.WriteAllText(path, """{"left":0,"top":0,"width":10,"height":10}""");
         Assert.Null(UiStateStore.Load(path));

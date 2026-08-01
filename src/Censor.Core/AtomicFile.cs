@@ -39,6 +39,7 @@ public static class AtomicFile
             {
                 if (OperatingSystem.IsWindows())
                 {
+                    // Keep an incomplete crash residue out of Explorer while writing.
                     originalTempAttributes = File.GetAttributes(tempPath);
                     File.SetAttributes(tempPath, originalTempAttributes.Value | FileAttributes.Hidden);
                 }

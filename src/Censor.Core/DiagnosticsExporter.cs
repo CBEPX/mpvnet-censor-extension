@@ -40,7 +40,12 @@ public static class DiagnosticsExporter
             {
                 AddText(archive, "manifest.json", snapshot.ManifestJson);
                 AddText(archive, "settings.sanitized.json", snapshot.SettingsJson);
-                AddText(archive, "parse-report.json", snapshot.ParseReportJson);
+                AddText(
+                    archive,
+                    "parse-report.json",
+                    includeSchedule
+                        ? snapshot.ParseReportJson
+                        : RedactParseReport(snapshot.ParseReportJson));
                 AddText(archive, "media.sanitized.json", snapshot.MediaJson);
                 AddText(archive, "vf.json", snapshot.FiltersJson);
                 AddText(archive, "af.json", snapshot.AudioFiltersJson);
@@ -86,6 +91,28 @@ public static class DiagnosticsExporter
         var entry = archive.CreateEntry(name, CompressionLevel.SmallestSize);
         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
         writer.Write(content);
+    }
+
+    private static string RedactParseReport(string content)
+    {
+        try
+        {
+            if (JsonNode.Parse(content) is not JsonArray report)
+                return "[]";
+            foreach (var diagnostic in report.OfType<JsonObject>())
+            {
+                foreach (var property in diagnostic.ToArray())
+                {
+                    if (property.Key.Equals("message", StringComparison.OrdinalIgnoreCase))
+                        diagnostic[property.Key] = "Скрыто: расписание не включено в архив.";
+                }
+            }
+            return report.ToJsonString();
+        }
+        catch (JsonException)
+        {
+            return "[]";
+        }
     }
 
     private static void AddSanitizedLog(ZipArchive archive, string path, string name)

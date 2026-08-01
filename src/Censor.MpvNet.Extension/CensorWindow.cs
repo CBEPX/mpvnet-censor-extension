@@ -627,8 +627,12 @@ internal sealed class CensorWindow : Form
 
     private void AddInterval()
     {
+        if (CurrentTimeRequested?.Invoke() is not { } start)
+        {
+            Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
+            return;
+        }
         EnsureDraft();
-        var start = CurrentTimeRequested?.Invoke() ?? 0;
         _draft!.Add(start, checked(start + 1_000));
         Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
     }

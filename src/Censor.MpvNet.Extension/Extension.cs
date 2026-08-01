@@ -15,6 +15,9 @@ public sealed class Extension : IExtension, IDisposable
     private const string LogModule = "CensorExtension";
     private const int MaxRecoveryFailures = 3;
     private const int MaxPendingWindowActions = 32;
+    private const string FutureSettingsMessage =
+        "Настройки не сохранены: файл создан более новой версией CensorPlayer. " +
+        "Чтобы перезаписать его, откройте вкладку «Диагностика».";
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly TimeSpan OsdGateTimeout = TimeSpan.FromMilliseconds(250);
@@ -873,7 +876,7 @@ public sealed class Extension : IExtension, IDisposable
         if (warnings.Count > 0)
         {
             InvokeWindow(window => window.SetSettings(previousSettings));
-            Show(warnings[0]);
+            Show(settings.Schema == 1 ? warnings[0] : FutureSettingsMessage);
             return;
         }
 
@@ -993,9 +996,7 @@ public sealed class Extension : IExtension, IDisposable
                 path,
                 SubtitleScheduleText.Export(document, exportFormat),
                 Path.GetFullPath(path) + ".bak");
-            Show(
-                $"Файл {Path.GetFileName(path)} экспортирован. Черновик не отмечен как сохранённый.",
-                saveTicket);
+            Show($"Файл {Path.GetFileName(path)} экспортирован. Черновик не отмечен как сохранённый.");
             return;
         }
 
@@ -1085,11 +1086,16 @@ public sealed class Extension : IExtension, IDisposable
         if (markWindowSaved)
         {
             InvokeWindow(window =>
-                window.MarkSaved(path, document, savedScheduleDirectory));
+            {
+                if (IsCurrent(saveTicket))
+                    window.MarkSaved(path, document, savedScheduleDirectory);
+            });
             if (updateRuntime)
                 UpdateWindow("SAVED", saveTicket);
-            Show($"Файл {Path.GetFileName(path)} сохранён.", saveTicket);
         }
+        Show(markWindowSaved
+            ? $"Файл {Path.GetFileName(path)} сохранён."
+            : $"Файл {Path.GetFileName(path)} сохранён, но текущее расписание в проигрывателе уже изменилось.");
     }
 
     private void SeekTo(long milliseconds)
@@ -2074,7 +2080,7 @@ public sealed class Extension : IExtension, IDisposable
                 schema = _settings.Schema;
             QueueShow(schema == 1
                 ? "Не удалось сохранить настройки."
-                : "Настройки не сохранены: файл создан более новой версией CensorPlayer. Чтобы перезаписать его, откройте вкладку «Диагностика».");
+                : FutureSettingsMessage);
             return false;
         }
     }
@@ -2105,7 +2111,7 @@ public sealed class Extension : IExtension, IDisposable
                         _revisions.Snapshot(),
                         new Dictionary<string, object?> { ["error"] = ProtectError(exception) },
                         ExtensionLogLevel.Error);
-                    Show("Ошибка расширения CensorPlayer. Подробности — в журнале mpv.net.");
+                    QueueShow("Ошибка расширения CensorPlayer. Подробности — в журнале mpv.net.");
                 }
             }
             catch (Exception reportingException)

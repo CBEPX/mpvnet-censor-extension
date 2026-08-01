@@ -66,12 +66,6 @@ jobs:
           ./scripts/smoke-audio-filters.ps1
           -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
 
-      - name: Smoke extension runtime on pinned mpv.net
-        shell: pwsh
-        run: >-
-          ./scripts/smoke-extension-runtime.ps1
-          -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
-
       - name: Verify release artifacts
         shell: pwsh
         run: ./scripts/verify-release-artifacts.ps1 -ArtifactDirectory artifacts/windows/release
@@ -99,6 +93,12 @@ jobs:
         run: >-
           ./scripts/smoke-installer.ps1
           -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
+
+      - name: Smoke extension runtime on pinned mpv.net
+        shell: pwsh
+        run: >-
+          ./scripts/smoke-extension-runtime.ps1
+          -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
 
       - name: Upload extension build evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

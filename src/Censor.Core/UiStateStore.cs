@@ -20,7 +20,7 @@ public static class UiStateStore
             if (!File.Exists(path))
                 return null;
             var state = JsonSerializer.Deserialize<UiState>(File.ReadAllText(path), JsonOptions);
-            return state is { Width: >= 640, Height: >= 360 } ? state : null;
+            return state is { Width: >= 760, Height: >= 520 } ? state : null;
         }
         catch (Exception exception) when (
             exception is IOException or UnauthorizedAccessException or JsonException)

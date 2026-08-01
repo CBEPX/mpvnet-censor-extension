@@ -23,8 +23,10 @@
   IPC после подключения.
 - Runtime-smoke на `6b582b5` прошёл в push `30678953180` и PR `30678955090`,
   но созданный им `%LOCALAPPDATA%\CensorPlayer` корректно заблокировал
-  installer-smoke. Дочерний mpv.net теперь получает отдельный временный
-  `%LOCALAPPDATA%`; защитный guard установщика не ослаблен.
+  installer-smoke. Подмена переменной окружения не изменила Windows Known
+  Folder в runs `30679429841`/`30679431187`, поэтому защищённый installer-smoke
+  теперь выполняется первым, а runtime-smoke — последним в CI и release;
+  защитный guard установщика не ослаблен.
 - Десятый полный `cc review` на `claude-opus-5` признал ветку ship-able и нашёл
   мёртвый `logging.level`, потерю OSD при занятом gate, отсутствие окна для
   duration-confirmation из `censor-load` и несколько малых контрактов.
@@ -35,6 +37,10 @@
 - Локально: закреплённый restore SHA и его failure path, locked restore,
   Release build без предупреждений, 82/82 теста, format, JSON/YAML и shell
   syntax — PASS. PowerShell/runtime/installer остаются Windows CI evidence.
+- Одиннадцатый полный `cc review` на `claude-opus-5` дал verdict `Solid`, без
+  blocking defects. Исправлены гонка smoke при быстром push-recovery, тихое
+  stale-save, нулевая позиция новой сцены, UI-thread OSD wait, сообщение
+  future-schema и утечка parser message без diagnostics consent.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.

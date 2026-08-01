@@ -23,7 +23,6 @@ $Pipe = $null
 $Reader = $null
 $Writer = $null
 $RequestId = 0
-$OriginalLocalAppData = $env:LOCALAPPDATA
 New-Item -ItemType Directory $TempRoot | Out-Null
 
 function Invoke-MpvCommand {
@@ -70,15 +69,11 @@ function Get-FilterText {
 function Wait-ForFilter {
     param(
         [Parameter(Mandatory)][string]$Label,
-        [Parameter(Mandatory)][bool]$Present,
-        [scriptblock]$BeforeRead
+        [Parameter(Mandatory)][bool]$Present
     )
 
     $Deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
-        if ($null -ne $BeforeRead) {
-            & $BeforeRead
-        }
         $Found = (Get-FilterText).Contains($Label, [StringComparison]::Ordinal)
         if ($Found -eq $Present) {
             return
@@ -124,27 +119,21 @@ try {
         "# censor-timeline: 1`n00:00:00.000 --> 00:00:30.000`n",
         [Text.UTF8Encoding]::new($false))
 
-    $env:LOCALAPPDATA = Join-Path $TempRoot "LocalAppData"
-    try {
-        $Process = Start-Process $MpvNetPath `
-            -ArgumentList @(
-                "--idle=yes",
-                "--keep-open=yes",
-                "--input-terminal=no",
-                "--vo=null",
-                "--ao=null",
-                "--msg-level=all=warn",
-                "--image-display-duration=60",
-                "--loop-file=inf",
-                "--input-ipc-server=\\.\pipe\$PipeName"
-            ) `
-            -RedirectStandardOutput $StdOut `
-            -RedirectStandardError $StdErr `
-            -PassThru
-    }
-    finally {
-        $env:LOCALAPPDATA = $OriginalLocalAppData
-    }
+    $Process = Start-Process $MpvNetPath `
+        -ArgumentList @(
+            "--idle=yes",
+            "--keep-open=yes",
+            "--input-terminal=no",
+            "--vo=null",
+            "--ao=null",
+            "--msg-level=all=warn",
+            "--image-display-duration=60",
+            "--loop-file=inf",
+            "--input-ipc-server=\\.\pipe\$PipeName"
+        ) `
+        -RedirectStandardOutput $StdOut `
+        -RedirectStandardError $StdErr `
+        -PassThru
 
     $Pipe = [IO.Pipes.NamedPipeClientStream]::new(
         ".",
@@ -170,7 +159,6 @@ try {
     }
 
     [void](Invoke-MpvCommand @("vf", "remove", "@censor_blur_000"))
-    Wait-ForFilter "censor_blur_000" $false
     Wait-ForFilter "censor_blur_000" $true
 
     Send-CensorMessage @("censor-disable")
@@ -193,7 +181,6 @@ catch {
     throw "$($_.Exception.Message)`n$Output"
 }
 finally {
-    $env:LOCALAPPDATA = $OriginalLocalAppData
     if ($null -ne $Writer) { $Writer.Dispose() }
     if ($null -ne $Reader) { $Reader.Dispose() }
     if ($null -ne $Pipe) { $Pipe.Dispose() }
