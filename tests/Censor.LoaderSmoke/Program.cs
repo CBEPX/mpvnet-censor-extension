@@ -136,6 +136,14 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     if (grid.Rows.Count != 1)
         throw new InvalidOperationException("The discard smoke could not seed one interval.");
 
+    window.Show();
+    window.Hide();
+    window.GetType().GetMethod("HandleAuthoringCommand")!.Invoke(
+        window,
+        ["mark-start", 1_500L]);
+    if (!window.Visible)
+        throw new InvalidOperationException("A hidden editor did not reopen for an authoring command.");
+
     window.GetType()
         .GetMethod("DiscardDraft", BindingFlags.Instance | BindingFlags.NonPublic)!
         .Invoke(window, null);

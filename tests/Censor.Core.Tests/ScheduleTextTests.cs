@@ -99,6 +99,27 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void WarnsAboutWrongCaseInKnownMetadataWithoutApplyingIt()
+    {
+        const string text = """
+            # media-duration-ms: 2000
+            # Offset-ms: 500
+            00:00:01.000 --> 00:00:02.000
+            """;
+
+        var result = ScheduleText.Parse(text);
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(result.Document!.Metadata.OffsetMs);
+        Assert.Contains("# Offset-ms: 500", result.Document.PreservedHeaderLines);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic =>
+                diagnostic.Message.Contains("неверный регистр", StringComparison.Ordinal) &&
+                diagnostic.Message.Contains("offset-ms", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void InvalidMediaDurationIsNotAlsoReportedAsMissing()
     {
         var result = ScheduleText.Parse("# media-duration-ms: abc");

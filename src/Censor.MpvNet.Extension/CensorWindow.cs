@@ -219,7 +219,6 @@ internal sealed class CensorWindow : Form
         };
         DragEnter += OnDragEnter;
         DragDrop += OnDragDrop;
-        Shown += (_, _) => OfferRecovery();
     }
 
     public event Action<string>? ScheduleSelected;
@@ -446,6 +445,13 @@ internal sealed class CensorWindow : Form
 
     public void HandleAuthoringCommand(string command, long? capturedTimeMs = null)
     {
+        if (command is "mark-start" or "mark-end" or "set-start" or "set-end")
+        {
+            Show();
+            WindowState = FormWindowState.Normal;
+            Activate();
+        }
+
         switch (command)
         {
             case "mark-start":
@@ -1206,7 +1212,8 @@ internal sealed class CensorWindow : Form
         {
             var diagnostics = _draft.Validate(
                 _settings.Limits.MaxIntervals,
-                _settings.Limits.MaxTextFileBytes);
+                _settings.Limits.MaxTextFileBytes,
+                checkSerializedSize: false);
             PopulateIntervalRow(
                 _intervals.Rows[index],
                 index,
@@ -1380,7 +1387,7 @@ internal sealed class CensorWindow : Form
         }
     }
 
-    private void OfferRecovery()
+    public void OfferRecoveryIfAvailable()
     {
         var recovered = DraftRecoveryStore.Load(_recoveryPath);
         if (recovered.Status == DraftRecoveryStatus.NotFound)

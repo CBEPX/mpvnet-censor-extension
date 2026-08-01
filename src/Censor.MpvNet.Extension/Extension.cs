@@ -128,11 +128,12 @@ public sealed class Extension : IExtension, IDisposable
 
         UnsubscribePlayerEvents();
 
-        StopRuntime(removeFilters: true);
-        CloseWindow(waitForExit: true);
+        var shutdown = Stopwatch.StartNew();
+        StopRuntime(removeFilters: true, RemainingShutdownWait(shutdown));
+        CloseWindow(waitForExit: true, RemainingShutdownWait(shutdown));
         var watchdogStopped = new ManualResetEvent(false);
         if (_watchdog.Dispose(watchdogStopped) &&
-            !watchdogStopped.WaitOne(ShutdownWaitTimeout))
+            !watchdogStopped.WaitOne(RemainingShutdownWait(shutdown)))
         {
             // ponytail: Keep the notification handle rooted after a rare timeout;
             // the timer may still signal it when its hung callback finally exits.
@@ -152,8 +153,14 @@ public sealed class Extension : IExtension, IDisposable
         }
         // mpv.net creates one Extension per process. Queued callbacks can still observe
         // _stopping after Dispose, so keep their gate alive for the remaining process lifetime.
-        _log.Dispose();
+        _log.Dispose(RemainingShutdownWait(shutdown));
         GC.SuppressFinalize(this);
+    }
+
+    private static TimeSpan RemainingShutdownWait(Stopwatch shutdown)
+    {
+        var remaining = ShutdownWaitTimeout - shutdown.Elapsed;
+        return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
 
     private void UnsubscribePlayerEvents()
@@ -2274,6 +2281,7 @@ public sealed class Extension : IExtension, IDisposable
                                 current.Diagnostics,
                                 current.HasActiveSchedule);
                             DrainWindowActions(window);
+                            window.OfferRecoveryIfAvailable();
                         };
 
                         lock (_windowLock)
@@ -2615,7 +2623,7 @@ public sealed class Extension : IExtension, IDisposable
             RunSafely(() => action.Run(window));
     }
 
-    private void CloseWindow(bool waitForExit)
+    private void CloseWindow(bool waitForExit, TimeSpan? waitTimeout = null)
     {
         CensorWindow? window;
         Thread? windowThread;
@@ -2640,7 +2648,7 @@ public sealed class Extension : IExtension, IDisposable
             windowThread is not null &&
             windowThread != Thread.CurrentThread &&
             windowThread.IsAlive &&
-            !windowThread.Join(ShutdownWaitTimeout))
+            !windowThread.Join(waitTimeout ?? ShutdownWaitTimeout))
         {
             Terminal.WriteError(
                 "Окно CensorPlayer не закрылось за 5 секунд; последние изменения могли не сохраниться.",
@@ -3165,11 +3173,12 @@ public sealed class Extension : IExtension, IDisposable
             _settings.EarlyIntervalGuardMs);
     }
 
-    private void StopRuntime(bool removeFilters)
+    private void StopRuntime(bool removeFilters, TimeSpan? waitTimeout = null)
     {
+        var effectiveWaitTimeout = waitTimeout ?? ShutdownWaitTimeout;
         if (Interlocked.Exchange(ref _stopping, 1) != 0)
         {
-            _stopped.Task.Wait(ShutdownWaitTimeout);
+            _stopped.Task.Wait(effectiveWaitTimeout);
             return;
         }
 
@@ -3208,7 +3217,7 @@ public sealed class Extension : IExtension, IDisposable
             {
             }
 
-            if (!_filterGate.Wait(ShutdownWaitTimeout))
+            if (!_filterGate.Wait(effectiveWaitTimeout))
             {
                 Terminal.WriteError(
                     "Фильтр занят дольше 5 секунд. CensorPlayer больше не ждёт его освобождения.",

@@ -84,7 +84,17 @@ public static class ScheduleText
                 if (!KnownMetadataKeys.Contains(key))
                 {
                     preservedHeaderLines.Add(rawLine);
-                    if (LooksLikeMetadataKey(key))
+                    var canonicalKey = KnownMetadataKeys.FirstOrDefault(candidate =>
+                        candidate.Equals(key, StringComparison.OrdinalIgnoreCase));
+                    if (canonicalKey is not null)
+                    {
+                        diagnostics.Add(new(
+                            DiagnosticSeverity.Warning,
+                            lineNumber,
+                            1,
+                            $"В названии поля «{key}» неверный регистр. Строка сохранена без изменений; используйте «{canonicalKey}»."));
+                    }
+                    else if (LooksLikeMetadataKey(key))
                     {
                         diagnostics.Add(new(
                             DiagnosticSeverity.Warning,

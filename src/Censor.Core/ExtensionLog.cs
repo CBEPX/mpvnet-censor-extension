@@ -155,14 +155,17 @@ public sealed class ExtensionLog : IDisposable
             : [];
     }
 
-    public void Dispose()
+    public void Dispose() => Dispose(TimeSpan.FromSeconds(5));
+
+    public void Dispose(TimeSpan waitTimeout)
     {
+        ArgumentOutOfRangeException.ThrowIfLessThan(waitTimeout, TimeSpan.Zero);
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
         _channel.Writer.TryComplete();
         try
         {
-            _writer.Wait(TimeSpan.FromSeconds(5));
+            _writer.Wait(waitTimeout);
         }
         catch (AggregateException)
         {
