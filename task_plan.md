@@ -233,6 +233,23 @@ merge.
 тестами, оба Windows CI зелёные, полный `cc review` на `claude-opus-5` не
 оставляет actionable findings.
 
+### 14. Исправления после шестого Claude Opus 5 review
+
+- Выполнять все UI actions через общий exception boundary, включая очередь,
+  `BeginInvoke` и rollback аудиопресета.
+- Закрепить единый контракт расширений: сохранённый файл обязан открываться;
+  sidecar, picker, drag-and-drop, import и export используют один helper.
+- Не объединять интервалы с временным разрывом. Вынести решение о сохранении
+  dirty draft в чистую функцию и покрыть все ветки Core-тестами.
+- Хранить blur внутри скомпилированного `FilterPlan`, безопасно откатываться на
+  `off` при неизвестном audio preset и экспортировать только собственные логи.
+- Явно обрабатывать ошибку Node.js/lock file, валидировать документ без
+  throwaway draft и пояснить, почему compile-reference не имеет общего SHA для
+  macOS и Windows.
+
+**Выход:** локальные проверки и два Windows CI зелёные, повторный полный
+`cc review` на `claude-opus-5` не оставляет actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

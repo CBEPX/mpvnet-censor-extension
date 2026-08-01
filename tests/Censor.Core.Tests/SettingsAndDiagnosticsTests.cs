@@ -284,6 +284,7 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.False(File.Exists(oldLog));
         Assert.True(File.Exists(freshLog));
         Assert.True(File.Exists(unrelated));
+        Assert.DoesNotContain(unrelated, ExtensionLog.FindFiles(directory.Path));
         Assert.Contains(
             Directory.GetFiles(directory.Path, "censor-extension-????????.log"),
             path => Path.GetFileName(path).All(character =>

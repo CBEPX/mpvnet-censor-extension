@@ -9,7 +9,11 @@
     <GenerateDependencyFile>false</GenerateDependencyFile>
   </PropertyGroup>
   <ItemGroup>
-    <!-- Single-DLL packaging intentionally keeps linked Core sources flat. -->
+    <!--
+      Single-DLL packaging intentionally compiles Core sources again under the
+      WinForms target. Keep Core type names independent of WinForms implicit
+      types; CI builds both the standalone Core project and this linked copy.
+    -->
     <Compile
       Include="..\Censor.Core\**\*.cs"
       Exclude="..\Censor.Core\bin\**\*;..\Censor.Core\obj\**\*"

@@ -23,6 +23,17 @@ jobs:
       - name: Restore pinned mpv.net reference
         run: bash scripts/restore-mpvnet.sh
 
+      - name: Verify restore reports lock reader failures
+        shell: bash
+        run: |
+          if NODE_CMD=false bash scripts/restore-mpvnet.sh \
+            2>restore-error.log; then
+            exit 1
+          fi
+          grep -F \
+            "Unable to read mpv.net values from deps.lock.json" \
+            restore-error.log
+
       - name: Restore
         run: dotnet restore CensorPlayer.sln --locked-mode
 

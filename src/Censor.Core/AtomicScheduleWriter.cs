@@ -11,7 +11,7 @@ public static class AtomicScheduleWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(document);
 
-        var validation = new ScheduleDraft(document).Validate(maxIntervals, maxTextFileBytes);
+        var validation = ScheduleDraft.Validate(document, maxIntervals, maxTextFileBytes);
         if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
             throw new InvalidOperationException("Расписание не записано: исправьте ошибки черновика.");
 

@@ -31,14 +31,22 @@ public sealed class ScheduleDraft
     public IReadOnlyList<ParseDiagnostic> Validate(
         int maxIntervals = ScheduleText.MaxIntervals,
         int maxTextFileBytes = ScheduleText.MaxTextFileBytes,
+        bool checkSerializedSize = true) =>
+        Validate(_document, maxIntervals, maxTextFileBytes, checkSerializedSize);
+
+    public static IReadOnlyList<ParseDiagnostic> Validate(
+        ScheduleDocument document,
+        int maxIntervals = ScheduleText.MaxIntervals,
+        int maxTextFileBytes = ScheduleText.MaxTextFileBytes,
         bool checkSerializedSize = true)
     {
+        ArgumentNullException.ThrowIfNull(document);
         if (maxIntervals is < 1 or > ScheduleText.MaxIntervals)
             throw new ArgumentOutOfRangeException(nameof(maxIntervals));
         if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
             throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
         var diagnostics = new List<ParseDiagnostic>();
-        if (_document.Intervals.Count > maxIntervals)
+        if (document.Intervals.Count > maxIntervals)
         {
             diagnostics.Add(new(
                 DiagnosticSeverity.Error,
@@ -46,9 +54,9 @@ public sealed class ScheduleDraft
                 1,
                 $"В расписании больше {maxIntervals} интервалов."));
         }
-        for (var index = 0; index < _document.Intervals.Count; index++)
+        for (var index = 0; index < document.Intervals.Count; index++)
         {
-            var interval = _document.Intervals[index];
+            var interval = document.Intervals[index];
             if (interval.StartMs < 0)
                 diagnostics.Add(Error(index, "Начало не может быть отрицательным."));
             if (interval.StartMs >= interval.EndMs)
@@ -57,7 +65,7 @@ public sealed class ScheduleDraft
                 diagnostics.Add(Error(index, "Время не может быть позже 99:59:59.999."));
         }
 
-        if (_document.Metadata.OffsetMs is < -ScheduleText.MaxOffsetMs or > ScheduleText.MaxOffsetMs)
+        if (document.Metadata.OffsetMs is < -ScheduleText.MaxOffsetMs or > ScheduleText.MaxOffsetMs)
             diagnostics.Add(new(
                 DiagnosticSeverity.Error,
                 0,
@@ -68,7 +76,7 @@ public sealed class ScheduleDraft
         {
             try
             {
-                var serializedBytes = Encoding.UTF8.GetByteCount(ScheduleText.Serialize(_document));
+                var serializedBytes = Encoding.UTF8.GetByteCount(ScheduleText.Serialize(document));
                 if (serializedBytes > maxTextFileBytes)
                 {
                     diagnostics.Add(new(
@@ -154,6 +162,21 @@ public sealed class ScheduleDraft
         Change(document =>
         {
             var source = selected.Select(index => document.Intervals[index]).ToArray();
+            var chronological = source
+                .OrderBy(interval => interval.StartMs)
+                .ThenBy(interval => interval.EndMs)
+                .ToArray();
+            var coveredUntil = chronological[0].EndMs;
+            foreach (var interval in chronological.Skip(1))
+            {
+                if (interval.StartMs > coveredUntil)
+                {
+                    throw new ArgumentException(
+                        "Между выбранными интервалами есть разрыв. Измените границы вручную.",
+                        nameof(indices));
+                }
+                coveredUntil = Math.Max(coveredUntil, interval.EndMs);
+            }
             var merged = new CensorInterval(
                 source.Min(interval => interval.StartMs),
                 source.Max(interval => interval.EndMs),

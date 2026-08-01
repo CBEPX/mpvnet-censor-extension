@@ -18,6 +18,7 @@ public sealed class FilterCompilerTests
                 BlurSettings.Moderate);
 
             var chunk = Assert.Single(plan.Chunks);
+            Assert.Equal(BlurSettings.Moderate, plan.Blur);
             Assert.Equal("@censor_blur_000", chunk.Label);
             Assert.Equal(
                 "@censor_blur_000:lavfi=[gblur=sigma=30:steps=2:enable='(gte(t,1.250)*lt(t,2.500))+(gte(t,4.000)*lt(t,5.001))']",

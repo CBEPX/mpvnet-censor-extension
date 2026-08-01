@@ -8,8 +8,8 @@ public sealed class ScheduleDraftTests
     public void EditsMergeSplitAndRoundTripWithoutBakingOffset()
     {
         var draft = new ScheduleDraft(Document(
-            new(1_000, 2_000, "one"),
-            new(3_000, 4_000, "two")));
+            new(1_000, 2_500, "one"),
+            new(2_500, 4_000, "two")));
 
         draft.Merge([0, 1]);
         Assert.Equal(new CensorInterval(1_000, 4_000, "one; two"), draft.Document.Intervals[0]);
@@ -40,6 +40,43 @@ public sealed class ScheduleDraftTests
         Assert.Contains("соседние", error.Message, StringComparison.Ordinal);
         Assert.Same(before, draft.Document);
         Assert.False(draft.CanUndo);
+    }
+
+    [Fact]
+    public void MergeRejectsAHiddenTimeGapWithoutChangingDraft()
+    {
+        var draft = new ScheduleDraft(Document(
+            new(30_000, 31_000, "later"),
+            new(5_000, 6_000, "earlier")));
+        var before = draft.Document;
+
+        var error = Assert.Throws<ArgumentException>(() => draft.Merge([0, 1]));
+
+        Assert.Contains("разрыв", error.Message, StringComparison.Ordinal);
+        Assert.Same(before, draft.Document);
+        Assert.False(draft.CanUndo);
+    }
+
+    [Theory]
+    [InlineData(true, false, true, false, DraftReconciliationAction.RefreshWarnings)]
+    [InlineData(true, true, false, false, DraftReconciliationAction.RefreshWarnings)]
+    [InlineData(false, false, false, true, DraftReconciliationAction.LinkMatchingDraft)]
+    [InlineData(false, false, true, false, DraftReconciliationAction.KeepDirtyDraft)]
+    [InlineData(false, false, false, false, DraftReconciliationAction.ReplaceDraft)]
+    public void DraftReconciliationChoosesOneExplicitUiAction(
+        bool runtimeIntervalsUnchanged,
+        bool sourceIntervalsUnchanged,
+        bool draftDirty,
+        bool draftMatchesDocument,
+        DraftReconciliationAction expected)
+    {
+        Assert.Equal(
+            expected,
+            DraftReconciliation.Decide(
+                runtimeIntervalsUnchanged,
+                sourceIntervalsUnchanged,
+                draftDirty,
+                draftMatchesDocument));
     }
 
     [Fact]

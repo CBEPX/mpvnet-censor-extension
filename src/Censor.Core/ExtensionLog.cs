@@ -15,6 +15,8 @@ public sealed record ExtensionLogEvent(
 
 public sealed class ExtensionLog : IDisposable
 {
+    public const string FilePattern = "censor-extension-*.log";
+
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -89,6 +91,14 @@ public sealed class ExtensionLog : IDisposable
         return $"sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
     }
 
+    public static IReadOnlyList<string> FindFiles(string directory)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        return Directory.Exists(directory)
+            ? Directory.GetFiles(directory, FilePattern)
+            : [];
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
@@ -142,7 +152,7 @@ public sealed class ExtensionLog : IDisposable
     private void DeleteExpired(int retentionDays)
     {
         var cutoff = DateTime.UtcNow.AddDays(-retentionDays);
-        foreach (var path in Directory.EnumerateFiles(_directory, "censor-extension-*.log"))
+        foreach (var path in Directory.EnumerateFiles(_directory, FilePattern))
         {
             try
             {

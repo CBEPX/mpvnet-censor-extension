@@ -4,6 +4,17 @@ namespace Censor.Core.Tests;
 
 public sealed class SidecarLocatorTests
 {
+    [Theory]
+    [InlineData("schedule.censor.txt", true)]
+    [InlineData("schedule.srt", true)]
+    [InlineData("schedule.censor.vtt", true)]
+    [InlineData("schedule.txt", false)]
+    [InlineData("schedule.censor.json", false)]
+    public void SupportedPathsUseOneSharedContract(string path, bool expected)
+    {
+        Assert.Equal(expected, ScheduleFileKinds.IsSupportedPath(path));
+    }
+
     [Fact]
     public void ReturnsExistingSidecarsInTxtSrtVttOrder()
     {

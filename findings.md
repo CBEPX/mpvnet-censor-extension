@@ -144,6 +144,27 @@
 - Validation cache удалён как лишнее состояние. PowerShell audio smoke получает
   реальные строки пресетов от .NET 10 helper и больше не зависит от CLR pwsh.
 
+## Шестой Claude Opus 5 review
+
+- `BeginInvoke` защищал только постановку делегата в очередь, а не его тело.
+  `InvokeWindow`, queued actions и drain теперь вызывают существующий
+  `RunSafely`; сбой UI-команды не закрывает окно.
+- Save dialog принимал `movie.txt`, хотя loader такой файл отвергал. Единый
+  `ScheduleFileKinds` используется во всех путях, а SaveDraft повторно
+  проверяет расширение перед записью.
+- Соседние строки могли быть далеки по времени. Merge теперь отвергает любой
+  неявный разрыв; регрессия `30:00` + `05:00` закреплена тестом.
+- Решение `UpdateState` о dirty/source/runtime draft вынесено в чистый
+  `DraftReconciliation` и полностью покрыто таблицей тестов.
+- Фактический blur хранится в `FilterPlan`, поэтому apply log не зависит от
+  конкурентной смены настройки. Неизвестный audio preset безопасно выбирает
+  `off`.
+- Диагностический ZIP получает только логи, принадлежащие расширению. Restore
+  script проверяет Node.js и результат чтения lock file; compile-reference
+  policy явно записана рядом с source pin.
+- Статическая валидация `ScheduleDocument` убрала лишнее копирование списков.
+  Future-schema по-прежнему не перезаписывается, но причина теперь видна в OSD.
+
 ## Граница доказательств
 
 - Физический Windows smoke на `440269a` доказал extension API, filter timeline,

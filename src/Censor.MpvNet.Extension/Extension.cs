@@ -37,7 +37,6 @@ public sealed class Extension : IExtension, IDisposable
     private Task _sessionCleanup = Task.CompletedTask;
     private ActiveSchedule? _activeSchedule;
     private PendingSchedule? _pendingSchedule;
-    private volatile BlurSettings _blurSettings = BlurSettings.Balanced;
     private volatile ExtensionSettings _settings;
     private long? _currentDurationMs;
     private string? _currentMediaPath;
@@ -58,7 +57,6 @@ public sealed class Extension : IExtension, IDisposable
         _settingsPath = Path.Combine(_localDataRoot, "settings.json");
         var loadedSettings = ExtensionSettingsStore.Load(_settingsPath);
         _settings = loadedSettings.Settings;
-        _blurSettings = _settings.Blur;
         _log = new(Path.Combine(_localDataRoot, "Logs"), _settings.Logging.RetentionDays);
         if (!_log.IsEnabled)
             Terminal.WriteError("Журнал CensorPlayer отключён: не удалось открыть каталог для записи.", LogModule);
@@ -456,9 +454,7 @@ public sealed class Extension : IExtension, IDisposable
             var normalized = ScheduleNormalizer.Normalize(
                 document.Intervals,
                 _settings.ResolveNormalizationOptions(document.Metadata));
-            BlurSettings blurSettings;
-            lock (_stateLock)
-                blurSettings = _blurSettings;
+            var blurSettings = _settings.Blur;
             var compileTimer = Stopwatch.StartNew();
             var plan = FilterCompiler.Compile(normalized, blurSettings);
             compileTimer.Stop();
@@ -607,8 +603,8 @@ public sealed class Extension : IExtension, IDisposable
                         _settings.Logging.IncludePaths),
                     ["intervalCount"] = plan.IntervalCount,
                     ["chunkCount"] = plan.Chunks.Count,
-                    ["sigma"] = _blurSettings.Sigma,
-                    ["steps"] = _blurSettings.Steps,
+                    ["sigma"] = plan.Blur.Sigma,
+                    ["steps"] = plan.Blur.Steps,
                 });
         }
         catch (Exception exception)
@@ -691,9 +687,7 @@ public sealed class Extension : IExtension, IDisposable
     private void LoadManualSchedule(string schedulePath)
     {
         if (!File.Exists(schedulePath) ||
-            !(schedulePath.EndsWith(".censor.txt", StringComparison.OrdinalIgnoreCase) ||
-              schedulePath.EndsWith(".srt", StringComparison.OrdinalIgnoreCase) ||
-              schedulePath.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase)))
+            !ScheduleFileKinds.IsSupportedPath(schedulePath))
         {
             UpdateWindow("INVALID SCHEDULE PATH");
             Show("Не удалось открыть расписание: путь некорректен или формат файла не поддерживается.");
@@ -785,7 +779,8 @@ public sealed class Extension : IExtension, IDisposable
     private void ApplyDraftDocument(ScheduleDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
-        var validation = new ScheduleDraft(document).Validate(
+        var validation = ScheduleDraft.Validate(
+            document,
             _settings.Limits.MaxIntervals,
             _settings.Limits.MaxTextFileBytes);
         if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
@@ -814,7 +809,7 @@ public sealed class Extension : IExtension, IDisposable
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
             _settings.ResolveNormalizationOptions(document.Metadata));
-        var plan = FilterCompiler.Compile(normalized, _blurSettings);
+        var plan = FilterCompiler.Compile(normalized, _settings.Blur);
         if (plan.Chunks.Count == 0)
         {
             UpdateWindow("EMPTY SCHEDULE", operation.Value.Ticket, operation.Value.Token);
@@ -898,7 +893,6 @@ public sealed class Extension : IExtension, IDisposable
         bool sourceMatchesCurrent;
         OperationTicket saveTicket;
         ExtensionSettings settings;
-        BlurSettings blur;
         lock (_stateLock)
         {
             var runtimePath =
@@ -913,18 +907,16 @@ public sealed class Extension : IExtension, IDisposable
                 : null;
             saveTicket = _revisions.Snapshot();
             settings = _settings;
-            blur = _blurSettings;
         }
         choosePath |= !sourceMatchesCurrent;
-        if (currentPath?.EndsWith(".srt", StringComparison.OrdinalIgnoreCase) == true ||
-            currentPath?.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase) == true)
+        if (ScheduleFileKinds.TryGetSubtitleFormat(currentPath, out _))
         {
             var baseName = Path.GetFileNameWithoutExtension(currentPath);
             if (baseName.EndsWith(".censor", StringComparison.OrdinalIgnoreCase))
                 baseName = baseName[..^".censor".Length];
             currentPath = Path.Combine(
                 Path.GetDirectoryName(currentPath) ?? "",
-                baseName + ".censor.txt");
+                baseName + ScheduleFileKinds.CanonicalSuffix);
             choosePath = true;
         }
 
@@ -933,6 +925,11 @@ public sealed class Extension : IExtension, IDisposable
             : currentPath;
         if (string.IsNullOrWhiteSpace(path))
             return;
+        if (!ScheduleFileKinds.IsSupportedPath(path))
+        {
+            Show("Расписание не сохранено: выберите файл .censor.txt, .srt или .vtt.");
+            return;
+        }
 
         if (!choosePath &&
             expectedHash is not null &&
@@ -953,12 +950,7 @@ public sealed class Extension : IExtension, IDisposable
             }
         }
 
-        var subtitleFormat = path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase)
-            ? SubtitleFormat.Srt
-            : path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase)
-                ? SubtitleFormat.WebVtt
-                : (SubtitleFormat?)null;
-        if (subtitleFormat is { } exportFormat)
+        if (ScheduleFileKinds.TryGetSubtitleFormat(path, out var exportFormat))
         {
             if (!ConfirmSubtitleExport())
                 return;
@@ -975,7 +967,7 @@ public sealed class Extension : IExtension, IDisposable
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
             settings.ResolveNormalizationOptions(document.Metadata));
-        var plan = FilterCompiler.Compile(normalized, blur);
+        var plan = FilterCompiler.Compile(normalized, settings.Blur);
         AtomicScheduleWriter.Write(
             path,
             document,
@@ -1188,9 +1180,7 @@ public sealed class Extension : IExtension, IDisposable
                 runtime = Environment.Version.ToString(),
                 processArchitecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
             }, jsonOptions),
-            Directory.Exists(Path.Combine(_localDataRoot, "Logs"))
-                ? Directory.GetFiles(Path.Combine(_localDataRoot, "Logs"), "*.log")
-                : [],
+            ExtensionLog.FindFiles(Path.Combine(_localDataRoot, "Logs")),
             document is null ? null : ScheduleText.Serialize(document));
         DiagnosticsExporter.Export(path, snapshot, includeSchedule);
         InvokeWindow(window => window.ShowDiagnosticsResult(
@@ -1224,7 +1214,7 @@ public sealed class Extension : IExtension, IDisposable
             PendingSchedule? observedPending;
             lock (_stateLock)
             {
-                if (Volatile.Read(ref _stopping) != 0 || _blurSettings == settings)
+                if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
                     return;
                 observedPending = _pendingSchedule;
             }
@@ -1235,12 +1225,11 @@ public sealed class Extension : IExtension, IDisposable
 
             lock (_stateLock)
             {
-                if (Volatile.Read(ref _stopping) != 0 || _blurSettings == settings)
+                if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
                     return;
                 if (!ReferenceEquals(_pendingSchedule, observedPending))
                     continue;
 
-                _blurSettings = settings;
                 _settings = _settings with { Blur = settings };
                 ticket = _revisions.BeginOperation();
                 previousCancellation = _operationCancellation;
@@ -1843,7 +1832,7 @@ public sealed class Extension : IExtension, IDisposable
             return;
         try
         {
-            window.BeginInvoke(new Action(() => action(window)));
+            window.BeginInvoke(new Action(() => RunSafely(() => action(window))));
         }
         catch (InvalidOperationException)
         {
@@ -1877,7 +1866,7 @@ public sealed class Extension : IExtension, IDisposable
         }
         try
         {
-            window.BeginInvoke(new Action(() => action(window)));
+            window.BeginInvoke(new Action(() => RunSafely(() => action(window))));
             return true;
         }
         catch (InvalidOperationException)
@@ -1895,7 +1884,7 @@ public sealed class Extension : IExtension, IDisposable
             _pendingWindowActions.Clear();
         }
         foreach (var action in actions)
-            action(window);
+            RunSafely(() => action(window));
     }
 
     private void CloseWindow()
@@ -1922,16 +1911,10 @@ public sealed class Extension : IExtension, IDisposable
     {
         var limits = _settings.Limits;
         ParseResult result;
-        if (path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase))
+        if (ScheduleFileKinds.TryGetSubtitleFormat(path, out var subtitleFormat))
             result = SubtitleScheduleText.Import(
                 text,
-                SubtitleFormat.Srt,
-                limits.MaxTextFileBytes,
-                limits.MaxIntervals);
-        else if (path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase))
-            result = SubtitleScheduleText.Import(
-                text,
-                SubtitleFormat.WebVtt,
+                subtitleFormat,
                 limits.MaxTextFileBytes,
                 limits.MaxIntervals);
         else
@@ -1971,7 +1954,9 @@ public sealed class Extension : IExtension, IDisposable
         catch (Exception exception)
         {
             Terminal.WriteError(exception, LogModule);
-            QueueShow("Не удалось сохранить настройки.");
+            QueueShow(_settings.Schema == 1
+                ? "Не удалось сохранить настройки."
+                : "Настройки не сохранены: файл создан более новой версией CensorPlayer.");
         }
     }
 
@@ -1990,11 +1975,21 @@ public sealed class Extension : IExtension, IDisposable
         catch (Exception exception)
         {
             Terminal.WriteError(exception, LogModule);
-            _log.Write(
-                "callback-error",
-                _revisions.Snapshot(),
-                new Dictionary<string, object?> { ["error"] = ProtectError(exception) });
-            Show("Ошибка расширения CensorPlayer. Подробности — в журнале mpv.net.");
+            try
+            {
+                if (Volatile.Read(ref _stopping) == 0)
+                {
+                    _log.Write(
+                        "callback-error",
+                        _revisions.Snapshot(),
+                        new Dictionary<string, object?> { ["error"] = ProtectError(exception) });
+                    Show("Ошибка расширения CensorPlayer. Подробности — в журнале mpv.net.");
+                }
+            }
+            catch (Exception reportingException)
+            {
+                Terminal.WriteError(reportingException, LogModule);
+            }
         }
     }
 

@@ -239,9 +239,7 @@ public static class ExtensionSettingsStore
             JsonOptions) ?? throw new JsonException("Файл настроек пуст.");
         var warnings = Validate(settings);
         var normalized = Normalize(settings);
-        return warnings.Count == 0
-            ? new(normalized, [])
-            : new(normalized, warnings);
+        return new(normalized, warnings);
     }
 
     private static bool ValidMilliseconds(long value) =>

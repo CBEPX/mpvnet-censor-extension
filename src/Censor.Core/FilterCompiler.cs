@@ -16,7 +16,8 @@ public sealed record FilterChunk(string Label, string Filter);
 
 public sealed record FilterPlan(
     IReadOnlyList<FilterChunk> Chunks,
-    int IntervalCount);
+    int IntervalCount,
+    BlurSettings Blur);
 
 public static class FilterCompiler
 {
@@ -32,7 +33,7 @@ public static class FilterCompiler
         Validate(intervals, blur);
 
         if (intervals.Count == 0)
-            return new([], 0);
+            return new([], 0, blur);
 
         var chunkCount = (intervals.Count + MaxIntervalsPerChunk - 1) / MaxIntervalsPerChunk;
         if (chunkCount > MaxFilters)
@@ -50,7 +51,7 @@ public static class FilterCompiler
             chunks.Add(new(label, filter));
         }
 
-        return new(chunks, intervals.Count);
+        return new(chunks, intervals.Count, blur);
     }
 
     private static string BuildExpression(

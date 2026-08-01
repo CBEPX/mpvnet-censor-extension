@@ -115,10 +115,9 @@ internal sealed class CensorWindow : Form
         };
         _audioCompressionPreset.Items.AddRange(
             AudioCompressionPresets.All.Select(item => item.DisplayName).ToArray());
-        _audioCompressionPreset.SelectedIndex = AudioCompressionPresets.All
-            .Select((item, index) => (item, index))
-            .First(pair => pair.item.Id == settings.AudioCompressionPreset)
-            .index;
+        var initialAudioPreset = ResolveAudioPreset(settings.AudioCompressionPreset);
+        _settings = _settings with { AudioCompressionPreset = initialAudioPreset.Preset.Id };
+        _audioCompressionPreset.SelectedIndex = initialAudioPreset.Index;
         _audioCompressionPreset.SelectedIndexChanged += (_, _) =>
         {
             if (_rendering)
@@ -202,22 +201,25 @@ internal sealed class CensorWindow : Form
             $"Интервалов: {intervals.Count}";
         _runtimeDiagnostics = diagnostics;
 
-        var runtimeIntervalsUnchanged = ReferenceEquals(_runtimeIntervals, intervals);
+        var reconciliation = DraftReconciliation.Decide(
+            ReferenceEquals(_runtimeIntervals, intervals),
+            ReferenceEquals(_sourceIntervals, intervals),
+            _draft?.IsDirty == true,
+            document is not null && _draft?.Matches(document) == true);
         _runtimeIntervals = intervals;
-        if (runtimeIntervalsUnchanged &&
-            (_draft?.IsDirty == true || ReferenceEquals(_sourceIntervals, intervals)))
+        if (reconciliation == DraftReconciliationAction.RefreshWarnings)
         {
             RenderWarnings(_draft is null ? [] : _draftDiagnostics);
             return;
         }
-        if (document is not null && _draft?.Matches(document) == true)
+        if (reconciliation == DraftReconciliationAction.LinkMatchingDraft)
         {
             _sourceIntervals = intervals;
             _sourcePath = schedulePath;
             RenderDraft();
             return;
         }
-        if (_draft?.IsDirty == true)
+        if (reconciliation == DraftReconciliationAction.KeepDirtyDraft)
         {
             RenderDraft();
             _draftState.Text = "Несохранённый черновик не связан с текущим расписанием";
@@ -282,15 +284,12 @@ internal sealed class CensorWindow : Form
 
     public void SetAudioCompressionPreset(string presetId)
     {
-        var index = AudioCompressionPresets.All
-            .Select((item, itemIndex) => (item, itemIndex))
-            .First(pair => pair.item.Id == presetId)
-            .itemIndex;
+        var resolved = ResolveAudioPreset(presetId);
         _rendering = true;
         try
         {
-            _settings = _settings with { AudioCompressionPreset = presetId };
-            _audioCompressionPreset.SelectedIndex = index;
+            _settings = _settings with { AudioCompressionPreset = resolved.Preset.Id };
+            _audioCompressionPreset.SelectedIndex = resolved.Index;
         }
         finally
         {
@@ -355,16 +354,26 @@ internal sealed class CensorWindow : Form
             AddExtension = true,
             DefaultExt = "censor.txt",
             FileName = string.IsNullOrWhiteSpace(currentPath)
-                ? "schedule.censor.txt"
+                ? "schedule" + ScheduleFileKinds.CanonicalSuffix
                 : Path.GetFileName(currentPath),
-            Filter = "Censor TXT|*.censor.txt|SubRip|*.srt|WebVTT|*.vtt",
+            Filter =
+                $"Censor TXT|*{ScheduleFileKinds.CanonicalSuffix}|" +
+                $"SubRip|*{ScheduleFileKinds.SrtSuffix}|" +
+                $"WebVTT|*{ScheduleFileKinds.WebVttSuffix}",
             InitialDirectory = _settings.RememberLastScheduleDirectory
                 ? _settings.LastScheduleDirectory
                 : null,
             OverwritePrompt = true,
             Title = "Сохранить расписание",
         };
-        return dialog.ShowDialog(this) == DialogResult.OK ? dialog.FileName : null;
+        while (dialog.ShowDialog(this) == DialogResult.OK)
+        {
+            if (ScheduleFileKinds.IsSupportedPath(dialog.FileName))
+                return dialog.FileName;
+
+            Warn("Допустимы только файлы .censor.txt, .srt и .vtt. Проверьте имя файла.");
+        }
+        return null;
     }
 
     public string? ChooseDiagnosticsPath(string directory)
@@ -1101,7 +1110,12 @@ internal sealed class CensorWindow : Form
         using var dialog = new OpenFileDialog
         {
             CheckFileExists = true,
-            Filter = "Расписания цензуры|*.censor.txt;*.srt;*.vtt|Censor TXT|*.censor.txt|SubRip|*.srt|WebVTT|*.vtt",
+            Filter =
+                $"Расписания цензуры|*{ScheduleFileKinds.CanonicalSuffix};" +
+                $"*{ScheduleFileKinds.SrtSuffix};*{ScheduleFileKinds.WebVttSuffix}|" +
+                $"Censor TXT|*{ScheduleFileKinds.CanonicalSuffix}|" +
+                $"SubRip|*{ScheduleFileKinds.SrtSuffix}|" +
+                $"WebVTT|*{ScheduleFileKinds.WebVttSuffix}",
             InitialDirectory = _settings.RememberLastScheduleDirectory
                 ? _settings.LastScheduleDirectory
                 : null,
@@ -1165,9 +1179,7 @@ internal sealed class CensorWindow : Form
         if (data?.GetData(DataFormats.FileDrop) is not string[] { Length: 1 } files)
             return false;
         path = files[0];
-        return path.EndsWith(".censor.txt", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith(".srt", StringComparison.OrdinalIgnoreCase) ||
-            path.EndsWith(".vtt", StringComparison.OrdinalIgnoreCase);
+        return ScheduleFileKinds.IsSupportedPath(path);
     }
 
     private int[] SelectedIndices() =>
@@ -1179,6 +1191,19 @@ internal sealed class CensorWindow : Form
 
     private int? SelectedIndex() =>
         _intervals.CurrentCell is { RowIndex: >= 0 } cell ? cell.RowIndex : null;
+
+    private static (AudioCompressionPresetDefinition Preset, int Index) ResolveAudioPreset(
+        string? presetId)
+    {
+        var preset = AudioCompressionPresets.Find(presetId) ??
+            AudioCompressionPresets.Find(AudioCompressionPresets.OffId)!;
+        for (var index = 0; index < AudioCompressionPresets.All.Count; index++)
+        {
+            if (AudioCompressionPresets.All[index].Id == preset.Id)
+                return (preset, index);
+        }
+        return (AudioCompressionPresets.All[0], 0);
+    }
 
     private void SelectRow(int index)
     {

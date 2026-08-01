@@ -2,8 +2,13 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-IFS=$'\t' read -r version tag source_commit < <(
-  node -e '
+node_cmd="${NODE_CMD:-node}"
+if ! command -v "$node_cmd" >/dev/null 2>&1; then
+  echo "Node.js is required to read deps.lock.json" >&2
+  exit 1
+fi
+if ! lock_values="$(
+  "$node_cmd" -e '
     const lock = require(process.argv[1]);
     console.log([
       lock.mpvNet.version,
@@ -11,7 +16,15 @@ IFS=$'\t' read -r version tag source_commit < <(
       lock.mpvNet.sourceCommit,
     ].join("\t"));
   ' "$repo_root/deps.lock.json"
-)
+)"; then
+  echo "Unable to read mpv.net values from deps.lock.json" >&2
+  exit 1
+fi
+IFS=$'\t' read -r version tag source_commit <<<"$lock_values"
+if [[ -z "$version" || -z "$tag" || -z "$source_commit" ]]; then
+  echo "deps.lock.json has incomplete mpv.net values" >&2
+  exit 1
+fi
 source_dir="$repo_root/.deps/mpvnet-source"
 reference_dir="$repo_root/.deps/mpvnet"
 

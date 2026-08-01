@@ -2,6 +2,23 @@
 
 ## 2026-08-01
 
+- Commit `cdefe84` подтверждён двумя полными Windows CI: push `30674187416` и
+  PR `30674252331`. Оба прошли build, 67 тестов, stock loader, package, новый
+  .NET audio helper, четыре аудиографа и installer smoke.
+- Шестой полный `cc review` на `claude-opus-5` не нашёл blocker, но выявил
+  незакрытые UI exceptions, сохранение с неподдерживаемым расширением и merge
+  двух далёких по времени сцен.
+- UI actions теперь проходят через `RunSafely`. Общий `ScheduleFileKinds`
+  синхронизирует loader, picker, drag-and-drop, sidecar, import и export;
+  неподдерживаемый путь не записывается.
+- Merge разрешён только без временного разрыва. Чистая функция reconciliation
+  покрывает все ветки сохранения dirty draft; локально проходят 78/78 тестов.
+- `FilterPlan` хранит фактический blur, неизвестный audio preset откатывается
+  на `off`, diagnostics берёт только `censor-extension-*.log`, а future-schema
+  получает понятное OSD при отказе записи.
+- Restore script отдельно сообщает об ошибке Node.js/`deps.lock.json`.
+  Валидация документа больше не создаёт throwaway draft; политика
+  platform-specific compile-reference записана в lock file.
 - Пятый полный `cc review` на `claude-opus-5` подтвердил runtime/package
   архитектуру и нашёл два риска потери данных: lossy SRT/VTT считался обычным
   сохранением, а future-schema настроек незаметно понижалась до schema 1.
