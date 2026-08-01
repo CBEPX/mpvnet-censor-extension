@@ -124,7 +124,9 @@ public static class FilterReadback
             .ToHashSet(StringComparer.Ordinal);
         return ownedLabels.Distinct(StringComparer.Ordinal).Count() == ownedLabels.Count &&
             ownedLabels.All(expectedLabels.Contains) &&
-            plan.Chunks.All(chunk => filters.Contains(chunk.Filter, StringComparison.Ordinal));
+            plan.Chunks.All(chunk => filters.Contains(
+                CanonicalizeLavfi(chunk.Filter),
+                StringComparison.Ordinal));
     }
 
     public static IReadOnlyList<string> FindOwnedBlurLabels(string filters)
@@ -148,6 +150,17 @@ public static class FilterReadback
         var first = filters.IndexOf(marker, StringComparison.Ordinal);
         return first >= 0 &&
             first == filters.LastIndexOf(marker, StringComparison.Ordinal) &&
-            filters.Contains(expectedFilter, StringComparison.Ordinal);
+            filters.Contains(CanonicalizeLavfi(expectedFilter), StringComparison.Ordinal);
+    }
+
+    private static string CanonicalizeLavfi(string filter)
+    {
+        const string marker = ":lavfi=[";
+        var markerIndex = filter.IndexOf(marker, StringComparison.Ordinal);
+        if (markerIndex <= 0 || !filter.EndsWith(']'))
+            throw new ArgumentException("Ожидался labeled lavfi filter.", nameof(filter));
+
+        var graph = filter[(markerIndex + marker.Length)..^1];
+        return $"{filter[..markerIndex]}:lavfi=graph=%{Encoding.UTF8.GetByteCount(graph)}%{graph}";
     }
 }

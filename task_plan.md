@@ -396,6 +396,8 @@ Opus-review проходят без практических замечаний.
 
 - Подтверждать не только labels, а точное содержимое всех blur-фильтров и
   отсутствие лишних или дублированных `@censor_blur_*`.
+- Сравнивать с каноническим mpv readback `lavfi=graph=%N%GRAPH`, вычисляя
+  length по UTF-8 и не разбирая внутренний FFmpeg graph.
 - Подтверждать точный аудиограф выбранного пресета, а не общий label
   компрессора.
 - При очистке удалять все обнаруженные labels расширения, сохраняя чужие
@@ -439,3 +441,4 @@ Opus-review проходят без actionable findings.
 | Push audio smoke still timed out nondeterministically after process isolation | The WinForms EOF path depends on ordering of separate `end-file` and `playlist-pos` events | Switched the pinned mpv.net smoke to its built-in headless `--o=` event loop and supplied a complete two-second adaptive-analysis window |
 | Local loader smoke requires `Microsoft.WindowsDesktop.App` | macOS can compile the Windows target but cannot execute its WinForms host | Keep loader execution as a required `windows-latest` CI gate; local Release build still verifies compilation |
 | `compileReferenceSha256` passed on macOS but failed Windows CI `30669608246` | Build embedded host/path-specific debug data | Added `PathMap`, `DebugType=none`, and `ContinuousIntegrationBuild`; independent directories now produce one pinned hash |
+| Exact filter check rejected Windows runtime in `30682415070` | mpv canonicalizes `lavfi=[GRAPH]` as length-quoted `lavfi=graph=%N%GRAPH` | Captured the native string once in diagnostic CI, removed the diagnostic, and now derives the canonical UTF-8 form deterministically |

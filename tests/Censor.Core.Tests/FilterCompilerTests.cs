@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text;
 using Censor.Core;
 
 namespace Censor.Core.Tests;
@@ -57,7 +58,9 @@ public sealed class FilterCompilerTests
     public void ReadbackRequiresExactOwnedGraphAndAllowsUserFilters()
     {
         var plan = FilterCompiler.Compile([new(1_000, 2_000)], BlurSettings.Balanced);
-        var readback = $"@user:lavfi=[hflip],{plan.Chunks[0].Filter}";
+        const string expected =
+            "@censor_blur_000:lavfi=graph=%58%gblur=sigma=40:steps=2:enable='(gte(t,1.000)*lt(t,2.000))'";
+        var readback = $"@user:lavfi=graph=hflip,{expected}";
 
         Assert.True(FilterReadback.MatchesBlurPlan(readback, plan));
         Assert.False(FilterReadback.MatchesBlurPlan(
@@ -66,7 +69,7 @@ public sealed class FilterCompilerTests
         Assert.False(FilterReadback.MatchesBlurPlan(
             $"{readback},@censor_blur_999:lavfi=[hflip]",
             plan));
-        Assert.False(FilterReadback.MatchesBlurPlan($"{readback},{plan.Chunks[0].Filter}", plan));
+        Assert.False(FilterReadback.MatchesBlurPlan($"{readback},{expected}", plan));
     }
 
     [Fact]
@@ -83,19 +86,28 @@ public sealed class FilterCompilerTests
     {
         var expected = AudioCompressionPresets.All[1].Filter!;
         var old = AudioCompressionPresets.All[2].Filter!;
+        var expectedReadback = CanonicalReadback(expected);
 
         Assert.True(FilterReadback.MatchesSingle(
-            $"@user:lavfi=[anull],{expected}",
+            $"@user:lavfi=graph=anull,{expectedReadback}",
             AudioCompressionPresets.FilterLabel,
             expected));
         Assert.False(FilterReadback.MatchesSingle(
-            old,
+            CanonicalReadback(old),
             AudioCompressionPresets.FilterLabel,
             expected));
         Assert.False(FilterReadback.MatchesSingle(
-            $"{expected},{expected}",
+            $"{expectedReadback},{expectedReadback}",
             AudioCompressionPresets.FilterLabel,
             expected));
+    }
+
+    private static string CanonicalReadback(string filter)
+    {
+        const string marker = ":lavfi=[";
+        var markerIndex = filter.IndexOf(marker, StringComparison.Ordinal);
+        var graph = filter[(markerIndex + marker.Length)..^1];
+        return $"{filter[..markerIndex]}:lavfi=graph=%{Encoding.UTF8.GetByteCount(graph)}%{graph}";
     }
 
     [Theory]
