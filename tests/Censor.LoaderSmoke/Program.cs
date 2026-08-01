@@ -83,6 +83,11 @@ static void RunUiContractSmoke(Assembly assembly)
                 if (!buttonNames.Contains(required))
                     throw new InvalidOperationException($"The editor is missing the required action: {required}");
             }
+            if (!Descendants(window).OfType<CheckBox>().Any(checkbox =>
+                    checkbox.Text == "Автоматически восстанавливать размытие и компрессию звука"))
+            {
+                throw new InvalidOperationException("The watchdog setting does not describe both protected filters.");
+            }
 
             VerifyDiscardClearsEditor(assembly, window);
         }

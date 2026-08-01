@@ -86,7 +86,7 @@ internal sealed class CensorWindow : Form
     private readonly CheckBox _watchdog = new()
     {
         AutoSize = true,
-        Text = "Автоматически восстанавливать размытие",
+        Text = "Автоматически восстанавливать размытие и компрессию звука",
     };
     private readonly NumericUpDown _watchdogInterval = Milliseconds(250, 60_000);
     private readonly NumericUpDown _leadIn = Milliseconds(0, 86_400_000);

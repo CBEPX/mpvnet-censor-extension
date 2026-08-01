@@ -173,10 +173,13 @@ public sealed class Extension : IExtension, IDisposable
         Global.Player.Shutdown -= OnShutdown;
         lock (Player.StringPropChangeActions)
         {
-            if (Player.StringPropChangeActions.TryGetValue("vf", out var actions))
-                actions.Remove(OnFiltersChanged);
-            if (Player.StringPropChangeActions.TryGetValue("af", out actions))
-                actions.Remove(OnFiltersChanged);
+            foreach (var name in new[] { "vf", "af" })
+            {
+                if (!Player.StringPropChangeActions.TryGetValue(name, out var actions))
+                    continue;
+                if (actions.Remove(OnFiltersChanged) && actions.Count == 0)
+                    Player.StringPropChangeActions.Remove(name);
+            }
         }
         if (Player.Handle != IntPtr.Zero)
             _ = mpv_unobserve_property(Player.Handle, FilterObserverUserData);
@@ -2028,7 +2031,10 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         if (!ClearSchedule(operation.Value.Ticket))
+        {
+            Show("Не удалось выключить размытие: состояние фильма изменилось. Повторите команду.");
             return;
+        }
 
         UpdateWindow("DISABLED", operation.Value.Ticket, operation.Value.Token);
         Show("Размытие для текущего фильма выключено.", operation.Value.Ticket, operation.Value.Token);
@@ -2184,40 +2190,11 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private DialogResult ConfirmExternalChange()
-    {
-        CensorWindow? window;
-        lock (_windowLock)
-            window = _window;
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return DialogResult.Cancel;
-        try
-        {
-            return (DialogResult)window.Invoke(
-                new Func<DialogResult>(window.ConfirmExternalChange));
-        }
-        catch (InvalidOperationException)
-        {
-            return DialogResult.Cancel;
-        }
-    }
+    private DialogResult ConfirmExternalChange() =>
+        InvokeWindow(window => window.ConfirmExternalChange(), DialogResult.Cancel);
 
-    private bool ConfirmSubtitleExport()
-    {
-        CensorWindow? window;
-        lock (_windowLock)
-            window = _window;
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return false;
-        try
-        {
-            return (bool)window.Invoke(new Func<bool>(window.ConfirmSubtitleExport));
-        }
-        catch (InvalidOperationException)
-        {
-            return false;
-        }
-    }
+    private bool ConfirmSubtitleExport() =>
+        InvokeWindow(window => window.ConfirmSubtitleExport(), false);
 
     private void ShowToolWindow()
     {
@@ -2458,79 +2435,40 @@ public sealed class Extension : IExtension, IDisposable
             active is not null);
     }
 
-    private string? ChooseSavePath(string? currentPath, string? suggestedPath)
-    {
-        CensorWindow? window;
-        lock (_windowLock)
-            window = _window;
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return null;
-        try
-        {
-            return (string?)window.Invoke(new Func<string?>(() =>
-                window.ChooseSavePath(currentPath, suggestedPath)));
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
+    private string? ChooseSavePath(string? currentPath, string? suggestedPath) =>
+        InvokeWindow<string?>(
+            window => window.ChooseSavePath(currentPath, suggestedPath),
+            null);
 
-    private string? ChooseExportPath(string? mediaPath, SubtitleFormat format)
-    {
-        CensorWindow? window;
-        lock (_windowLock)
-            window = _window;
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return null;
-        try
-        {
-            return (string?)window.Invoke(new Func<string?>(() =>
-                window.ChooseExportPath(mediaPath, format)));
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
+    private string? ChooseExportPath(string? mediaPath, SubtitleFormat format) =>
+        InvokeWindow<string?>(window => window.ChooseExportPath(mediaPath, format), null);
 
-    private string? ChooseDiagnosticsPath(string directory)
-    {
-        CensorWindow? window;
-        lock (_windowLock)
-            window = _window;
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return null;
-        try
-        {
-            return (string?)window.Invoke(new Func<string?>(() =>
-                window.ChooseDiagnosticsPath(directory)));
-        }
-        catch (InvalidOperationException)
-        {
-            return null;
-        }
-    }
+    private string? ChooseDiagnosticsPath(string directory) =>
+        InvokeWindow<string?>(window => window.ChooseDiagnosticsPath(directory), null);
 
     private bool TryMarkWindowSaved(
         string path,
         string sourceHash,
         ScheduleDocument document,
         string? lastScheduleDirectory)
+        => InvokeWindow(
+            window => window.MarkSaved(path, sourceHash, document, lastScheduleDirectory),
+            false);
+
+    private T InvokeWindow<T>(Func<CensorWindow, T> action, T fallback)
     {
         CensorWindow? window;
         lock (_windowLock)
             window = _window;
         if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return false;
+            return fallback;
         try
         {
-            return (bool)window.Invoke(new Func<bool>(() =>
-                window.MarkSaved(path, sourceHash, document, lastScheduleDirectory)));
+            return (T)window.Invoke(new Func<T>(() => action(window)));
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return fallback;
         }
     }
 
