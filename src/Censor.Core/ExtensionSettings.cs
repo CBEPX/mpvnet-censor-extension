@@ -62,7 +62,7 @@ public static class ExtensionSettingsStore
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNameCaseInsensitive = false,
+        PropertyNameCaseInsensitive = true,
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         ReadCommentHandling = JsonCommentHandling.Skip,
         WriteIndented = true,

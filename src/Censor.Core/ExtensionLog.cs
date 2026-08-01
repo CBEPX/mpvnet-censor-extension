@@ -25,6 +25,7 @@ public sealed record ExtensionLogEvent(
 public sealed class ExtensionLog : IDisposable
 {
     public const string FilePattern = "censor-extension-*.log";
+    public const int PathHashKeySize = 32;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -63,14 +64,15 @@ public sealed class ExtensionLog : IDisposable
         {
             Directory.CreateDirectory(_directory);
             DeleteExpired(retentionDays);
-            IsEnabled = true;
             _writer = Task.Run(WriteLoopAsync);
+            IsEnabled = true;
         }
         catch (Exception exception) when (
             exception is IOException or
                 UnauthorizedAccessException or
                 NotSupportedException or
-                System.Security.SecurityException)
+                System.Security.SecurityException or
+                TaskSchedulerException)
         {
             _writer = Task.CompletedTask;
         }
@@ -96,15 +98,50 @@ public sealed class ExtensionLog : IDisposable
             fields ?? new Dictionary<string, object?>()));
     }
 
-    public static string ProtectPath(string? path, bool includePath)
+    public static byte[] LoadOrCreatePathHashKey(string path)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path);
+        try
+        {
+            if (File.Exists(path))
+            {
+                var existing = File.ReadAllBytes(path);
+                if (existing.Length == PathHashKeySize)
+                    return existing;
+            }
+
+            var key = RandomNumberGenerator.GetBytes(PathHashKeySize);
+            AtomicFile.Write(path, key);
+            return key;
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+                UnauthorizedAccessException or
+                NotSupportedException or
+                System.Security.SecurityException)
+        {
+            // Privacy must not prevent playback when LocalAppData is read-only.
+            return RandomNumberGenerator.GetBytes(PathHashKeySize);
+        }
+    }
+
+    public static string ProtectPath(
+        string? path,
+        bool includePath,
+        byte[] pathHashKey)
     {
         if (string.IsNullOrWhiteSpace(path))
             return "";
         if (includePath)
             return path;
+        ArgumentNullException.ThrowIfNull(pathHashKey);
+        if (pathHashKey.Length != PathHashKeySize)
+            throw new ArgumentException(
+                $"Ключ защиты пути должен содержать {PathHashKeySize} байта.",
+                nameof(pathHashKey));
 
-        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(path));
-        return $"sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
+        var hash = HMACSHA256.HashData(pathHashKey, Encoding.UTF8.GetBytes(path));
+        return $"hmac-sha256:{Convert.ToHexString(hash).ToLowerInvariant()}";
     }
 
     public static IReadOnlyList<string> FindFiles(string directory)

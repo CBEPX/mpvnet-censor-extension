@@ -7,6 +7,9 @@ namespace Censor.Core.Tests;
 
 public sealed class SettingsAndDiagnosticsTests
 {
+    private static byte[] TestPathHashKey() =>
+        Enumerable.Repeat((byte)0x5A, ExtensionLog.PathHashKeySize).ToArray();
+
     [Fact]
     public void SettingsRoundTripAndInvalidFileFallsBackWithoutOverwrite()
     {
@@ -93,6 +96,23 @@ public sealed class SettingsAndDiagnosticsTests
 
         ExtensionSettingsStore.Save(path, invalid.Settings);
         Assert.Contains("\"futureRoot\"", File.ReadAllText(path), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void SettingsAcceptsPropertyNamesWithDifferentCasing()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "settings.json");
+        File.WriteAllText(
+            path,
+            """{"Schema":1,"LeadInMs":321,"Blur":{"Sigma":35,"Steps":2}}""");
+
+        var loaded = ExtensionSettingsStore.Load(path);
+
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal(321, loaded.Settings.LeadInMs);
+        Assert.Equal(new BlurSettings(35, 2), loaded.Settings.Blur);
+        Assert.Null(loaded.Settings.AdditionalProperties);
     }
 
     [Fact]
@@ -252,6 +272,7 @@ public sealed class SettingsAndDiagnosticsTests
     {
         using var directory = new TemporaryDirectory();
         var sourcePath = Path.Combine(directory.Path, "private-film.mkv");
+        var pathHashKey = TestPathHashKey();
         using (var log = new ExtensionLog(directory.Path, 30))
         {
             Parallel.For(0, 20, index => log.Write(
@@ -259,14 +280,37 @@ public sealed class SettingsAndDiagnosticsTests
                 new(1, index),
                 new Dictionary<string, object?>
                 {
-                    ["path"] = ExtensionLog.ProtectPath(sourcePath, includePath: false),
+                    ["path"] = ExtensionLog.ProtectPath(
+                        sourcePath,
+                        includePath: false,
+                        pathHashKey),
                 }));
         }
 
         var text = File.ReadAllText(Directory.GetFiles(directory.Path, "*.log").Single());
         Assert.Equal(20, text.Split('\n', StringSplitOptions.RemoveEmptyEntries).Length);
         Assert.DoesNotContain(sourcePath, text, StringComparison.Ordinal);
-        Assert.Contains("sha256:", text, StringComparison.Ordinal);
+        Assert.Contains("hmac-sha256:", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void PathProtectionReusesInstallationKeyAndChangesAcrossKeys()
+    {
+        using var directory = new TemporaryDirectory();
+        var keyPath = Path.Combine(directory.Path, "path-hash.key");
+        var firstKey = ExtensionLog.LoadOrCreatePathHashKey(keyPath);
+        var secondKey = ExtensionLog.LoadOrCreatePathHashKey(keyPath);
+        var otherKey = firstKey.ToArray();
+        otherKey[0] ^= 0xFF;
+        const string PrivatePath = @"C:\Private\film.mkv";
+
+        Assert.Equal(firstKey, secondKey);
+        Assert.Equal(
+            ExtensionLog.ProtectPath(PrivatePath, includePath: false, pathHashKey: firstKey),
+            ExtensionLog.ProtectPath(PrivatePath, includePath: false, pathHashKey: secondKey));
+        Assert.NotEqual(
+            ExtensionLog.ProtectPath(PrivatePath, includePath: false, pathHashKey: firstKey),
+            ExtensionLog.ProtectPath(PrivatePath, includePath: false, pathHashKey: otherKey));
     }
 
     [Fact]
@@ -352,9 +396,21 @@ public sealed class SettingsAndDiagnosticsTests
         var without = Path.Combine(directory.Path, "without.zip");
         var with = Path.Combine(directory.Path, "with.zip");
 
-        DiagnosticsExporter.Export(without, snapshot, includeSchedule: false);
-        DiagnosticsExporter.Export(with, snapshot, includeSchedule: true);
-        DiagnosticsExporter.Export(with, snapshot, includeSchedule: true);
+        DiagnosticsExporter.Export(
+            without,
+            snapshot,
+            includeSchedule: false,
+            pathHashKey: TestPathHashKey());
+        DiagnosticsExporter.Export(
+            with,
+            snapshot,
+            includeSchedule: true,
+            pathHashKey: TestPathHashKey());
+        DiagnosticsExporter.Export(
+            with,
+            snapshot,
+            includeSchedule: true,
+            pathHashKey: TestPathHashKey());
 
         using var withoutArchive = ZipFile.OpenRead(without);
         using var withArchive = ZipFile.OpenRead(with);
@@ -390,7 +446,11 @@ public sealed class SettingsAndDiagnosticsTests
         var snapshot = new DiagnosticsSnapshot(
             "{}", "{}", "{}", "{}", "{}", "{}", "{}", [logPath], null);
 
-        DiagnosticsExporter.Export(path, snapshot, includeSchedule: false);
+        DiagnosticsExporter.Export(
+            path,
+            snapshot,
+            includeSchedule: false,
+            pathHashKey: TestPathHashKey());
 
         using var archive = ZipFile.OpenRead(path);
         Assert.Contains(archive.Entries, entry => entry.FullName == "logs/censor-extension.log");
@@ -418,7 +478,11 @@ public sealed class SettingsAndDiagnosticsTests
         var snapshot = new DiagnosticsSnapshot(
             "{}", "{}", "{}", "{}", "{}", "{}", "{}", [logPath], null);
 
-        DiagnosticsExporter.Export(path, snapshot, includeSchedule: false);
+        DiagnosticsExporter.Export(
+            path,
+            snapshot,
+            includeSchedule: false,
+            pathHashKey: TestPathHashKey());
 
         using var archive = ZipFile.OpenRead(path);
         var entry = Assert.Single(archive.Entries, item =>
@@ -426,7 +490,7 @@ public sealed class SettingsAndDiagnosticsTests
         using var reader = new StreamReader(entry.Open());
         var exported = reader.ReadToEnd();
         Assert.DoesNotContain(privatePath, exported, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("sha256:", exported, StringComparison.Ordinal);
+        Assert.Contains("hmac-sha256:", exported, StringComparison.Ordinal);
         Assert.Contains("Unable to open", exported, StringComparison.Ordinal);
         Assert.Contains("Audio filter rollback failed", exported, StringComparison.Ordinal);
         Assert.Contains("ratio 3 / 4", exported, StringComparison.Ordinal);
@@ -437,17 +501,30 @@ public sealed class SettingsAndDiagnosticsTests
     public void RootedPathRedactionPreservesTrailingDiagnostics()
     {
         const string path = @"C:\Private Folder\film.mkv";
-        var protectedPath = ExtensionLog.ProtectPath(path, includePath: false);
+        var pathHashKey = TestPathHashKey();
+        var protectedPath = ExtensionLog.ProtectPath(
+            path,
+            includePath: false,
+            pathHashKey);
 
         Assert.Equal(
             $"Unable to open {protectedPath} (code 5)",
-            DiagnosticsExporter.RedactRootedPaths($"Unable to open {path} (code 5)"));
+            DiagnosticsExporter.RedactRootedPaths(
+                $"Unable to open {path} (code 5)",
+                pathHashKey));
         Assert.Equal(
             $"at Decoder in {protectedPath}:line 42",
-            DiagnosticsExporter.RedactRootedPaths($"at Decoder in {path}:line 42"));
+            DiagnosticsExporter.RedactRootedPaths(
+                $"at Decoder in {path}:line 42",
+                pathHashKey));
         Assert.Equal(
             $"Ошибка: «{protectedPath}»",
-            DiagnosticsExporter.RedactRootedPaths($"Ошибка: «{path}»"));
+            DiagnosticsExporter.RedactRootedPaths($"Ошибка: «{path}»", pathHashKey));
+        Assert.Equal(
+            "Не удалось открыть https://example.com/private/file.mkv (code 5)",
+            DiagnosticsExporter.RedactRootedPaths(
+                "Не удалось открыть https://example.com/private/file.mkv (code 5)",
+                pathHashKey));
     }
 
     [Fact]

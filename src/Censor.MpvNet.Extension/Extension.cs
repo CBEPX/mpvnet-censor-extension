@@ -37,6 +37,7 @@ public sealed class Extension : IExtension, IDisposable
     private readonly ExtensionLog _log;
     private readonly string _localDataRoot;
     private readonly string _settingsPath;
+    private readonly byte[] _pathHashKey;
     private CancellationTokenSource _operationCancellation = new();
     private Task _sessionCleanup = Task.CompletedTask;
     private ActiveSchedule? _activeSchedule;
@@ -59,6 +60,8 @@ public sealed class Extension : IExtension, IDisposable
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "CensorPlayer");
         _settingsPath = Path.Combine(_localDataRoot, "settings.json");
+        _pathHashKey = ExtensionLog.LoadOrCreatePathHashKey(
+            Path.Combine(_localDataRoot, "path-hash.key"));
         var loadedSettings = ExtensionSettingsStore.Load(_settingsPath);
         _settings = loadedSettings.Settings;
         _log = new(
@@ -477,7 +480,8 @@ public sealed class Extension : IExtension, IDisposable
                 {
                     ["schedulePath"] = ExtensionLog.ProtectPath(
                         schedulePath,
-                        settings.Logging.IncludePaths),
+                        settings.Logging.IncludePaths,
+                        _pathHashKey),
                     ["sourceIntervals"] = document.Intervals.Count,
                     ["normalizedIntervals"] = normalized.Count,
                     ["warnings"] = diagnostics.Count,
@@ -545,7 +549,7 @@ public sealed class Extension : IExtension, IDisposable
                 Show(
                     exception is DecoderFallbackException
                         ? "Не удалось прочитать расписание: сохраните файл в кодировке UTF-8."
-                        : "Не удалось загрузить или применить расписание. Подробности — в журнале mpv.net.",
+                        : "Не удалось загрузить или применить расписание. Если воспроизведение осталось на паузе, выберите «Цензура → Отключить». Подробности — в журнале mpv.net.",
                     ticket,
                     token);
             }
@@ -620,7 +624,8 @@ public sealed class Extension : IExtension, IDisposable
                 {
                     ["schedulePath"] = ExtensionLog.ProtectPath(
                         schedulePath,
-                        _settings.Logging.IncludePaths),
+                        _settings.Logging.IncludePaths,
+                        _pathHashKey),
                     ["intervalCount"] = plan.IntervalCount,
                     ["chunkCount"] = plan.Chunks.Count,
                     ["sigma"] = plan.Blur.Sigma,
@@ -781,7 +786,12 @@ public sealed class Extension : IExtension, IDisposable
         {
             Terminal.WriteError(exception, LogModule);
             if (UpdateWindow("ERROR", pending.Ticket, token))
-                Show("Не удалось применить расписание.", pending.Ticket, token);
+            {
+                Show(
+                    "Не удалось применить расписание. Если воспроизведение осталось на паузе, выберите «Цензура → Отключить».",
+                    pending.Ticket,
+                    token);
+            }
         }
     }
 
@@ -851,6 +861,8 @@ public sealed class Extension : IExtension, IDisposable
         ExtensionSettings previousSettings;
         ExtensionSettings settings;
         bool watchdogChanged;
+        bool normalizationChanged;
+        bool hasSchedule;
         IReadOnlyList<string> warnings;
         lock (_stateLock)
         {
@@ -869,6 +881,11 @@ public sealed class Extension : IExtension, IDisposable
             watchdogChanged =
                 _settings.WatchdogEnabled != settings.WatchdogEnabled ||
                 _settings.WatchdogIntervalMs != settings.WatchdogIntervalMs;
+            normalizationChanged =
+                _settings.LeadInMs != settings.LeadInMs ||
+                _settings.LeadOutMs != settings.LeadOutMs ||
+                _settings.MergeGapMs != settings.MergeGapMs;
+            hasSchedule = _activeSchedule is not null || _pendingSchedule is not null;
             warnings = ExtensionSettingsStore.Validate(settings);
             if (warnings.Count == 0)
             {
@@ -892,7 +909,11 @@ public sealed class Extension : IExtension, IDisposable
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite,
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite);
         if (SaveSettings())
-            Show("Настройки сохранены.");
+        {
+            Show(normalizationChanged && hasSchedule
+                ? "Настройки сохранены. Запас до и после интервала и порог объединения применятся после перезагрузки расписания."
+                : "Настройки сохранены.");
+        }
     }
 
     private void RepairSettings()
@@ -1212,7 +1233,10 @@ public sealed class Extension : IExtension, IDisposable
                 jsonOptions),
             JsonSerializer.Serialize(new
             {
-                path = ExtensionLog.ProtectPath(mediaPath, includePath: false),
+                path = ExtensionLog.ProtectPath(
+                    mediaPath,
+                    includePath: false,
+                    _pathHashKey),
             }, jsonOptions),
             JsonSerializer.Serialize(new
             {
@@ -1237,7 +1261,7 @@ public sealed class Extension : IExtension, IDisposable
             }, jsonOptions),
             ExtensionLog.FindFiles(Path.Combine(_localDataRoot, "Logs")),
             includeSchedule && document is not null ? ScheduleText.Serialize(document) : null);
-        DiagnosticsExporter.Export(path, snapshot, includeSchedule);
+        DiagnosticsExporter.Export(path, snapshot, includeSchedule, _pathHashKey);
         InvokeWindow(window => window.ShowDiagnosticsResult(
             "Диагностический ZIP-архив сохранён:" + Environment.NewLine + path));
         Show("Диагностика экспортирована в ZIP-архив.");
@@ -2321,7 +2345,7 @@ public sealed class Extension : IExtension, IDisposable
         if (includePaths)
             return text;
 
-        text = DiagnosticsExporter.RedactRootedPaths(text);
+        text = DiagnosticsExporter.RedactRootedPaths(text, _pathHashKey);
         foreach (var path in new[]
                  {
                      additionalPath,
@@ -2334,7 +2358,7 @@ public sealed class Extension : IExtension, IDisposable
         {
             text = text.Replace(
                 path!,
-                ExtensionLog.ProtectPath(path, includePath: false),
+                ExtensionLog.ProtectPath(path, includePath: false, _pathHashKey),
                 StringComparison.OrdinalIgnoreCase);
         }
         return text;

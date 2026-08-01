@@ -48,6 +48,11 @@
   замечания закрыты точным pre-repair backup, UTF-8 UX, честным watchdog OSD,
   variable-hour round-trip, ComboBox refresh и тестируемой save policy.
   Виртуализация и native scan не добавлены для обычных 10–20 сцен.
+- Тринадцатый полный Opus-review не нашёл критических дефектов. Закрыты UX
+  перезагрузки таймингов и безопасной паузы, пути переведены на HMAC-SHA-256 с
+  локальным ключом, URL сохранены, а JSON-настройки читаются без учёта регистра.
+- Локально после исправлений: Release build без предупреждений и 86/86 Core
+  тестов — PASS; Windows runtime и installer остаются следующей границей CI.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.

@@ -21,10 +21,12 @@ public static class DiagnosticsExporter
     public static void Export(
         string path,
         DiagnosticsSnapshot snapshot,
-        bool includeSchedule)
+        bool includeSchedule,
+        byte[] pathHashKey)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(pathHashKey);
         var fullPath = Path.GetFullPath(path);
         var directory = Path.GetDirectoryName(fullPath) ??
             throw new ArgumentException(
@@ -57,7 +59,8 @@ public static class DiagnosticsExporter
                         AddSanitizedLog(
                             archive,
                             logPath,
-                            $"logs/{Path.GetFileName(logPath)}");
+                            $"logs/{Path.GetFileName(logPath)}",
+                            pathHashKey);
                     }
                     catch (IOException)
                     {
@@ -115,7 +118,11 @@ public static class DiagnosticsExporter
         }
     }
 
-    private static void AddSanitizedLog(ZipArchive archive, string path, string name)
+    private static void AddSanitizedLog(
+        ZipArchive archive,
+        string path,
+        string name,
+        byte[] pathHashKey)
     {
         using var source = new FileStream(
             path,
@@ -127,21 +134,24 @@ public static class DiagnosticsExporter
         using var writer = new StreamWriter(entry.Open(), new UTF8Encoding(false));
         while (reader.ReadLine() is { } line)
         {
-            if (TrySanitizeLogLine(line, out var sanitized))
+            if (TrySanitizeLogLine(line, pathHashKey, out var sanitized))
                 writer.WriteLine(sanitized);
             else
                 writer.WriteLine("{\"event\":\"log-entry-redacted\",\"reason\":\"invalid-json\"}");
         }
     }
 
-    private static bool TrySanitizeLogLine(string line, out string sanitized)
+    private static bool TrySanitizeLogLine(
+        string line,
+        byte[] pathHashKey,
+        out string sanitized)
     {
         sanitized = "";
         try
         {
             if (JsonNode.Parse(line) is not JsonObject root)
                 return false;
-            SanitizeNode(root);
+            SanitizeNode(root, pathHashKey);
             sanitized = root.ToJsonString();
             return true;
         }
@@ -151,7 +161,7 @@ public static class DiagnosticsExporter
         }
     }
 
-    private static void SanitizeNode(JsonNode node)
+    private static void SanitizeNode(JsonNode node, byte[] pathHashKey)
     {
         if (node is JsonObject jsonObject)
         {
@@ -160,11 +170,14 @@ public static class DiagnosticsExporter
                 if (property.Value is JsonValue value &&
                     value.TryGetValue<string>(out var text))
                 {
-                    jsonObject[property.Key] = SanitizeText(property.Key, text);
+                    jsonObject[property.Key] = SanitizeText(
+                        property.Key,
+                        text,
+                        pathHashKey);
                 }
                 else if (property.Value is not null)
                 {
-                    SanitizeNode(property.Value);
+                    SanitizeNode(property.Value, pathHashKey);
                 }
             }
         }
@@ -175,29 +188,37 @@ public static class DiagnosticsExporter
                 if (jsonArray[index] is JsonValue value &&
                     value.TryGetValue<string>(out var text))
                 {
-                    jsonArray[index] = RedactRootedPaths(text);
+                    jsonArray[index] = RedactRootedPaths(text, pathHashKey);
                 }
                 else if (jsonArray[index] is { } child)
                 {
-                    SanitizeNode(child);
+                    SanitizeNode(child, pathHashKey);
                 }
             }
         }
     }
 
-    private static string SanitizeText(string propertyName, string value)
+    private static string SanitizeText(
+        string propertyName,
+        string value,
+        byte[] pathHashKey)
     {
-        if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+        if (value.StartsWith("hmac-sha256:", StringComparison.OrdinalIgnoreCase))
             return value;
+        if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+            return ExtensionLog.ProtectPath(value, includePath: false, pathHashKey);
         return propertyName.Contains("path", StringComparison.OrdinalIgnoreCase)
-            ? ExtensionLog.ProtectPath(value, includePath: false)
-            : RedactRootedPaths(value);
+            ? ExtensionLog.ProtectPath(value, includePath: false, pathHashKey)
+            : RedactRootedPaths(value, pathHashKey);
     }
 
-    public static string RedactRootedPaths(string value)
+    public static string RedactRootedPaths(string value, byte[] pathHashKey)
     {
-        if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+        ArgumentNullException.ThrowIfNull(pathHashKey);
+        if (value.StartsWith("hmac-sha256:", StringComparison.OrdinalIgnoreCase))
             return value;
+        if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+            return ExtensionLog.ProtectPath(value, includePath: false, pathHashKey);
 
         StringBuilder? sanitized = null;
         var copiedUntil = 0;
@@ -206,7 +227,10 @@ public static class DiagnosticsExporter
             sanitized ??= new(value.Length);
             sanitized.Append(value, copiedUntil, start - copiedUntil);
             var end = FindRootedPathEnd(value, start);
-            sanitized.Append(ExtensionLog.ProtectPath(value[start..end], includePath: false));
+            sanitized.Append(ExtensionLog.ProtectPath(
+                value[start..end],
+                includePath: false,
+                pathHashKey));
             copiedUntil = end;
         }
 
@@ -232,7 +256,14 @@ public static class DiagnosticsExporter
             return false;
 
         if (value[index] == '/')
+        {
+            if (index > 0 && value[index - 1] == ':' &&
+                index + 1 < value.Length && value[index + 1] == '/')
+            {
+                return false;
+            }
             return index + 1 < value.Length && !char.IsWhiteSpace(value[index + 1]);
+        }
         if (value[index] == '\\')
             return index + 1 < value.Length && value[index + 1] == '\\';
         return index + 2 < value.Length &&

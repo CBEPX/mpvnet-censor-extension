@@ -34,6 +34,7 @@ public static class FilterCompiler
         if (intervals.Count == 0)
             return new([], 0, blur);
 
+        // ScheduleText.MaxIntervals bounds total input; this limit bounds one mpv expression.
         var chunkCount = (intervals.Count + MaxIntervalsPerChunk - 1) / MaxIntervalsPerChunk;
         var sigma = blur.Sigma.ToString("R", CultureInfo.InvariantCulture);
         var chunks = new List<FilterChunk>(chunkCount);
