@@ -42,6 +42,8 @@ if [[ ! -d "$source_dir/.git" ]]; then
   git clone --depth 1 --branch "$tag" https://github.com/mpvnet-player/mpv.net.git "$source_dir"
 fi
 
+# Serena may keep optional local indexing metadata in the dependency checkout;
+# it is not source input and must not make an otherwise clean restore fail.
 if [[ -n "$(git -C "$source_dir" status --porcelain --untracked-files=all -- \
   . ':(exclude).serena/**')" ]]; then
   echo "mpv.net source checkout contains tracked or untracked modifications" >&2

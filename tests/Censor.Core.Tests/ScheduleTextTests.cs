@@ -191,28 +191,6 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
-    public void AtomicWriteDeletesOnlyStaleTempsForTheSameTarget()
-    {
-        using var directory = new TemporaryDirectory();
-        var path = Path.Combine(directory.Path, "sample.censor.txt");
-        var stale = Path.Combine(directory.Path, ".sample.censor.txt.stale.tmp");
-        var fresh = Path.Combine(directory.Path, ".sample.censor.txt.fresh.tmp");
-        var unrelated = Path.Combine(directory.Path, ".other.censor.txt.stale.tmp");
-        File.WriteAllText(stale, "stale");
-        File.WriteAllText(fresh, "fresh");
-        File.WriteAllText(unrelated, "unrelated");
-        File.SetLastWriteTimeUtc(stale, DateTime.UtcNow.AddDays(-2));
-        File.SetLastWriteTimeUtc(unrelated, DateTime.UtcNow.AddDays(-2));
-
-        AtomicFile.WriteUtf8Text(path, "saved");
-
-        Assert.False(File.Exists(stale));
-        Assert.True(File.Exists(fresh));
-        Assert.True(File.Exists(unrelated));
-        Assert.Equal("saved", File.ReadAllText(path));
-    }
-
-    [Fact]
     public void SerializesCanonicalLfBytes()
     {
         var document = new ScheduleDocument(

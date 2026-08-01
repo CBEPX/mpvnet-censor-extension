@@ -169,6 +169,18 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void RecoveryInputNormalizesTitleToOneLine()
+    {
+        var draft = new ScheduleDraft(new(
+            new(Title: "  Film\r\nTitle  "),
+            [],
+            []));
+
+        Assert.Equal("Film Title", draft.Document.Metadata.Title);
+        Assert.Empty(draft.Validate());
+    }
+
+    [Fact]
     public void InvalidDraftCanBeCorrectedButCannotBeConsideredValid()
     {
         var draft = new ScheduleDraft(Document(new CensorInterval(1_000, 2_000)));

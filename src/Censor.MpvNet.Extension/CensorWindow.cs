@@ -1266,16 +1266,21 @@ internal sealed class CensorWindow : Form
     private void RenderWarnings(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
         _warnings.Items.Clear();
-        foreach (var diagnostic in diagnostics
-            .Concat(_runtimeDiagnostics)
+        foreach (var item in diagnostics
+            .Select(diagnostic => (Diagnostic: diagnostic, Location: "интервал"))
+            .Concat(_runtimeDiagnostics.Select(
+                diagnostic => (Diagnostic: diagnostic, Location: "строка файла")))
             .Distinct()
-            .OrderBy(item => item.Line <= 0 ? int.MaxValue : item.Line))
+            .OrderBy(item => item.Diagnostic.Line <= 0
+                ? int.MaxValue
+                : item.Diagnostic.Line))
         {
+            var diagnostic = item.Diagnostic;
             var severity = diagnostic.Severity == DiagnosticSeverity.Error
                 ? "Ошибка"
                 : "Предупреждение";
             _warnings.Items.Add(diagnostic.Line > 0
-                ? $"#{diagnostic.Line}: {diagnostic.Message}"
+                ? $"{severity}, {item.Location} {diagnostic.Line}: {diagnostic.Message}"
                 : $"{severity}: {diagnostic.Message}");
         }
         _warnings.Visible = _warnings.Items.Count > 0;

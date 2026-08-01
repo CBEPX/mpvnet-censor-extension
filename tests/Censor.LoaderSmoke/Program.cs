@@ -110,6 +110,7 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
         null,
         [
             "# censor-timeline: 1\n# title: Film\n# media-duration-ms: 6000\n\n" +
+            "# future-key: keep\n" +
             "00:00:01.000 --> 00:00:02.000\n",
             2 * 1024 * 1024,
             10_000,
@@ -135,6 +136,15 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     var grid = Descendants(window).OfType<DataGridView>().Single();
     if (grid.Rows.Count != 1)
         throw new InvalidOperationException("The discard smoke could not seed one interval.");
+    var warning = Descendants(window).OfType<ListBox>().Single().Items
+        .Cast<object>()
+        .Select(Convert.ToString)
+        .Single();
+    if (warning is null ||
+        !warning.StartsWith("Предупреждение, строка файла 5:", StringComparison.Ordinal))
+    {
+        throw new InvalidOperationException("Runtime warning does not identify its file-line coordinate.");
+    }
 
     window.Show();
     window.Hide();

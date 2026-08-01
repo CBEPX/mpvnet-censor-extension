@@ -81,6 +81,10 @@ public sealed class FilterCompilerTests
             $"{readback},@censor_blur_999:lavfi=[hflip]",
             plan));
         Assert.False(FilterReadback.MatchesBlurPlan($"{readback},{expected}", plan));
+        Assert.False(FilterReadback.MatchesBlurPlan(
+            expected.Replace("sigma=40", "sigma=1", StringComparison.Ordinal) + "," +
+            expected.Replace("@censor_blur_000", "@user_expected", StringComparison.Ordinal),
+            plan));
     }
 
     [Fact]
@@ -109,6 +113,10 @@ public sealed class FilterCompilerTests
             expected));
         Assert.False(FilterReadback.MatchesSingle(
             $"{expectedReadback},{expectedReadback}",
+            AudioCompressionPresets.FilterLabel,
+            expected));
+        Assert.False(FilterReadback.MatchesSingle(
+            $"{CanonicalReadback(old)},{expectedReadback.Replace(AudioCompressionPresets.FilterLabel, "@user_expected", StringComparison.Ordinal)}",
             AudioCompressionPresets.FilterLabel,
             expected));
     }

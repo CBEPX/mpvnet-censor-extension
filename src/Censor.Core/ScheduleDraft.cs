@@ -145,7 +145,7 @@ public sealed class ScheduleDraft
     public void Add(long startMs, long endMs, string? note = null) =>
         Change(document => document with
         {
-            Intervals = document.Intervals.Append(new(startMs, endMs, NormalizeNote(note))).ToArray(),
+            Intervals = document.Intervals.Append(new(startMs, endMs, NormalizeSingleLine(note))).ToArray(),
         });
 
     public void Update(int index, long startMs, long endMs, string? note)
@@ -154,7 +154,7 @@ public sealed class ScheduleDraft
         Change(document =>
         {
             var intervals = document.Intervals.ToArray();
-            intervals[index] = new(startMs, endMs, NormalizeNote(note));
+            intervals[index] = new(startMs, endMs, NormalizeSingleLine(note));
             return document with { Intervals = intervals };
         });
     }
@@ -293,7 +293,7 @@ public sealed class ScheduleDraft
         {
             Metadata = _document.Metadata with
             {
-                Title = string.IsNullOrWhiteSpace(title) ? null : title.Trim(),
+                Title = NormalizeSingleLine(title),
                 MediaDurationMs = mediaDurationMs,
             },
         });
@@ -378,8 +378,12 @@ public sealed class ScheduleDraft
     private static ScheduleDocument Copy(ScheduleDocument document) =>
         document with
         {
+            Metadata = document.Metadata with
+            {
+                Title = NormalizeSingleLine(document.Metadata.Title),
+            },
             Intervals = Array.AsReadOnly(document.Intervals
-                .Select(interval => interval with { Note = NormalizeNote(interval.Note) })
+                .Select(interval => interval with { Note = NormalizeSingleLine(interval.Note) })
                 .ToArray()),
             PreservedHeaderLines = Array.AsReadOnly(document.PreservedHeaderLines.ToArray()),
         };
@@ -405,10 +409,10 @@ public sealed class ScheduleDraft
         left.Intervals.SequenceEqual(right.Intervals) &&
         left.PreservedHeaderLines.SequenceEqual(right.PreservedHeaderLines);
 
-    private static string? NormalizeNote(string? note) =>
-        string.IsNullOrWhiteSpace(note)
+    private static string? NormalizeSingleLine(string? value) =>
+        string.IsNullOrWhiteSpace(value)
             ? null
-            : note.Replace("\r\n", " ", StringComparison.Ordinal)
+            : value.Replace("\r\n", " ", StringComparison.Ordinal)
                 .Replace('\r', ' ')
                 .Replace('\n', ' ')
                 .Trim();
