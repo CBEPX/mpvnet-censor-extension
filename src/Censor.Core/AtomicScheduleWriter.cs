@@ -1,8 +1,10 @@
+using System.Text;
+
 namespace Censor.Core;
 
 public static class AtomicScheduleWriter
 {
-    public static void Write(
+    public static byte[] Write(
         string path,
         ScheduleDocument document,
         int maxIntervals = ScheduleText.MaxIntervals,
@@ -23,10 +25,12 @@ public static class AtomicScheduleWriter
         if (!ScheduleText.Parse(text, maxTextFileBytes, maxIntervals).IsSuccess)
             throw new InvalidOperationException(
                 "Расписание не записано: после сохранения оно не проходит повторный разбор.");
-        AtomicFile.WriteUtf8Text(
+        var bytes = Encoding.UTF8.GetBytes(text);
+        AtomicFile.Write(
             path,
-            text,
+            bytes,
             Path.GetFullPath(path) + ".bak",
             createDirectory: false);
+        return bytes;
     }
 }

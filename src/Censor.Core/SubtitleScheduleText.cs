@@ -109,6 +109,12 @@ public static class SubtitleScheduleText
             intervals.Add(new(startMs, endMs, note.Length == 0 ? null : note));
         }
 
+        diagnostics.Add(new(
+            DiagnosticSeverity.Warning,
+            1,
+            1,
+            "Поле media-duration-ms отсутствует в формате субтитров: соответствие фильму проверить нельзя."));
+
         return diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error)
             ? new(null, diagnostics)
             : new(

@@ -340,19 +340,25 @@ internal sealed class CensorWindow : Form
                     : "Текущая позиция воспроизведения недоступна";
                 break;
             case "mark-end":
-                if (_pendingStartMs is { } start &&
-                    (capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is { } end &&
-                    end > start)
+                if (_pendingStartMs is not { } start)
                 {
-                    EnsureDraft();
-                    _draft!.Add(start, end);
-                    _pendingStartMs = null;
-                    Changed();
+                    Warn("Сначала отметьте начало интервала.");
+                    break;
                 }
-                else
+                if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } end)
                 {
-                    Warn("Сначала отметьте начало интервала. Конец должен быть позже начала.");
+                    Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
+                    break;
                 }
+                if (end <= start)
+                {
+                    Warn("Конец интервала должен быть позже отмеченного начала.");
+                    break;
+                }
+                EnsureDraft();
+                _draft!.Add(start, end);
+                _pendingStartMs = null;
+                Changed();
                 break;
             case "set-start":
                 CaptureBoundary(start: true, capturedTimeMs);
@@ -682,9 +688,11 @@ internal sealed class CensorWindow : Form
 
     private void SplitSelected()
     {
-        if (_draft is null || SelectedIndex() is not { } index ||
-            CurrentTimeRequested?.Invoke() is not { } position)
+        if (_draft is null || SelectedIndex() is not { } index)
+            return;
+        if (CurrentTimeRequested?.Invoke() is not { } position)
         {
+            Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
             return;
         }
         try
@@ -700,9 +708,11 @@ internal sealed class CensorWindow : Form
 
     private void CaptureBoundary(bool start, long? capturedTimeMs = null)
     {
-        if (_draft is null || SelectedIndex() is not { } index ||
-            (capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
+        if (_draft is null || SelectedIndex() is not { } index)
+            return;
+        if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
         {
+            Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
             return;
         }
         var interval = _draft.Document.Intervals[index];

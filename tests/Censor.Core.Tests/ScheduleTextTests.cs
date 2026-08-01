@@ -122,10 +122,11 @@ public sealed class ScheduleTextTests
                 [new CensorInterval(1_000, 2_000)],
                 []);
 
-            AtomicScheduleWriter.Write(path, document);
+            var writtenBytes = AtomicScheduleWriter.Write(path, document);
 
             Assert.Equal("old", File.ReadAllText(path + ".bak"));
             var bytes = File.ReadAllBytes(path);
+            Assert.Equal(writtenBytes, bytes);
             Assert.False(bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble));
             Assert.True(ScheduleText.Parse(Encoding.UTF8.GetString(bytes)).IsSuccess);
         }

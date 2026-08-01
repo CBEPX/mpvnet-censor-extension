@@ -30,7 +30,8 @@ public sealed class Extension : IExtension, IDisposable
     private readonly Lock _stateLock = new();
     private readonly Lock _windowLock = new();
     private readonly Lock _settingsWriteLock = new();
-    private readonly Queue<Action<CensorWindow>> _pendingWindowActions = new();
+    private readonly Queue<(Action<CensorWindow> Run, Action? Cancel)>
+        _pendingWindowActions = new();
     private readonly MediaSessionCoordinator _revisions = new();
     private readonly SemaphoreSlim _filterGate = new(1, 1);
     private readonly TaskCompletionSource<bool> _stopped =
@@ -53,6 +54,7 @@ public sealed class Extension : IExtension, IDisposable
     private string _windowStatus = "NO SCHEDULE";
     private int _disposed;
     private bool _pauseHeldByExtension;
+    private bool _pendingWindowActionDropReported;
     private int _recoveryFailures;
     private int _stopping;
     private int _vfReadFailures;
@@ -116,8 +118,10 @@ public sealed class Extension : IExtension, IDisposable
         CloseWindow();
         _watchdog.Dispose();
         lock (_stateLock)
+        {
             _operationCancellation.Dispose();
-        _revisions.Dispose();
+            _revisions.Dispose();
+        }
         // mpv.net creates one Extension per process. Queued callbacks can still observe
         // _stopping after Dispose, so keep their gate alive for the remaining process lifetime.
         _log.Dispose();
@@ -398,7 +402,7 @@ public sealed class Extension : IExtension, IDisposable
             {
                 result.TrySetException(exception);
             }
-        }))
+        }, () => result.TrySetResult(null)))
         {
             return null;
         }
@@ -1034,22 +1038,21 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
-        if (!choosePath &&
-            expectedHash is not null &&
-            File.Exists(path) &&
-            !string.Equals(
-                expectedHash,
-                ComputeHash(File.ReadAllBytes(path)),
-                StringComparison.Ordinal))
+        if (!choosePath && expectedHash is not null && File.Exists(path))
         {
-            var decision = ConfirmExternalChange();
-            if (decision == DialogResult.Cancel)
+            if (!TryReadScheduleHash(path, out var currentHash))
                 return;
-            if (decision == DialogResult.No)
+            if (!string.Equals(expectedHash, currentHash, StringComparison.Ordinal))
             {
-                path = ChooseSavePath(path);
-                if (string.IsNullOrWhiteSpace(path))
+                var decision = ConfirmExternalChange();
+                if (decision == DialogResult.Cancel)
                     return;
+                if (decision == DialogResult.No)
+                {
+                    path = ChooseSavePath(path);
+                    if (string.IsNullOrWhiteSpace(path))
+                        return;
+                }
             }
         }
 
@@ -1069,12 +1072,12 @@ public sealed class Extension : IExtension, IDisposable
             document.Intervals,
             settings.ResolveNormalizationOptions(document.Metadata));
         var plan = FilterCompiler.Compile(normalized, settings.Blur);
-        AtomicScheduleWriter.Write(
+        var savedBytes = AtomicScheduleWriter.Write(
             path,
             document,
             settings.Limits.MaxIntervals,
             settings.Limits.MaxTextFileBytes);
-        var savedHash = ComputeHash(File.ReadAllBytes(path));
+        var savedHash = ComputeHash(savedBytes);
 
         var markWindowSaved = false;
         var updateRuntime = false;
@@ -1161,6 +1164,34 @@ public sealed class Extension : IExtension, IDisposable
         Show(markWindowSaved
             ? $"Файл {Path.GetFileName(path)} сохранён."
             : $"Файл {Path.GetFileName(path)} сохранён, но текущее расписание в проигрывателе уже изменилось.");
+    }
+
+    private bool TryReadScheduleHash(string path, out string hash)
+    {
+        try
+        {
+            hash = ComputeHash(File.ReadAllBytes(path));
+            return true;
+        }
+        catch (Exception exception) when (
+            exception is IOException or
+                UnauthorizedAccessException or
+                NotSupportedException or
+                System.Security.SecurityException)
+        {
+            hash = "";
+            Terminal.WriteError(exception, LogModule);
+            _log.Write(
+                "schedule-hash-read-error",
+                _revisions.Snapshot(),
+                new Dictionary<string, object?>
+                {
+                    ["error"] = ProtectError(exception, path),
+                },
+                ExtensionLogLevel.Error);
+            Show("Расписание не сохранено: не удалось проверить, не изменён ли файл другой программой.");
+            return false;
+        }
     }
 
     private void SeekTo(long milliseconds)
@@ -1347,9 +1378,7 @@ public sealed class Extension : IExtension, IDisposable
             if (!useCurrentSelection && !selectionChanged)
                 return;
 
-            previousBlur = useCurrentSelection && _activeSchedule is { } runtimeActive
-                ? runtimeActive.Plan.Blur
-                : _settings.Blur;
+            previousBlur = _activeSchedule?.Plan.Blur ?? _settings.Blur;
             if (!useCurrentSelection)
                 _settings = _settings with { Blur = settings };
 
@@ -1406,7 +1435,7 @@ public sealed class Extension : IExtension, IDisposable
             if (selectionChanged)
             {
                 SaveSettings();
-                Show("Пресет размытия сохранён и применится после загрузки расписания.");
+                Show("Пресет размытия сохранён. Текущая загрузка расписания продолжится.");
             }
             return;
         }
@@ -1810,7 +1839,7 @@ public sealed class Extension : IExtension, IDisposable
             {
                 result.TrySetException(exception);
             }
-        }))
+        }, () => result.TrySetResult(false)))
         {
             return false;
         }
@@ -1951,16 +1980,30 @@ public sealed class Extension : IExtension, IDisposable
                     finally
                     {
                         bool restart;
+                        Action[] canceledActions;
                         lock (_windowLock)
                         {
                             _window = null;
                             _windowThread = null;
                             if (!messageLoopCompleted)
+                            {
+                                canceledActions = _pendingWindowActions
+                                    .Select(item => item.Cancel)
+                                    .OfType<Action>()
+                                    .ToArray();
                                 _pendingWindowActions.Clear();
+                                _pendingWindowActionDropReported = false;
+                            }
+                            else
+                            {
+                                canceledActions = [];
+                            }
                             restart = messageLoopCompleted &&
                                 Volatile.Read(ref _stopping) == 0 &&
                                 _pendingWindowActions.Count > 0;
                         }
+                        foreach (var cancel in canceledActions)
+                            RunSafely(cancel);
                         if (restart)
                             ShowToolWindow();
                     }
@@ -2121,12 +2164,16 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private bool QueueWindowAction(Action<CensorWindow> action)
+    private bool QueueWindowAction(
+        Action<CensorWindow> action,
+        Action? cancel = null)
     {
         if (Volatile.Read(ref _stopping) != 0)
             return false;
 
         CensorWindow? window;
+        var reportDroppedAction = false;
+        Action? cancelDroppedAction = null;
         lock (_windowLock)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -2135,10 +2182,30 @@ public sealed class Extension : IExtension, IDisposable
             if (window is null || window.IsDisposed || !window.IsHandleCreated)
             {
                 if (_pendingWindowActions.Count == MaxPendingWindowActions)
-                    _pendingWindowActions.Dequeue();
-                _pendingWindowActions.Enqueue(action);
+                {
+                    cancelDroppedAction = _pendingWindowActions.Dequeue().Cancel;
+                    if (!_pendingWindowActionDropReported)
+                    {
+                        _pendingWindowActionDropReported = true;
+                        reportDroppedAction = true;
+                    }
+                }
+                _pendingWindowActions.Enqueue((action, cancel));
                 window = null;
             }
+        }
+
+        if (cancelDroppedAction is not null)
+            RunSafely(cancelDroppedAction);
+        if (reportDroppedAction)
+        {
+            // ponytail: Keep startup input bounded; report the first drop instead
+            // of retaining an unbounded queue when WinForms cannot start.
+            _log.Write(
+                "window-action-dropped",
+                _revisions.Snapshot(),
+                level: ExtensionLogLevel.Warning);
+            QueueShow("Окно открывается слишком долго: одна из ранних команд пропущена.");
         }
 
         if (window is null)
@@ -2159,14 +2226,15 @@ public sealed class Extension : IExtension, IDisposable
 
     private void DrainWindowActions(CensorWindow window)
     {
-        Action<CensorWindow>[] actions;
+        (Action<CensorWindow> Run, Action? Cancel)[] actions;
         lock (_windowLock)
         {
             actions = _pendingWindowActions.ToArray();
             _pendingWindowActions.Clear();
+            _pendingWindowActionDropReported = false;
         }
         foreach (var action in actions)
-            RunSafely(() => action(window));
+            RunSafely(() => action.Run(window));
     }
 
     private void CloseWindow()
@@ -2222,12 +2290,14 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private void RemoveFilters(IEnumerable<string> labels)
+    private void RemoveFilters(
+        IEnumerable<string> labels,
+        bool allowReadDuringShutdown = false)
     {
         // Pinned mpv.net CommandV logs per-command errors instead of throwing,
         // so an absent label cannot stop removal of the remaining labels.
         var ownedLabels = labels.ToHashSet(StringComparer.Ordinal);
-        if (TryGetPropertyString("vf", out var filters))
+        if (TryGetPropertyString("vf", out var filters, allowReadDuringShutdown))
             ownedLabels.UnionWith(FilterReadback.FindOwnedBlurLabels(filters));
         foreach (var label in ownedLabels)
             Player.CommandV("vf", "remove", label);
@@ -2389,10 +2459,15 @@ public sealed class Extension : IExtension, IDisposable
                 return;
             }
 
-            UpdateWindow("WARNING", active.Ticket);
+            bool warningAlreadyShown;
             bool watchdogEnabled;
             lock (_stateLock)
+            {
+                warningAlreadyShown = _windowStatus == "WARNING";
                 watchdogEnabled = _settings.WatchdogEnabled;
+            }
+            if (!warningAlreadyShown)
+                UpdateWindow("WARNING", active.Ticket);
             if (!watchdogEnabled)
                 return;
             if (Volatile.Read(ref _recoveryFailures) >= MaxRecoveryFailures)
@@ -2561,8 +2636,18 @@ public sealed class Extension : IExtension, IDisposable
 
         try
         {
+            Action[] canceledWindowActions;
             lock (_windowLock)
+            {
+                canceledWindowActions = _pendingWindowActions
+                    .Select(item => item.Cancel)
+                    .OfType<Action>()
+                    .ToArray();
                 _pendingWindowActions.Clear();
+                _pendingWindowActionDropReported = false;
+            }
+            foreach (var cancel in canceledWindowActions)
+                RunSafely(cancel);
 
             try
             {
@@ -2605,7 +2690,9 @@ public sealed class Extension : IExtension, IDisposable
                 }
                 if (removeFilters)
                 {
-                    RemoveFilters(active?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
+                    RemoveFilters(
+                        active?.Plan.Chunks.Select(chunk => chunk.Label) ?? [],
+                        allowReadDuringShutdown: true);
                     if (removeAudioFilter)
                         Player.CommandV("af", "remove", AudioCompressionPresets.FilterLabel);
                 }
@@ -2626,10 +2713,14 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private bool TryGetPropertyString(string name, out string value)
+    private bool TryGetPropertyString(
+        string name,
+        out string value,
+        bool allowDuringShutdown = false)
     {
         value = "";
-        if (Player.Handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
+        if (Player.Handle == IntPtr.Zero ||
+            (!allowDuringShutdown && Volatile.Read(ref _stopping) != 0))
             return false;
 
         var error = mpv_get_property(

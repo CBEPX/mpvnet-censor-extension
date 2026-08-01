@@ -27,6 +27,9 @@ public sealed class SubtitleScheduleTextTests
                 new CensorInterval(4_000, 5_000, "another"),
             ],
             result.Document!.Intervals);
+        Assert.Contains(result.Diagnostics, item =>
+            item.Severity == DiagnosticSeverity.Warning &&
+            item.Message.Contains("media-duration-ms", StringComparison.Ordinal));
     }
 
     [Fact]
