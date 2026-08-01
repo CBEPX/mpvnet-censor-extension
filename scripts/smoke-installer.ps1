@@ -11,6 +11,12 @@ if ($env:GITHUB_ACTIONS -ne "true") {
     throw "Installer smoke is CI-only because it deletes its test install and data."
 }
 
+$InstallerDefinition = Join-Path $PSScriptRoot "../packaging/windows-installer/CensorPlayer.iss"
+if ((Get-Content $InstallerDefinition -Raw) -notmatch
+    'MB_YESNO\s+or\s+MB_DEFBUTTON2') {
+    throw "Interactive uninstall must default to preserving user data."
+}
+
 $InstallerPath = [IO.Path]::GetFullPath($InstallerPath)
 $InstallRoot = Join-Path $env:LOCALAPPDATA "Programs/CensorPlayer"
 $DataRoot = Join-Path $env:LOCALAPPDATA "CensorPlayer"

@@ -632,9 +632,14 @@ public sealed class Extension : IExtension, IDisposable
             if (UpdateWindow("ERROR", ticket, token))
             {
                 Show(
-                    exception is DecoderFallbackException
-                        ? "Не удалось прочитать расписание: сохраните файл в кодировке UTF-8."
-                        : "Не удалось загрузить или применить расписание. Если воспроизведение осталось на паузе, выберите «Цензура → Отключить». Подробности — в журнале mpv.net.",
+                    exception switch
+                    {
+                        DecoderFallbackException =>
+                            "Не удалось прочитать расписание: сохраните файл в кодировке UTF-8.",
+                        InvalidDataException => exception.Message,
+                        _ =>
+                            "Не удалось загрузить или применить расписание. Если воспроизведение осталось на паузе, выберите «Цензура → Отключить». Подробности — в журнале mpv.net.",
+                    },
                     ticket,
                     token);
             }
@@ -1807,6 +1812,7 @@ public sealed class Extension : IExtension, IDisposable
     private void EnsureSavedAudioCompression()
     {
         AudioCompressionPresetDefinition? preset = null;
+        var restored = false;
         try
         {
             _filterGate.Wait();
@@ -1825,17 +1831,23 @@ public sealed class Extension : IExtension, IDisposable
                             AudioCompressionPresets.FilterLabel,
                             preset.Filter));
                 if (!matches)
+                {
                     ApplyAudioCompressionPreset(preset);
+                    restored = true;
+                }
                 ResetAudioWatchdogState();
             }
             finally
             {
                 _filterGate.Release();
             }
-            _log.Write(
-                "audio-preset-restored",
-                _revisions.Snapshot(),
-                new Dictionary<string, object?> { ["presetId"] = preset!.Id });
+            if (restored)
+            {
+                _log.Write(
+                    "audio-preset-restored",
+                    _revisions.Snapshot(),
+                    new Dictionary<string, object?> { ["presetId"] = preset!.Id });
+            }
         }
         catch (Exception exception)
         {
@@ -2692,7 +2704,10 @@ public sealed class Extension : IExtension, IDisposable
             if (!RecoverFilters(active))
                 return;
             Interlocked.Exchange(ref _recoveryFailures, 0);
-            UpdateWindow("ACTIVE", active.Ticket);
+            string status;
+            lock (_stateLock)
+                status = _pendingSchedule is null ? "ACTIVE" : "READY TO APPLY";
+            UpdateWindow(status, active.Ticket);
             _log.Write("watchdog-recovered", active.Ticket);
         }
         catch (Exception exception)

@@ -265,6 +265,19 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void FullValidationRejectsHeadersThatBreakRoundTripParsing()
+    {
+        var draft = new ScheduleDraft(new(
+            new(OffsetMs: 5),
+            [],
+            ["# offset-ms: 5"]));
+
+        var diagnostic = Assert.Single(draft.Validate());
+
+        Assert.Contains("указано несколько раз", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void EnforcesConfiguredIntervalAndUtf8SizeLimits()
     {
         var tooMany = new ScheduleDraft(Document(

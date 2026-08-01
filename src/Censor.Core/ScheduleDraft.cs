@@ -100,7 +100,8 @@ public sealed class ScheduleDraft
         {
             try
             {
-                var serializedBytes = Encoding.UTF8.GetByteCount(ScheduleText.Serialize(document));
+                var serialized = ScheduleText.Serialize(document);
+                var serializedBytes = Encoding.UTF8.GetByteCount(serialized);
                 if (serializedBytes > maxTextFileBytes)
                 {
                     diagnostics.Add(new(
@@ -108,6 +109,23 @@ public sealed class ScheduleDraft
                         0,
                         1,
                         $"Расписание превышает ограничение в {maxTextFileBytes} байт."));
+                }
+                else if (!diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+                {
+                    var reparsed = ScheduleText.Parse(
+                        serialized,
+                        maxTextFileBytes,
+                        maxIntervals);
+                    var parseError = reparsed.Diagnostics.FirstOrDefault(
+                        item => item.Severity == DiagnosticSeverity.Error);
+                    if (parseError is not null)
+                    {
+                        diagnostics.Add(new(
+                            DiagnosticSeverity.Error,
+                            0,
+                            1,
+                            $"Черновик нельзя сохранить: {parseError.Message}"));
+                    }
                 }
             }
             catch (Exception exception) when (

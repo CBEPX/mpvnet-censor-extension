@@ -80,7 +80,7 @@ begin
   begin
     DeleteUserData := SuppressibleMsgBox(
       'Удалить настройки рядом с программой, данные восстановления, журналы и диагностику?',
-      mbConfirmation, MB_YESNO, IDNO) = IDYES;
+      mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
   end;
 end;
 

@@ -1276,6 +1276,7 @@ internal sealed class CensorWindow : Form
             return;
         }
         _draft = null;
+        _sourcePath = null;
         _sourceIntervals = null;
         DraftRecoveryStore.Delete(_recoveryPath);
         RenderDraft();
