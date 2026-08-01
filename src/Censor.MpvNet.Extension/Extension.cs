@@ -1055,7 +1055,7 @@ public sealed class Extension : IExtension, IDisposable
             Show("Расписание не сохранено: исправьте ошибки черновика.");
             return;
         }
-        choosePath |= !sourceMatchesCurrent;
+        choosePath |= !sourceMatchesCurrent || expectedHash is null;
         if (ScheduleFileKinds.TryGetSubtitleFormat(currentPath, out _))
         {
             var baseName = Path.GetFileNameWithoutExtension(currentPath);
@@ -1507,10 +1507,7 @@ public sealed class Extension : IExtension, IDisposable
         if (active is null)
         {
             if (selectionChanged)
-            {
                 SaveSettings();
-                UpdateWindow("NO SCHEDULE", ticket, token);
-            }
             return;
         }
 
@@ -1566,7 +1563,9 @@ public sealed class Extension : IExtension, IDisposable
             else
                 SaveBlurPresetIfStillSelected(requestedBlur);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (Exception exception) when (
+            token.IsCancellationRequested &&
+            exception is OperationCanceledException or ObjectDisposedException)
         {
             SaveBlurPresetIfStillSelected(requestedBlur);
         }

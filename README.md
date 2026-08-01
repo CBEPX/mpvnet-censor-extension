@@ -170,7 +170,9 @@ dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 ```
 
 Скрипт подготовки зависимости для сборки работает на macOS arm64 и Windows
-x64. Сборка на Linux пока не поддерживается.
+x64. Другие платформы, включая Linux и Intel Mac, пока не поддерживаются.
+Хеш собранного `libmpvnet.dll` привязан к .NET SDK `10.0.302`: при обновлении
+SDK его нужно заново проверить и осознанно обновить в `deps.lock.json`.
 
 Чтобы собрать пакет для Windows:
 
