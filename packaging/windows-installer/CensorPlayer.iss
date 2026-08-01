@@ -72,20 +72,18 @@ begin
   end;
 end;
 
-function InitializeUninstall(): Boolean;
-begin
-  Result := True;
-  DeleteUserData := DeleteUserDataRequested();
-  if not DeleteUserData then
-  begin
-    DeleteUserData := SuppressibleMsgBox(
-      'Удалить настройки рядом с программой, данные восстановления, журналы и диагностику?',
-      mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
-  end;
-end;
-
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usUninstall then
+  begin
+    DeleteUserData := DeleteUserDataRequested();
+    if not DeleteUserData then
+    begin
+      DeleteUserData := SuppressibleMsgBox(
+        'Удалить настройки рядом с программой, данные восстановления, журналы и диагностику?',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON2, IDNO) = IDYES;
+    end;
+  end;
   if (CurUninstallStep = usPostUninstall) and DeleteUserData then
   begin
     DelTree(ExpandConstant('{app}\portable_config'), True, True, True);

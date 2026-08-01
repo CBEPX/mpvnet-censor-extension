@@ -6,6 +6,7 @@ namespace Censor.MpvNet.Extension;
 
 internal sealed class CensorWindow : Form
 {
+    // Draft reconciliation uses reference identity to recognize unchanged empty state.
     private static readonly IReadOnlyList<CensorInterval> EmptyIntervals =
         Array.Empty<CensorInterval>();
 
@@ -272,20 +273,24 @@ internal sealed class CensorWindow : Form
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2) == DialogResult.Yes;
 
-    public void MarkSaved(
+    public bool MarkSaved(
         string path,
         ScheduleDocument savedDocument,
         string? lastScheduleDirectory)
     {
+        _settings = _settings with { LastScheduleDirectory = lastScheduleDirectory };
+        if (_draft?.MarkSaved(savedDocument) != true)
+        {
+            SaveRecovery();
+            return false;
+        }
+
         _sourcePath = path;
         _sourceIntervals = savedDocument.Intervals;
         _schedule.Text = path;
-        _settings = _settings with { LastScheduleDirectory = lastScheduleDirectory };
-        if (_draft?.MarkSaved(savedDocument) == true)
-            DraftRecoveryStore.Delete(_recoveryPath);
-        else
-            SaveRecovery();
+        DraftRecoveryStore.Delete(_recoveryPath);
         RenderDraft();
+        return true;
     }
 
     public void ShowDiagnosticsResult(string message)

@@ -224,7 +224,12 @@ public sealed class Extension : IExtension, IDisposable
         switch (message.Kind)
         {
             case CensorClientCommandKind.Open:
-                ShowToolWindow();
+                QueueWindowAction(window =>
+                {
+                    window.Show();
+                    window.WindowState = FormWindowState.Normal;
+                    window.Activate();
+                });
                 break;
             case CensorClientCommandKind.Pick:
                 ShowToolWindow();
@@ -272,9 +277,7 @@ public sealed class Extension : IExtension, IDisposable
             _currentMediaPath = null;
             _currentDurationMs = null;
             previous = _operationCancellation;
-            _operationCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    _revisions.SessionToken);
+            _operationCancellation = new();
             _pendingSchedule = null;
             _scheduleLoadTicket = null;
             _sessionCleanup = Task.Run(() => RunSafely(() => ClearSession(ticket)));
@@ -994,6 +997,7 @@ public sealed class Extension : IExtension, IDisposable
                 {
                     Interlocked.Exchange(ref _recoveryFailures, 0);
                     Interlocked.Exchange(ref _vfReadFailures, 0);
+                    ResetAudioWatchdogState();
                 }
             }
         }
@@ -1251,17 +1255,13 @@ public sealed class Extension : IExtension, IDisposable
         }
         if (saveSettings)
             SaveSettings(skipUnsupportedSchema: true);
-        if (markWindowSaved)
-        {
-            InvokeWindow(window =>
-            {
-                if (IsCurrent(saveTicket))
-                    window.MarkSaved(path, document, savedScheduleDirectory);
-            });
-        }
-        Show(markWindowSaved
+        var windowMarkedSaved = markWindowSaved && TryMarkWindowSaved(
+            path,
+            document,
+            savedScheduleDirectory);
+        Show(windowMarkedSaved
             ? $"Файл {Path.GetFileName(path)} сохранён."
-            : $"Файл {Path.GetFileName(path)} сохранён, но текущее расписание в проигрывателе уже изменилось.");
+            : $"Файл {Path.GetFileName(path)} сохранён, но текущий черновик или расписание уже изменились.");
     }
 
     private bool TryReadScheduleHash(string path, out string hash)
@@ -1977,8 +1977,7 @@ public sealed class Extension : IExtension, IDisposable
     {
         var ticket = _revisions.BeginOperation();
         var previousCancellation = _operationCancellation;
-        _operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            _revisions.SessionToken);
+        _operationCancellation = new();
         _scheduleLoadTicket = scheduleLoad ? ticket : null;
         if (clearPending)
             _pendingSchedule = null;
@@ -1993,7 +1992,8 @@ public sealed class Extension : IExtension, IDisposable
     {
         // A worker may still register this captured token after the switch.
         // Disposing here would turn that harmless race into ObjectDisposedException.
-        // The linked registration remains bounded to the current media session.
+        // This source is deliberately unlinked and becomes collectible when those
+        // workers release their tokens; session changes cancel it explicitly.
         cancellation.Cancel();
     }
 
@@ -2328,6 +2328,27 @@ public sealed class Extension : IExtension, IDisposable
         catch (InvalidOperationException)
         {
             return null;
+        }
+    }
+
+    private bool TryMarkWindowSaved(
+        string path,
+        ScheduleDocument document,
+        string? lastScheduleDirectory)
+    {
+        CensorWindow? window;
+        lock (_windowLock)
+            window = _window;
+        if (window is null || window.IsDisposed || !window.IsHandleCreated)
+            return false;
+        try
+        {
+            return (bool)window.Invoke(new Func<bool>(() =>
+                window.MarkSaved(path, document, lastScheduleDirectory)));
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 
