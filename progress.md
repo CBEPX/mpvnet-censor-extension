@@ -53,6 +53,9 @@
   локальным ключом, URL сохранены, а JSON-настройки читаются без учёта регистра.
 - Локально после исправлений: Release build без предупреждений и 86/86 Core
   тестов — PASS; Windows runtime и installer остаются следующей границей CI.
+- На `900bf6e` PR-run `30681082928` прошёл полностью, а push-run
+  `30681082042` воспроизвёл startup race самого runtime-smoke. Вместо секунды
+  ожидания тест теперь получает явный ready-marker extension до `loadfile`.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.

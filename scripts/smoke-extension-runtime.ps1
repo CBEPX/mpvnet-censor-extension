@@ -104,6 +104,24 @@ function Wait-ForMedia {
     throw "mpv.net did not load the runtime-smoke media file."
 }
 
+function Wait-ForExtension {
+    $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        try {
+            $Response = Invoke-MpvCommand @("get_property", "user-data/censor/ready")
+            if ($Response.data -eq "yes") {
+                return
+            }
+        }
+        catch {
+            # The property appears after the extension subscribes to media events.
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "Censor extension did not publish its ready marker."
+}
+
 try {
     $Header = [Text.Encoding]::ASCII.GetBytes("P6`n64 64`n255`n")
     $Pixels = [byte[]]::new(64 * 64 * 3)
@@ -145,7 +163,7 @@ try {
     $Writer = [IO.StreamWriter]::new($Pipe, [Text.UTF8Encoding]::new($false), 4096, $true)
     $Writer.AutoFlush = $true
 
-    Start-Sleep -Seconds 1
+    Wait-ForExtension
     [void](Invoke-MpvCommand @("loadfile", $MediaPath, "replace"))
     Wait-ForMedia $MediaPath
     [void](Invoke-MpvCommand @("vf", "add", "@censor_smoke_user:lavfi=[hflip]"))

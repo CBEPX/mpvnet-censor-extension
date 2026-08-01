@@ -15,6 +15,7 @@ public sealed class Extension : IExtension, IDisposable
     private const string LogModule = "CensorExtension";
     private const int MaxRecoveryFailures = 3;
     private const int MaxPendingWindowActions = 32;
+    private const string ReadyProperty = "user-data/censor/ready";
     private const string FutureSettingsMessage =
         "Настройки не сохранены: файл создан более новой версией CensorPlayer. " +
         "Чтобы перезаписать его, откройте вкладку «Диагностика».";
@@ -84,6 +85,7 @@ public sealed class Extension : IExtension, IDisposable
         Player.ObservePropertyString("vf", OnFiltersChanged);
         if (_settings.WatchdogEnabled)
             _watchdog.Change(_settings.WatchdogIntervalMs, _settings.WatchdogIntervalMs);
+        Player.SetPropertyString(ReadyProperty, "yes");
     }
 
     public MpvClient Player { get; }
