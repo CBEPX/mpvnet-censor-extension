@@ -42,14 +42,19 @@ if [[ ! -d "$source_dir/.git" ]]; then
   git clone --depth 1 --branch "$tag" https://github.com/mpvnet-player/mpv.net.git "$source_dir"
 fi
 
-actual_commit="$(git -C "$source_dir" rev-parse HEAD)"
-if [[ "$actual_commit" != "$source_commit" ]]; then
-  echo "mpv.net source commit mismatch" >&2
-  exit 1
-fi
 if ! git -C "$source_dir" diff --quiet ||
   ! git -C "$source_dir" diff --cached --quiet; then
   echo "mpv.net source checkout contains tracked modifications" >&2
+  exit 1
+fi
+actual_commit="$(git -C "$source_dir" rev-parse HEAD)"
+if [[ "$actual_commit" != "$source_commit" ]]; then
+  git -C "$source_dir" fetch --depth 1 origin "$tag"
+  git -C "$source_dir" checkout --detach FETCH_HEAD
+  actual_commit="$(git -C "$source_dir" rev-parse HEAD)"
+fi
+if [[ "$actual_commit" != "$source_commit" ]]; then
+  echo "mpv.net source commit mismatch" >&2
   exit 1
 fi
 

@@ -457,7 +457,8 @@ public sealed class Extension : IExtension, IDisposable
         OperationTicket ticket,
         string schedulePath,
         bool automatic,
-        CancellationToken token)
+        CancellationToken token,
+        string readyStatus = "READY TO APPLY")
     {
         try
         {
@@ -570,7 +571,7 @@ public sealed class Extension : IExtension, IDisposable
                         normalized,
                         diagnostics);
                 }
-                UpdateWindow("READY TO APPLY", ticket, token);
+                UpdateWindow(readyStatus, ticket, token);
                 return;
             }
 
@@ -758,7 +759,9 @@ public sealed class Extension : IExtension, IDisposable
                 Math.Abs(actualMs - expectedMs.Value) <= toleranceMs;
     }
 
-    private void LoadManualSchedule(string schedulePath)
+    private void LoadManualSchedule(
+        string schedulePath,
+        string readyStatus = "READY TO APPLY")
     {
         if (!File.Exists(schedulePath) ||
             !ScheduleFileKinds.IsSupportedPath(schedulePath))
@@ -798,7 +801,8 @@ public sealed class Extension : IExtension, IDisposable
             operation.Value.Ticket,
             schedulePath,
             automatic: false,
-            operation.Value.Token);
+            operation.Value.Token,
+            readyStatus);
     }
 
     private void ApplyPendingSchedule()
@@ -1078,7 +1082,7 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
-        if (!choosePath && expectedHash is not null && File.Exists(path))
+        if (!choosePath && File.Exists(path))
         {
             if (!TryReadScheduleHash(path, out var currentHash))
                 return;
@@ -1384,7 +1388,7 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
-        LoadManualSchedule(path);
+        LoadManualSchedule(path, "RELOADED");
     }
 
     private void ChangeBlurPreset(BlurSettings settings) =>

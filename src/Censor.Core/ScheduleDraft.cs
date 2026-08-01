@@ -141,7 +141,7 @@ public sealed class ScheduleDraft
         Change(document =>
         {
             var intervals = document.Intervals.ToList();
-            intervals.Insert(index + 1, intervals[index] with { });
+            intervals.Insert(index + 1, intervals[index]);
             return document with { Intervals = intervals };
         });
     }

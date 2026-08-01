@@ -23,6 +23,15 @@ jobs:
       - name: Restore pinned mpv.net reference
         run: bash scripts/restore-mpvnet.sh
 
+      - name: Verify restore refreshes a stale clean checkout
+        shell: bash
+        run: |
+          git -C .deps/mpvnet-source \
+            -c user.name=CI \
+            -c user.email=ci@example.invalid \
+            commit --allow-empty --no-gpg-sign -m "stale checkout test"
+          bash scripts/restore-mpvnet.sh
+
       - name: Verify restore reports lock reader failures
         shell: bash
         run: |

@@ -98,6 +98,20 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void InvalidMediaDurationIsNotAlsoReportedAsMissing()
+    {
+        var result = ScheduleText.Parse("# media-duration-ms: abc");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("положительным целым числом", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("не задано", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void BareNoteSeparatorProducesNoNote()
     {
         var parsed = ScheduleText.Parse("00:00:01.000 --> 00:00:02.000 |   ");

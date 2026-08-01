@@ -151,7 +151,7 @@ public static class ScheduleText
             ParseInterval(line, lineNumber, intervals, diagnostics);
         }
 
-        if (mediaDurationMs is null)
+        if (mediaDurationMs is null && !seenMetadata.Contains("media-duration-ms"))
         {
             diagnostics.Add(new(
                 DiagnosticSeverity.Warning,

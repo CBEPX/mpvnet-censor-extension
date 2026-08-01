@@ -209,6 +209,13 @@ internal sealed class CensorWindow : Form
             _draft?.IsDirty == true,
             document is not null && _draft?.Matches(document) == true);
         _runtimeIntervals = intervals;
+        if ((reconciliation == DraftReconciliationAction.RefreshWarnings ||
+             reconciliation == DraftReconciliationAction.KeepDirtyDraft) &&
+            HasDetachedDirtyDraft())
+        {
+            _schedule.Text =
+                $"{_schedule.Text} (черновик: {(string.IsNullOrEmpty(_sourcePath) ? "новый" : _sourcePath)})";
+        }
         if (reconciliation == DraftReconciliationAction.RefreshWarnings)
         {
             if (_draft is null)
@@ -226,10 +233,7 @@ internal sealed class CensorWindow : Form
         }
         if (reconciliation == DraftReconciliationAction.KeepDirtyDraft)
         {
-            _schedule.Text =
-                $"{_schedule.Text} (черновик: {(string.IsNullOrEmpty(_sourcePath) ? "новый" : _sourcePath)})";
             RenderDraft();
-            _draftState.Text = "Несохранённый черновик не связан с текущим расписанием";
             return;
         }
 
@@ -1020,10 +1024,16 @@ internal sealed class CensorWindow : Form
         {
             _rendering = wasRendering;
         }
-        _draftState.Text = _draft.IsDirty
-            ? "Изменения не применены и не сохранены"
-            : "Сохранено";
+        _draftState.Text = HasDetachedDirtyDraft()
+            ? "Несохранённый черновик не связан с текущим расписанием"
+            : _draft.IsDirty
+                ? "Изменения не применены и не сохранены"
+                : "Сохранено";
     }
+
+    private bool HasDetachedDirtyDraft() =>
+        _draft?.IsDirty == true &&
+        !ReferenceEquals(_sourceIntervals, _runtimeIntervals);
 
     private void RenderWarnings(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
@@ -1430,6 +1440,7 @@ internal sealed class CensorWindow : Form
             "NO SCHEDULE TO RELOAD" => "Нет расписания для перезагрузки",
             "OPERATION UNAVAILABLE" => "Операция недоступна",
             "READY TO APPLY" => "Готово к применению",
+            "RELOADED" => "Перезагружено — нажмите «Применить»",
             "SAVED" => "Сохранено",
             "SELECT SIDECAR" => "Выберите файл расписания",
             "WARNING" => "Требуется внимание",
