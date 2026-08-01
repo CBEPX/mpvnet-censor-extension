@@ -157,6 +157,7 @@ public static class FilterReadback
 
     private static string CanonicalizeLavfi(string filter)
     {
+        // Mirrors mpv's length-prefixed %N% string form for filter-list properties.
         const string marker = ":lavfi=[";
         var markerIndex = filter.IndexOf(marker, StringComparison.Ordinal);
         if (markerIndex <= 0 || !filter.EndsWith(']'))

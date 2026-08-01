@@ -38,7 +38,8 @@ public sealed class MediaSessionCoordinator : IDisposable
             ticket = SnapshotUnsafe();
         }
         previous.Cancel();
-        previous.Dispose();
+        // A caller may still hold the canceled token; disposing its source would
+        // make a later Register or linked-token creation throw unexpectedly.
         return ticket;
     }
 

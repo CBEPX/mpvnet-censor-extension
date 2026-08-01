@@ -182,7 +182,7 @@ public sealed class ScheduleDraft
                 source.Max(interval => interval.EndMs),
                 string.Join(
                     "; ",
-                    source.Select(interval => interval.Note)
+                    chronological.Select(interval => interval.Note)
                         .Where(note => !string.IsNullOrWhiteSpace(note))
                         .Distinct(StringComparer.Ordinal)));
             var intervals = document.Intervals.ToList();

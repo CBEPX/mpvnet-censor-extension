@@ -283,7 +283,7 @@ public static class ScheduleText
         if (negative)
             value = value[1..];
         var firstColon = value.IndexOf(':');
-        if (firstColon < 2 || value.Length - firstColon != 10)
+        if (firstColon < 1 || value.Length - firstColon != 10)
             return false;
         var tail = value[firstColon..];
         if (tail[3] != ':' || tail[6] is not ('.' or ',') ||

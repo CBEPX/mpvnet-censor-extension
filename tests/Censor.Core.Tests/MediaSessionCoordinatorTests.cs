@@ -26,6 +26,9 @@ public sealed class MediaSessionCoordinatorTests
         var nextMedia = gate.BeginMediaSession();
         Assert.NotEqual(nextOperation.MediaSessionId, nextMedia.MediaSessionId);
         Assert.True(firstSessionToken.IsCancellationRequested);
+        var canceledCallbackRan = false;
+        using var registration = firstSessionToken.Register(() => canceledCallbackRan = true);
+        Assert.True(canceledCallbackRan);
         Assert.False(gate.SessionToken.IsCancellationRequested);
         Assert.False(gate.IsCurrentMediaSession(media));
         Assert.True(gate.IsCurrent(nextMedia));

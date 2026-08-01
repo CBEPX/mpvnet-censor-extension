@@ -2532,18 +2532,20 @@ public sealed class Extension : IExtension, IDisposable
             ActiveSchedule? active;
             AudioCompressionPresetDefinition audioPreset;
             bool watchdogEnabled;
+            bool hasMedia;
             lock (_stateLock)
             {
                 active = _activeSchedule;
                 audioPreset = AudioCompressionPresets.Find(
                     _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 watchdogEnabled = _settings.WatchdogEnabled;
+                hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
             }
             var ticket = _revisions.Snapshot();
 
             if (active is not null && IsCurrent(active.Ticket))
                 CheckVideoFilters(active, watchdogEnabled);
-            if (audioPreset.Filter is not null)
+            if (hasMedia && audioPreset.Filter is not null)
                 CheckAudioFilter(audioPreset, ticket, watchdogEnabled);
             else
                 ResetAudioWatchdogState();
@@ -2589,8 +2591,16 @@ public sealed class Extension : IExtension, IDisposable
         bool warningAlreadyShown;
         lock (_stateLock)
             warningAlreadyShown = _windowStatus == "WARNING";
-        if (!warningAlreadyShown)
-            UpdateWindow("WARNING", active.Ticket);
+        if (!warningAlreadyShown && UpdateWindow("WARNING", active.Ticket))
+        {
+            _log.Write(
+                "watchdog-mismatch",
+                active.Ticket,
+                new Dictionary<string, object?> { ["autoRecoveryEnabled"] = watchdogEnabled },
+                ExtensionLogLevel.Warning);
+            if (!watchdogEnabled)
+                QueueShow("Цепочка фильтров цензуры изменена. Автовосстановление выключено.");
+        }
         if (!watchdogEnabled || Volatile.Read(ref _recoveryFailures) >= MaxRecoveryFailures)
             return;
 
@@ -2649,6 +2659,18 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         var firstMismatch = Interlocked.Exchange(ref _audioMismatchReported, 1) == 0;
+        if (firstMismatch)
+        {
+            _log.Write(
+                "audio-watchdog-mismatch",
+                ticket,
+                new Dictionary<string, object?>
+                {
+                    ["presetId"] = preset.Id,
+                    ["autoRecoveryEnabled"] = watchdogEnabled,
+                },
+                ExtensionLogLevel.Warning);
+        }
         if (!watchdogEnabled)
         {
             if (firstMismatch)

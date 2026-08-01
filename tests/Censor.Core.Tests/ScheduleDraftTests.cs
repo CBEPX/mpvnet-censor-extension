@@ -57,6 +57,18 @@ public sealed class ScheduleDraftTests
         Assert.False(draft.CanUndo);
     }
 
+    [Fact]
+    public void MergeOrdersNotesChronologically()
+    {
+        var draft = new ScheduleDraft(Document(
+            new(3_000, 5_000, "later"),
+            new(1_000, 4_000, "earlier")));
+
+        draft.Merge([0, 1]);
+
+        Assert.Equal("earlier; later", draft.Document.Intervals.Single().Note);
+    }
+
     [Theory]
     [InlineData(true, true, false, DraftReconciliationAction.RefreshWarnings)]
     [InlineData(true, false, true, DraftReconciliationAction.RefreshWarnings)]

@@ -9,13 +9,14 @@ public sealed class ScheduleTextTests
 {
     [Theory]
     [InlineData("00:00:01.250", 1_250)]
+    [InlineData("1:02:03.000", 3_723_000)]
     [InlineData("-00:00:01.250", -1_250)]
     [InlineData("100:00:00.000", 360_000_000)]
-    public void ParsesDraftTimestampsRenderedByTheEditor(string text, long expected)
+    public void ParsesTimestampsAcceptedByTheEditor(string text, long expected)
     {
         Assert.True(ScheduleText.TryParseDraftTimestamp(text, out var actual));
         Assert.Equal(expected, actual);
-        if (expected < 0 || expected >= 360_000_000)
+        if (text.Length != 12 || expected < 0 || expected >= 360_000_000)
             Assert.False(ScheduleText.TryParseTimestamp(text, out _));
     }
 
