@@ -165,6 +165,7 @@ internal sealed class CensorWindow : Form
     public event Action<long>? PreviewRequested;
     public event Action<bool>? DiagnosticsRequested;
     public event Action? SettingsRepairRequested;
+    public event Action<string, Exception>? PersistenceError;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
 
@@ -813,6 +814,15 @@ internal sealed class CensorWindow : Form
     {
         if (_rendering || _draft is null || e.RowIndex < 0)
             return;
+        if (e.RowIndex >= _draft.Document.Intervals.Count ||
+            e.RowIndex >= _intervals.Rows.Count ||
+            e.ColumnIndex < 0 ||
+            e.ColumnIndex >= _intervals.Columns.Count ||
+            _intervals.Rows.Count != _draft.Document.Intervals.Count)
+        {
+            RenderDraft();
+            return;
+        }
         var interval = _draft.Document.Intervals[e.RowIndex];
         var start = interval.StartMs;
         var end = interval.EndMs;
@@ -1114,8 +1124,9 @@ internal sealed class CensorWindow : Form
         }
         catch (Exception exception)
         {
-            _draftState.Text =
-                $"Не удалось сохранить файл восстановления: {exception.Message}";
+            const string Message = "Не удалось сохранить файл восстановления.";
+            _draftState.Text = Message;
+            PersistenceError?.Invoke(Message, exception);
         }
     }
 
@@ -1130,8 +1141,9 @@ internal sealed class CensorWindow : Form
         }
         catch (Exception exception)
         {
-            _draftState.Text =
-                $"Не удалось сохранить положение окна: {exception.Message}";
+            const string Message = "Не удалось сохранить положение окна.";
+            _draftState.Text = Message;
+            PersistenceError?.Invoke(Message, exception);
         }
     }
 

@@ -395,6 +395,21 @@ public sealed class SettingsAndDiagnosticsTests
     }
 
     [Fact]
+    public void LogDefaultsUnknownMinimumLevelToInfo()
+    {
+        using var directory = new TemporaryDirectory();
+        using (var log = new ExtensionLog(directory.Path, 30, "future-level"))
+        {
+            log.Write("debug-event", new(1, 1), level: ExtensionLogLevel.Debug);
+            log.Write("info-event", new(1, 2));
+        }
+
+        var text = File.ReadAllText(Directory.GetFiles(directory.Path, "*.log").Single());
+        Assert.DoesNotContain("debug-event", text, StringComparison.Ordinal);
+        Assert.Contains("info-event", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LogReportsEventsDroppedFromItsBoundedBuffer()
     {
         using var directory = new TemporaryDirectory();
@@ -438,6 +453,9 @@ public sealed class SettingsAndDiagnosticsTests
             "secret schedule");
         var without = Path.Combine(directory.Path, "without.zip");
         var with = Path.Combine(directory.Path, "with.zip");
+        var staleTemp = Path.Combine(directory.Path, ".with.zip.stale.tmp");
+        File.WriteAllText(staleTemp, "incomplete");
+        File.SetLastWriteTimeUtc(staleTemp, DateTime.UtcNow.AddDays(-2));
 
         DiagnosticsExporter.Export(
             without,
@@ -455,6 +473,7 @@ public sealed class SettingsAndDiagnosticsTests
             includeSchedule: true,
             pathHashKey: TestPathHashKey());
 
+        Assert.False(File.Exists(staleTemp));
         using var withoutArchive = ZipFile.OpenRead(without);
         using var withArchive = ZipFile.OpenRead(with);
         Assert.DoesNotContain(withoutArchive.Entries, entry => entry.FullName == "schedule.censor.txt");

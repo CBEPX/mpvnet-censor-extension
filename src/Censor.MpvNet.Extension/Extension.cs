@@ -44,6 +44,7 @@ public sealed class Extension : IExtension, IDisposable
     private Task _sessionCleanup = Task.CompletedTask;
     private ActiveSchedule? _activeSchedule;
     private PendingSchedule? _pendingSchedule;
+    private OperationTicket? _scheduleLoadTicket;
     private volatile ExtensionSettings _settings;
     private long? _currentDurationMs;
     private string? _currentMediaPath;
@@ -75,7 +76,15 @@ public sealed class Extension : IExtension, IDisposable
         foreach (var warning in loadedSettings.Warnings)
             Terminal.WriteError(warning, LogModule);
 
-        Player = Global.Player.CreateNewPlayer("censor");
+        try
+        {
+            Player = Global.Player.CreateNewPlayer("censor");
+        }
+        catch
+        {
+            _log.Dispose();
+            throw;
+        }
         _watchdog = new(CheckFilters, null, Timeout.Infinite, Timeout.Infinite);
         Player.StartFile += OnStartFile;
         Player.FileLoaded += OnFileLoaded;
@@ -206,6 +215,7 @@ public sealed class Extension : IExtension, IDisposable
                 CancellationTokenSource.CreateLinkedTokenSource(
                     _revisions.SessionToken);
             _pendingSchedule = null;
+            _scheduleLoadTicket = null;
             _sessionCleanup = Task.Run(() => RunSafely(() => ClearSession(ticket)));
         }
 
@@ -261,7 +271,7 @@ public sealed class Extension : IExtension, IDisposable
             if (Volatile.Read(ref _stopping) != 0)
                 return;
             ticket = _revisions.Snapshot();
-            token = _operationCancellation.Token;
+            token = _revisions.SessionToken;
         }
 
         string mediaPath;
@@ -285,14 +295,24 @@ public sealed class Extension : IExtension, IDisposable
             _filterGate.Release();
         }
 
+        bool autoLoadSidecar;
         lock (_stateLock)
         {
-            if (!IsCurrent(ticket) || token.IsCancellationRequested)
+            if (Volatile.Read(ref _stopping) != 0 ||
+                !_revisions.IsCurrentMediaSession(ticket) ||
+                token.IsCancellationRequested)
+            {
                 return;
+            }
             _currentMediaPath = mediaPath;
             _currentDurationMs = durationMs;
+            ticket = _revisions.Snapshot();
+            token = _operationCancellation.Token;
+            autoLoadSidecar = _settings.AutoLoadSidecar;
+            if (autoLoadSidecar)
+                _scheduleLoadTicket = ticket;
         }
-        if (!_settings.AutoLoadSidecar)
+        if (!autoLoadSidecar)
         {
             UpdateWindow("NO SCHEDULE", ticket, token);
             return;
@@ -346,6 +366,10 @@ public sealed class Extension : IExtension, IDisposable
             Terminal.WriteError(exception, LogModule);
             if (UpdateWindow("ERROR", ticket, token))
                 Show("Не удалось загрузить расписание рядом с фильмом. Подробности — в журнале mpv.net.", ticket, token);
+        }
+        finally
+        {
+            FinishScheduleLoad(ticket);
         }
     }
 
@@ -549,6 +573,11 @@ public sealed class Extension : IExtension, IDisposable
                     token);
             }
         }
+        finally
+        {
+            if (!automatic)
+                FinishScheduleLoad(ticket);
+        }
     }
 
     private async Task ApplyAsync(
@@ -698,7 +727,7 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
-        var operation = StartNewOperation();
+        var operation = StartNewOperation(scheduleLoad: true);
         if (operation is null)
         {
             UpdateWindow("NO CURRENT MEDIA");
@@ -721,7 +750,7 @@ public sealed class Extension : IExtension, IDisposable
             }
         }
         if (saveSettings)
-            SaveSettings();
+            SaveSettings(skipUnsupportedSchema: true);
 
         UpdateWindow("LOADING", operation.Value.Ticket, operation.Value.Token);
         _ = LoadScheduleAsync(
@@ -1118,7 +1147,7 @@ public sealed class Extension : IExtension, IDisposable
             _filterGate.Release();
         }
         if (saveSettings)
-            SaveSettings();
+            SaveSettings(skipUnsupportedSchema: true);
         if (markWindowSaved)
         {
             InvokeWindow(window =>
@@ -1289,58 +1318,114 @@ public sealed class Extension : IExtension, IDisposable
         LoadManualSchedule(path);
     }
 
-    private void ChangeBlurPreset(BlurSettings settings)
+    private void ChangeBlurPreset(BlurSettings settings) =>
+        ChangeBlurPreset(settings, useCurrentSelection: false);
+
+    private void ChangeBlurPreset(
+        BlurSettings? requestedSettings,
+        bool useCurrentSelection)
     {
-        ActiveSchedule? active;
-        PendingSchedule? pending;
-        FilterPlan? activePlan;
+        ActiveSchedule? active = null;
+        PendingSchedule? pending = null;
+        FilterPlan? activePlan = null;
         BlurSettings previousBlur;
-        CancellationToken token;
-        OperationTicket ticket;
-        CancellationTokenSource previousCancellation;
+        BlurSettings settings;
+        CancellationToken token = default;
+        OperationTicket ticket = default;
+        CancellationTokenSource? previousCancellation = null;
+        bool hasMedia;
+        bool loadInProgress;
+        bool selectionChanged;
         lock (_stateLock)
         {
-            if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
+            if (Volatile.Read(ref _stopping) != 0)
                 return;
-            previousBlur = _settings.Blur;
-            // ponytail: Compiling under the state lock is bounded and trivial for
-            // normal 10–20-scene plans; revisit only if measured workloads grow.
-            var pendingPlan = _pendingSchedule is null
-                ? null
-                : FilterCompiler.Compile(_pendingSchedule.Intervals, settings);
-            activePlan = _activeSchedule is null
-                ? null
-                : FilterCompiler.Compile(_activeSchedule.Intervals, settings);
+            settings = useCurrentSelection
+                ? _settings.Blur
+                : requestedSettings ?? throw new ArgumentNullException(nameof(requestedSettings));
+            selectionChanged = _settings.Blur != settings;
+            if (!useCurrentSelection && !selectionChanged)
+                return;
 
-            _settings = _settings with { Blur = settings };
-            ticket = _revisions.BeginOperation();
-            previousCancellation = _operationCancellation;
-            _operationCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    _revisions.SessionToken);
-            token = _operationCancellation.Token;
-            if (_activeSchedule is not null)
-                _activeSchedule = _activeSchedule with { Ticket = ticket };
-            active = _activeSchedule;
-            if (_pendingSchedule is not null)
+            previousBlur = useCurrentSelection && _activeSchedule is { } runtimeActive
+                ? runtimeActive.Plan.Blur
+                : _settings.Blur;
+            if (!useCurrentSelection)
+                _settings = _settings with { Blur = settings };
+
+            hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
+            loadInProgress = _scheduleLoadTicket is { } loadTicket &&
+                _revisions.IsCurrent(loadTicket);
+            if (!hasMedia || loadInProgress)
             {
-                _pendingSchedule = _pendingSchedule with
-                {
-                    Ticket = ticket,
-                    Plan = pendingPlan!,
-                };
+                ticket = _revisions.Snapshot();
+                token = _operationCancellation.Token;
             }
-            pending = _pendingSchedule;
+            else if (_pendingSchedule is { } currentPending)
+            {
+                if (useCurrentSelection && currentPending.Plan.Blur == settings)
+                    return;
+                // ponytail: Compiling under the state lock is bounded and trivial for
+                // normal 10–20-scene plans; revisit only if measured workloads grow.
+                var pendingPlan = FilterCompiler.Compile(currentPending.Intervals, settings);
+                _pendingSchedule = currentPending with { Plan = pendingPlan };
+                pending = _pendingSchedule;
+                ticket = currentPending.Ticket;
+                token = _operationCancellation.Token;
+            }
+            else if (_activeSchedule is { } currentActive)
+            {
+                if (useCurrentSelection && currentActive.Plan.Blur == settings)
+                    return;
+                activePlan = FilterCompiler.Compile(currentActive.Intervals, settings);
+                ticket = _revisions.BeginOperation();
+                previousCancellation = _operationCancellation;
+                _operationCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        _revisions.SessionToken);
+                token = _operationCancellation.Token;
+                _scheduleLoadTicket = null;
+                _activeSchedule = currentActive with { Ticket = ticket };
+                active = _activeSchedule;
+            }
+            else
+            {
+                ticket = _revisions.Snapshot();
+                token = _operationCancellation.Token;
+            }
         }
 
-        previousCancellation.Cancel();
-        previousCancellation.Dispose();
+        if (previousCancellation is not null)
+        {
+            previousCancellation.Cancel();
+            previousCancellation.Dispose();
+        }
+
+        if (loadInProgress)
+        {
+            if (selectionChanged)
+            {
+                SaveSettings();
+                Show("Пресет размытия сохранён и применится после загрузки расписания.");
+            }
+            return;
+        }
+
+        if (!hasMedia)
+        {
+            if (selectionChanged)
+            {
+                SaveSettings();
+                Show("Пресет размытия сохранён и применится после открытия фильма.");
+            }
+            return;
+        }
 
         if (pending is not null)
         {
-            var saved = SaveSettings();
+            var saved = !selectionChanged || SaveSettings();
             UpdateWindow("READY TO APPLY", ticket, token);
-            if (saved)
+            if (selectionChanged && saved)
             {
                 Show(
                     "Новый пресет размытия сохранён. Чтобы применить его к подготовленному расписанию, нажмите «Применить».",
@@ -1352,8 +1437,11 @@ public sealed class Extension : IExtension, IDisposable
 
         if (active is null)
         {
-            SaveSettings();
-            UpdateWindow("NO SCHEDULE", ticket, token);
+            if (selectionChanged)
+            {
+                SaveSettings();
+                UpdateWindow("NO SCHEDULE", ticket, token);
+            }
             return;
         }
 
@@ -1365,6 +1453,24 @@ public sealed class Extension : IExtension, IDisposable
             settings,
             previousBlur,
             token);
+    }
+
+    private void FinishScheduleLoad(OperationTicket ticket)
+    {
+        var reapplyBlur = false;
+        lock (_stateLock)
+        {
+            if (_scheduleLoadTicket != ticket)
+                return;
+            _scheduleLoadTicket = null;
+            if (!_revisions.IsCurrent(ticket))
+                return;
+            var appliedBlur = _pendingSchedule?.Plan.Blur ?? _activeSchedule?.Plan.Blur;
+            reapplyBlur = appliedBlur is not null && appliedBlur != _settings.Blur;
+        }
+
+        if (reapplyBlur)
+            ChangeBlurPreset(requestedSettings: null, useCurrentSelection: true);
     }
 
     private async Task ApplyBlurPresetAsync(
@@ -1652,7 +1758,8 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private (OperationTicket Ticket, CancellationToken Token)? StartNewOperation()
+    private (OperationTicket Ticket, CancellationToken Token)? StartNewOperation(
+        bool scheduleLoad = false)
     {
         CancellationTokenSource previous;
         OperationTicket ticket;
@@ -1669,6 +1776,7 @@ public sealed class Extension : IExtension, IDisposable
                     _revisions.SessionToken);
             token = _operationCancellation.Token;
             _pendingSchedule = null;
+            _scheduleLoadTicket = scheduleLoad ? ticket : null;
             if (_activeSchedule is not null)
                 _activeSchedule = _activeSchedule with { Ticket = ticket };
         }
@@ -1767,6 +1875,7 @@ public sealed class Extension : IExtension, IDisposable
             {
                 _windowThread = new(() =>
                 {
+                    var messageLoopCompleted = false;
                     try
                     {
                         using var window = new CensorWindow(
@@ -1793,6 +1902,8 @@ public sealed class Extension : IExtension, IDisposable
                         window.DiagnosticsRequested += includeSchedule =>
                             QueueSafely(() => ExportDiagnostics(includeSchedule));
                         window.SettingsRepairRequested += () => QueueSafely(RepairSettings);
+                        window.PersistenceError += (message, exception) =>
+                            QueueSafely(() => ReportWindowPersistenceError(message, exception));
                         window.CurrentTimeRequested = GetCurrentTimeMs;
                         window.Shown += (_, _) =>
                         {
@@ -1828,7 +1939,10 @@ public sealed class Extension : IExtension, IDisposable
                             snapshot.HasActiveSchedule);
 
                         if (Volatile.Read(ref _stopping) == 0)
+                        {
                             Application.Run(window);
+                            messageLoopCompleted = true;
+                        }
                     }
                     catch (Exception exception)
                     {
@@ -1836,11 +1950,19 @@ public sealed class Extension : IExtension, IDisposable
                     }
                     finally
                     {
+                        bool restart;
                         lock (_windowLock)
                         {
                             _window = null;
                             _windowThread = null;
+                            if (!messageLoopCompleted)
+                                _pendingWindowActions.Clear();
+                            restart = messageLoopCompleted &&
+                                Volatile.Read(ref _stopping) == 0 &&
+                                _pendingWindowActions.Count > 0;
                         }
+                        if (restart)
+                            ShowToolWindow();
                     }
                 })
                 {
@@ -2067,7 +2189,9 @@ public sealed class Extension : IExtension, IDisposable
     private bool IsCurrent(OperationTicket ticket) =>
         Volatile.Read(ref _stopping) == 0 && _revisions.IsCurrent(ticket);
 
-    private bool SaveSettings(bool preserveBeforeRepair = false)
+    private bool SaveSettings(
+        bool preserveBeforeRepair = false,
+        bool skipUnsupportedSchema = false)
     {
         try
         {
@@ -2076,6 +2200,8 @@ public sealed class Extension : IExtension, IDisposable
                 ExtensionSettings settings;
                 lock (_stateLock)
                     settings = _settings;
+                if (skipUnsupportedSchema && settings.Schema != 1)
+                    return true;
                 if (preserveBeforeRepair)
                     ExtensionSettingsStore.SaveAfterRepair(_settingsPath, settings);
                 else
@@ -2326,6 +2452,17 @@ public sealed class Extension : IExtension, IDisposable
             includePaths,
             _pathHashKey,
             [additionalPath, mediaPath, activePath, pendingPath, _localDataRoot]);
+    }
+
+    private void ReportWindowPersistenceError(string message, Exception exception)
+    {
+        Terminal.WriteError(exception, LogModule);
+        _log.Write(
+            "ui-persistence-error",
+            _revisions.Snapshot(),
+            new Dictionary<string, object?> { ["error"] = ProtectError(exception) },
+            ExtensionLogLevel.Error);
+        Show(message + " Подробности — в журнале mpv.net.");
     }
 
     private bool RecoverFilters(ActiveSchedule active)

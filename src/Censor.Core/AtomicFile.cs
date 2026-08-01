@@ -85,7 +85,7 @@ public static class AtomicFile
         Write(path, Utf8WithoutBom.GetBytes(text), backupPath, createDirectory);
     }
 
-    private static void DeleteStaleTemps(string directory, string fileName)
+    internal static void DeleteStaleTemps(string directory, string fileName)
     {
         try
         {

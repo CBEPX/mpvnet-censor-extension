@@ -60,6 +60,7 @@ public static class DiagnosticsExporter
                 "Путь к диагностическому архиву должен включать каталог.",
                 nameof(path));
         Directory.CreateDirectory(directory);
+        AtomicFile.DeleteStaleTemps(directory, Path.GetFileName(fullPath));
         var tempPath = Path.Combine(
             directory,
             $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");

@@ -289,6 +289,6 @@ public sealed class ExtensionLog : IDisposable
             "info" => ExtensionLogLevel.Info,
             "warning" => ExtensionLogLevel.Warning,
             "error" => ExtensionLogLevel.Error,
-            _ => throw new ArgumentException("Неизвестный уровень журнала.", nameof(level)),
+            _ => ExtensionLogLevel.Info,
         };
 }
