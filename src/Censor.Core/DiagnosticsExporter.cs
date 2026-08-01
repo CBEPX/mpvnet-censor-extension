@@ -167,7 +167,7 @@ public static class DiagnosticsExporter
             : RedactRootedPaths(value);
     }
 
-    private static string RedactRootedPaths(string value)
+    public static string RedactRootedPaths(string value)
     {
         if (value.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
             return value;
@@ -226,6 +226,12 @@ public static class DiagnosticsExporter
         {
             if (value[index] is '\r' or '\n' || quote != '\0' && value[index] == quote)
                 return index;
+            if (quote == '\0' &&
+                (value.AsSpan(index).StartsWith(":line ", StringComparison.OrdinalIgnoreCase) ||
+                 value.AsSpan(index).StartsWith(" (code ", StringComparison.OrdinalIgnoreCase)))
+            {
+                return index;
+            }
         }
         return value.Length;
     }

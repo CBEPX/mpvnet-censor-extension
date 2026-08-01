@@ -476,7 +476,7 @@ public sealed class Extension : IExtension, IDisposable
             token.ThrowIfCancellationRequested();
             if (plan.Chunks.Count == 0)
             {
-                if (UpdateWindow("EMPTY SCHEDULE", ticket, token))
+                if (ClearSchedule(ticket) && UpdateWindow("EMPTY SCHEDULE", ticket, token))
                     Show("В расписании нет активных интервалов.", ticket, token);
                 return;
             }
@@ -665,23 +665,9 @@ public sealed class Extension : IExtension, IDisposable
         if (expectedMs is null)
             return true;
 
-        _filterGate.Wait();
-        try
-        {
-            if (!TryGetPropertyDouble("duration", out var durationSeconds) ||
-                !double.IsFinite(durationSeconds) ||
-                durationSeconds <= 0)
-            {
-                return false;
-            }
-
-            var actualMs = checked((long)Math.Round(durationSeconds * 1_000, MidpointRounding.AwayFromZero));
-            return Math.Abs(actualMs - expectedMs.Value) <= _settings.DurationToleranceMs;
-        }
-        finally
-        {
-            _filterGate.Release();
-        }
+        lock (_stateLock)
+            return _currentDurationMs is { } actualMs &&
+                Math.Abs(actualMs - expectedMs.Value) <= _settings.DurationToleranceMs;
     }
 
     private void LoadManualSchedule(string schedulePath)
@@ -694,21 +680,6 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
-        bool rememberDirectory;
-        lock (_stateLock)
-        {
-            rememberDirectory = _settings.RememberLastScheduleDirectory;
-            if (rememberDirectory)
-            {
-                _settings = _settings with
-                {
-                    LastScheduleDirectory = Path.GetDirectoryName(schedulePath),
-                };
-            }
-        }
-        if (rememberDirectory)
-            SaveSettings();
-
         var operation = StartNewOperation();
         if (operation is null)
         {
@@ -716,6 +687,23 @@ public sealed class Extension : IExtension, IDisposable
             Show("Сначала откройте фильм, затем загрузите расписание.");
             return;
         }
+
+        var scheduleDirectory = Path.GetDirectoryName(schedulePath);
+        var saveSettings = false;
+        lock (_stateLock)
+        {
+            if (_settings.RememberLastScheduleDirectory &&
+                !string.Equals(
+                    _settings.LastScheduleDirectory,
+                    scheduleDirectory,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                _settings = _settings with { LastScheduleDirectory = scheduleDirectory };
+                saveSettings = true;
+            }
+        }
+        if (saveSettings)
+            SaveSettings();
 
         UpdateWindow("LOADING", operation.Value.Ticket, operation.Value.Token);
         _ = LoadScheduleAsync(
@@ -812,8 +800,11 @@ public sealed class Extension : IExtension, IDisposable
         var plan = FilterCompiler.Compile(normalized, _settings.Blur);
         if (plan.Chunks.Count == 0)
         {
-            UpdateWindow("EMPTY SCHEDULE", operation.Value.Ticket, operation.Value.Token);
-            Show("В расписании нет активных интервалов.", operation.Value.Ticket, operation.Value.Token);
+            if (ClearSchedule(operation.Value.Ticket) &&
+                UpdateWindow("EMPTY SCHEDULE", operation.Value.Ticket, operation.Value.Token))
+            {
+                Show("В расписании нет активных интервалов.", operation.Value.Ticket, operation.Value.Token);
+            }
             return;
         }
         var pending = new PendingSchedule(
@@ -977,6 +968,7 @@ public sealed class Extension : IExtension, IDisposable
 
         var markWindowSaved = false;
         var updateRuntime = false;
+        var saveSettings = false;
         string? savedScheduleDirectory;
         _filterGate.Wait();
         try
@@ -1027,10 +1019,15 @@ public sealed class Extension : IExtension, IDisposable
                 }
                 if (_settings.RememberLastScheduleDirectory)
                 {
-                    _settings = _settings with
+                    var directory = Path.GetDirectoryName(path);
+                    if (!string.Equals(
+                            _settings.LastScheduleDirectory,
+                            directory,
+                            StringComparison.OrdinalIgnoreCase))
                     {
-                        LastScheduleDirectory = Path.GetDirectoryName(path),
-                    };
+                        _settings = _settings with { LastScheduleDirectory = directory };
+                        saveSettings = true;
+                    }
                 }
                 savedScheduleDirectory = _settings.LastScheduleDirectory;
             }
@@ -1039,7 +1036,8 @@ public sealed class Extension : IExtension, IDisposable
         {
             _filterGate.Release();
         }
-        SaveSettings();
+        if (saveSettings)
+            SaveSettings();
         if (markWindowSaved)
         {
             InvokeWindow(window =>
@@ -1481,12 +1479,21 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
+        if (!ClearSchedule(operation.Value.Ticket))
+            return;
+
+        UpdateWindow("DISABLED", operation.Value.Ticket, operation.Value.Token);
+        Show("Расписание для текущего фильма отключено.", operation.Value.Ticket, operation.Value.Token);
+    }
+
+    private bool ClearSchedule(OperationTicket ticket)
+    {
         _filterGate.Wait();
         var currentOperation = false;
         try
         {
-            if (!IsCurrent(operation.Value.Ticket))
-                return;
+            if (!IsCurrent(ticket) || Volatile.Read(ref _stopping) != 0)
+                return false;
             currentOperation = true;
             ActiveSchedule? active;
             lock (_stateLock)
@@ -1496,6 +1503,7 @@ public sealed class Extension : IExtension, IDisposable
                 _pendingSchedule = null;
             }
             RemoveFilters(active?.Plan.Chunks.Select(chunk => chunk.Label) ?? []);
+            return true;
         }
         finally
         {
@@ -1509,9 +1517,6 @@ public sealed class Extension : IExtension, IDisposable
                 _filterGate.Release();
             }
         }
-
-        UpdateWindow("DISABLED", operation.Value.Ticket, operation.Value.Token);
-        Show("Расписание для текущего фильма отключено.");
     }
 
     private (OperationTicket Ticket, CancellationToken Token)? StartNewOperation()
@@ -1962,6 +1967,8 @@ public sealed class Extension : IExtension, IDisposable
 
     private void RemoveFilters(IEnumerable<string> labels)
     {
+        // Pinned mpv.net CommandV logs per-command errors instead of throwing,
+        // so an absent label cannot stop removal of the remaining labels.
         foreach (var label in labels)
             Player.CommandV("vf", "remove", label);
     }
@@ -2114,18 +2121,21 @@ public sealed class Extension : IExtension, IDisposable
     private string ProtectError(Exception exception, string? additionalPath = null)
     {
         var text = exception.ToString();
-        if (_settings.Logging.IncludePaths)
-            return text;
-
+        bool includePaths;
         string? mediaPath;
         string? activePath;
         string? pendingPath;
         lock (_stateLock)
         {
+            includePaths = _settings.Logging.IncludePaths;
             mediaPath = _currentMediaPath;
             activePath = _activeSchedule?.SchedulePath;
             pendingPath = _pendingSchedule?.SchedulePath;
         }
+        if (includePaths)
+            return text;
+
+        text = DiagnosticsExporter.RedactRootedPaths(text);
         foreach (var path in new[]
                  {
                      additionalPath,
@@ -2345,7 +2355,7 @@ public sealed class Extension : IExtension, IDisposable
             GetUtf8Bytes(name),
             mpv_format.MPV_FORMAT_FLAG,
             out IntPtr raw);
-        if (error != 0)
+        if (error < 0)
             return false;
         value = raw.ToInt32() != 0;
         return true;

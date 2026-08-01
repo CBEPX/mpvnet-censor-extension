@@ -22,7 +22,6 @@ public sealed record FilterPlan(
 public static class FilterCompiler
 {
     public const int MaxIntervalsPerChunk = 500;
-    public const int MaxFilters = 50;
 
     public static FilterPlan Compile(
         IReadOnlyList<NormalizedInterval> intervals,
@@ -36,10 +35,6 @@ public static class FilterCompiler
             return new([], 0, blur);
 
         var chunkCount = (intervals.Count + MaxIntervalsPerChunk - 1) / MaxIntervalsPerChunk;
-        if (chunkCount > MaxFilters)
-            throw new InvalidOperationException(
-                $"План не может содержать больше {MaxFilters} фильтров.");
-
         var sigma = blur.Sigma.ToString("R", CultureInfo.InvariantCulture);
         var chunks = new List<FilterChunk>(chunkCount);
         for (var index = 0; index < intervals.Count; index += MaxIntervalsPerChunk)

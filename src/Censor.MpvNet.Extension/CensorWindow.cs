@@ -209,7 +209,10 @@ internal sealed class CensorWindow : Form
         _runtimeIntervals = intervals;
         if (reconciliation == DraftReconciliationAction.RefreshWarnings)
         {
-            RenderWarnings(_draft is null ? [] : _draftDiagnostics);
+            if (_draft is null)
+                RenderWarnings([]);
+            else
+                RenderDraftSummary(_draftDiagnostics);
             return;
         }
         if (reconciliation == DraftReconciliationAction.LinkMatchingDraft)
@@ -229,7 +232,6 @@ internal sealed class CensorWindow : Form
         _sourceIntervals = intervals;
         _sourcePath = schedulePath;
         _draft = new(document ?? new(new(), [], []));
-        _draft.MarkSaved();
         RenderDraft();
     }
 
@@ -1124,6 +1126,8 @@ internal sealed class CensorWindow : Form
         };
         if (dialog.ShowDialog(this) != DialogResult.OK)
             return;
+        if (!ConfirmSubtitleImport(dialog.FileName))
+            return;
         if (_settings.RememberLastScheduleDirectory)
         {
             _settings = _settings with
@@ -1149,7 +1153,7 @@ internal sealed class CensorWindow : Form
             Warn("Сначала сохраните или отбросьте текущий черновик.");
             return;
         }
-        if (TryGetDroppedSchedule(e.Data, out var path))
+        if (TryGetDroppedSchedule(e.Data, out var path) && ConfirmSubtitleImport(path))
             ScheduleSelected?.Invoke(path);
     }
 
@@ -1180,6 +1184,20 @@ internal sealed class CensorWindow : Form
             return false;
         path = files[0];
         return ScheduleFileKinds.IsSupportedPath(path);
+    }
+
+    private bool ConfirmSubtitleImport(string path)
+    {
+        if (!ScheduleFileKinds.TryGetSubtitleFormat(path, out _))
+            return true;
+
+        return MessageBox.Show(
+            this,
+            "Этот файл субтитров будет использован как расписание размытия: каждый фрагмент станет отдельным интервалом. Продолжить?",
+            "CensorPlayer",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2) == DialogResult.Yes;
     }
 
     private int[] SelectedIndices() =>

@@ -16,7 +16,7 @@ public sealed class SidecarLocatorTests
     }
 
     [Fact]
-    public void ReturnsExistingSidecarsInTxtSrtVttOrder()
+    public void ReturnsExistingCensorSidecarsInTxtSrtVttOrder()
     {
         var directory = Directory.CreateTempSubdirectory("censor-sidecar-tests-");
         try
@@ -24,6 +24,7 @@ public sealed class SidecarLocatorTests
             var mediaPath = Path.Combine(directory.FullName, "Film.mkv");
             File.WriteAllText(Path.Combine(directory.FullName, "Film.censor.vtt"), "");
             File.WriteAllText(Path.Combine(directory.FullName, "Film.censor.txt"), "");
+            File.WriteAllText(Path.Combine(directory.FullName, "Film.censor.srt"), "");
             File.WriteAllText(Path.Combine(directory.FullName, "Film.srt"), "");
 
             var result = SidecarLocator.Find(mediaPath);
@@ -31,6 +32,7 @@ public sealed class SidecarLocatorTests
             Assert.Equal(
                 [
                     Path.Combine(directory.FullName, "Film.censor.txt"),
+                    Path.Combine(directory.FullName, "Film.censor.srt"),
                     Path.Combine(directory.FullName, "Film.censor.vtt"),
                 ],
                 result);

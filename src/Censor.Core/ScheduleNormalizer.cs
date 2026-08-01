@@ -47,9 +47,7 @@ public static class ScheduleNormalizer
         var current = adjusted[0];
         foreach (var next in adjusted.Skip(1))
         {
-            var overlapsOrIsClose =
-                next.StartMs <= current.EndMs ||
-                next.StartMs - current.EndMs <= options.MergeGapMs;
+            var overlapsOrIsClose = next.StartMs - current.EndMs <= options.MergeGapMs;
             if (overlapsOrIsClose)
             {
                 current = current with { EndMs = Math.Max(current.EndMs, next.EndMs) };

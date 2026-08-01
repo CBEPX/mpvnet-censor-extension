@@ -383,6 +383,20 @@ public sealed class SettingsAndDiagnosticsTests
     }
 
     [Fact]
+    public void RootedPathRedactionPreservesTrailingDiagnostics()
+    {
+        const string path = @"C:\Private Folder\film.mkv";
+        var protectedPath = ExtensionLog.ProtectPath(path, includePath: false);
+
+        Assert.Equal(
+            $"Unable to open {protectedPath} (code 5)",
+            DiagnosticsExporter.RedactRootedPaths($"Unable to open {path} (code 5)"));
+        Assert.Equal(
+            $"at Decoder in {protectedPath}:line 42",
+            DiagnosticsExporter.RedactRootedPaths($"at Decoder in {path}:line 42"));
+    }
+
+    [Fact]
     public void UiStateRoundTripsAndRejectsTinyWindows()
     {
         using var directory = new TemporaryDirectory();

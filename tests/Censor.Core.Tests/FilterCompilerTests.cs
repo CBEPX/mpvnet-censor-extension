@@ -53,16 +53,6 @@ public sealed class FilterCompilerTests
         Assert.Equal(new(50, 3), BlurSettings.Maximum);
     }
 
-    [Fact]
-    public void RejectsMoreThanFiftyChunks()
-    {
-        var intervals = Enumerable.Range(0, (FilterCompiler.MaxIntervalsPerChunk * FilterCompiler.MaxFilters) + 1)
-            .Select(index => new NormalizedInterval(index * 2L, (index * 2L) + 1))
-            .ToArray();
-
-        Assert.Throws<InvalidOperationException>(() => FilterCompiler.Compile(intervals, new()));
-    }
-
     [Theory]
     [InlineData(0.001, 2)]
     [InlineData(1_025, 2)]
