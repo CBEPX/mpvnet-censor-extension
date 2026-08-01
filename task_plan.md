@@ -269,6 +269,23 @@ merge.
 проверками, оба Windows CI зелёные, следующий полный `cc review` на
 `claude-opus-5` не оставляет замечаний.
 
+### 16. Исправления после восьмого Claude Opus 5 review
+
+- Приостанавливать layout на время полной перерисовки таблицы и защищать
+  программное обновление offset от `ValueChanged`.
+- Прерывать filter swap, если mpv не подтвердил состояние паузы; снимать
+  watchdog warning после фактического возвращения labels.
+- Дать пользователю явный подтверждаемый repair-flow для future-schema с
+  сохранением `.bak`, без автоматического понижения формата.
+- Проверять собранный `libmpvnet.dll` отдельным SHA-256 на macOS arm64 и Windows
+  x64; читать lock file существующим .NET SDK вместо отдельного Node.js.
+- Держать дневной лог открытым, не сериализовать schedule без consent и
+  скрывать/очищать аварийные temp-файлы атомарной записи.
+
+**Выход:** локальные тесты и оба Windows CI подтверждают новую UI/runtime/build
+логику, Windows SHA добавлен в lock file, полный `cc review` на
+`claude-opus-5` не оставляет замечаний.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

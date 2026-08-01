@@ -2,6 +2,22 @@
 
 ## 2026-08-01
 
+- Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
+  PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
+  release verification и installer smoke.
+- Восьмой полный `cc review` на `claude-opus-5` признал ветку ship-able и не
+  нашёл blocker. Оставлены UI-scaling, future-schema repair, pause fail-open,
+  compile hash, log I/O и три небольших замечания.
+- Массовый grid render приостанавливает layout, программный offset защищён от
+  событий, pause требует readback, а восстановленный `vf` снимает `WARNING`.
+- На вкладке диагностики добавлена явная перезапись future-schema с `.bak`.
+  Логи используют один дневной handle; schedule сериализуется только с consent;
+  аварийные temp-файлы скрываются на Windows и очищаются по возрасту.
+- Lock reader переведён с Node.js на file-based .NET 10 helper. macOS arm64
+  compile hash закреплён; Windows x64 hash будет взят из первого CI этого цикла
+  и затем станет обязательным gate.
+- Локально: Release build без предупреждений и 79/79 тестов — PASS; полный
+  набор format/restore/syntax проверок выполняется перед коммитом.
 - Commit `f73be51` подтверждён двумя полными Windows CI: push `30675372654` и
   PR `30675373590`. Оба прошли build, 78 тестов, stock loader, package,
   аудиографы, release verification и installer smoke.

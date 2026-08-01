@@ -116,36 +116,71 @@ public sealed class ExtensionLog : IDisposable
 
     private async Task WriteLoopAsync()
     {
-        await foreach (var entry in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
+        FileStream? stream = null;
+        DateOnly? streamDate = null;
+        try
         {
-            try
+            await foreach (var entry in _channel.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                var currentDate = DateOnly.FromDateTime(DateTime.UtcNow);
-                if (currentDate != _lastPrunedDate)
+                try
                 {
-                    DeleteExpired(_retentionDays);
-                    _lastPrunedDate = currentDate;
+                    var currentDate = DateOnly.FromDateTime(DateTime.UtcNow);
+                    if (currentDate != _lastPrunedDate)
+                    {
+                        DeleteExpired(_retentionDays);
+                        _lastPrunedDate = currentDate;
+                    }
+
+                    var entryDate = DateOnly.FromDateTime(entry.Timestamp.UtcDateTime);
+                    if (stream is null || streamDate != entryDate)
+                    {
+                        await DisposeQuietlyAsync(stream).ConfigureAwait(false);
+                        var path = Path.Combine(
+                            _directory,
+                            "censor-extension-" +
+                            entry.Timestamp.UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
+                            ".log");
+                        stream = new(
+                            path,
+                            FileMode.Append,
+                            FileAccess.Write,
+                            FileShare.ReadWrite | FileShare.Delete,
+                            4_096,
+                            FileOptions.Asynchronous);
+                        streamDate = entryDate;
+                    }
+
+                    var bytes = Encoding.UTF8.GetBytes(
+                        JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
+                    await stream.WriteAsync(bytes).ConfigureAwait(false);
+                    await stream.FlushAsync().ConfigureAwait(false);
                 }
-                var path = Path.Combine(
-                    _directory,
-                    "censor-extension-" +
-                    entry.Timestamp.UtcDateTime.ToString("yyyyMMdd", CultureInfo.InvariantCulture) +
-                    ".log");
-                var bytes = Encoding.UTF8.GetBytes(
-                    JsonSerializer.Serialize(entry, JsonOptions) + Environment.NewLine);
-                await using var stream = new FileStream(
-                    path,
-                    FileMode.Append,
-                    FileAccess.Write,
-                    FileShare.ReadWrite | FileShare.Delete,
-                    4_096,
-                    FileOptions.Asynchronous);
-                await stream.WriteAsync(bytes).ConfigureAwait(false);
+                catch
+                {
+                    await DisposeQuietlyAsync(stream).ConfigureAwait(false);
+                    stream = null;
+                    streamDate = null;
+                    // A single disk or serialization failure must not stop later log events.
+                }
             }
-            catch
-            {
-                // A single disk or serialization failure must not stop later log events.
-            }
+        }
+        finally
+        {
+            await DisposeQuietlyAsync(stream).ConfigureAwait(false);
+        }
+    }
+
+    private static async ValueTask DisposeQuietlyAsync(FileStream? stream)
+    {
+        if (stream is null)
+            return;
+        try
+        {
+            await stream.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            // Logging must never surface a close failure.
         }
     }
 

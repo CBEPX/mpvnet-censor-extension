@@ -5,6 +5,7 @@ namespace Censor.Core;
 public static class AtomicFile
 {
     private static readonly UTF8Encoding Utf8WithoutBom = new(false);
+    private static readonly TimeSpan StaleTempAge = TimeSpan.FromDays(1);
 
     public static void Write(
         string path,
@@ -21,11 +22,13 @@ public static class AtomicFile
         else if (!Directory.Exists(directory))
             throw new DirectoryNotFoundException(directory);
 
+        DeleteStaleTemps(directory, Path.GetFileName(fullPath));
         var tempPath = Path.Combine(
             directory,
             $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
         try
         {
+            FileAttributes? originalTempAttributes = null;
             using (var stream = new FileStream(
                 tempPath,
                 FileMode.CreateNew,
@@ -34,9 +37,16 @@ public static class AtomicFile
                 4_096,
                 FileOptions.WriteThrough))
             {
+                if (OperatingSystem.IsWindows())
+                {
+                    originalTempAttributes = File.GetAttributes(tempPath);
+                    File.SetAttributes(tempPath, originalTempAttributes.Value | FileAttributes.Hidden);
+                }
                 stream.Write(content);
                 stream.Flush(flushToDisk: true);
             }
+            if (originalTempAttributes.HasValue)
+                File.SetAttributes(tempPath, originalTempAttributes.Value);
 
             if (File.Exists(fullPath))
             {
@@ -72,5 +82,33 @@ public static class AtomicFile
     {
         ArgumentNullException.ThrowIfNull(text);
         Write(path, Utf8WithoutBom.GetBytes(text), backupPath, createDirectory);
+    }
+
+    private static void DeleteStaleTemps(string directory, string fileName)
+    {
+        try
+        {
+            var cutoff = DateTime.UtcNow - StaleTempAge;
+            foreach (var path in Directory.EnumerateFiles(directory, $".{fileName}.*.tmp"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(path) < cutoff)
+                        File.Delete(path);
+                }
+                catch (IOException)
+                {
+                }
+                catch (UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 }

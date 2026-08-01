@@ -2,25 +2,29 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-node_cmd="${NODE_CMD:-node}"
-if ! command -v "$node_cmd" >/dev/null 2>&1; then
-  echo "Node.js is required to read deps.lock.json" >&2
+dotnet_cmd="${DOTNET_CMD:-dotnet}"
+if ! command -v "$dotnet_cmd" >/dev/null 2>&1; then
+  echo ".NET SDK is required to read deps.lock.json" >&2
   exit 1
 fi
+
+case "$(uname -s):$(uname -m)" in
+  Darwin:arm64) platform="osx-arm64" ;;
+  MINGW*:x86_64|MSYS*:x86_64|CYGWIN*:x86_64) platform="windows-x64" ;;
+  *)
+    echo "Unsupported compile-reference platform: $(uname -s) $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
 if ! lock_values="$(
-  "$node_cmd" -e '
-    const lock = require(process.argv[1]);
-    console.log([
-      lock.mpvNet.version,
-      lock.mpvNet.tag,
-      lock.mpvNet.sourceCommit,
-    ].join("\t"));
-  ' "$repo_root/deps.lock.json"
+  "$dotnet_cmd" run --file "$repo_root/scripts/deps-lock.cs" -- \
+    read "$repo_root/deps.lock.json" "$platform"
 )"; then
   echo "Unable to read mpv.net values from deps.lock.json" >&2
   exit 1
 fi
-IFS=$'\t' read -r version tag source_commit <<<"$lock_values"
+IFS=$'\t' read -r version tag source_commit expected_reference_sha256 <<<"$lock_values"
 if [[ -z "$version" || -z "$tag" || -z "$source_commit" ]]; then
   echo "deps.lock.json has incomplete mpv.net values" >&2
   exit 1
@@ -45,12 +49,20 @@ if ! git -C "$source_dir" diff --quiet ||
   exit 1
 fi
 
-dotnet_cmd="${DOTNET_CMD:-dotnet}"
 "$dotnet_cmd" build "$source_dir/src/MpvNet/MpvNet.csproj" --configuration Release
 
 source_dll="$source_dir/src/MpvNet/bin/Release/libmpvnet.dll"
 if [[ ! -f "$source_dll" ]]; then
   echo "libmpvnet.dll was not produced" >&2
+  exit 1
+fi
+actual_reference_sha256="$(
+  "$dotnet_cmd" run --file "$repo_root/scripts/deps-lock.cs" -- sha256 "$source_dll"
+)"
+printf 'compile reference sha256 (%s): %s\n' "$platform" "$actual_reference_sha256"
+if [[ -n "$expected_reference_sha256" &&
+      "$actual_reference_sha256" != "$expected_reference_sha256" ]]; then
+  echo "libmpvnet.dll SHA-256 mismatch for $platform" >&2
   exit 1
 fi
 cp "$source_dll" "$reference_dir/libmpvnet.dll"

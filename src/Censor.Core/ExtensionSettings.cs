@@ -120,6 +120,19 @@ public static class ExtensionSettingsStore
             Path.GetFullPath(path) + ".bak");
     }
 
+    public static ExtensionSettings ConvertToCurrentSchema(ExtensionSettings settings)
+    {
+        ArgumentNullException.ThrowIfNull(settings);
+        var normalized = Normalize(settings);
+        return normalized with
+        {
+            Schema = 1,
+            AdditionalProperties = null,
+            Limits = normalized.Limits with { AdditionalProperties = null },
+            Logging = normalized.Logging with { AdditionalProperties = null },
+        };
+    }
+
     public static IReadOnlyList<string> Validate(ExtensionSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);

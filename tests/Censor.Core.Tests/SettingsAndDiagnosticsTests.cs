@@ -39,6 +39,14 @@ public sealed class SettingsAndDiagnosticsTests
         Assert.Throws<ArgumentException>(() =>
             ExtensionSettingsStore.Save(path, invalid.Settings));
         Assert.Equal(InvalidSettings, File.ReadAllText(path));
+
+        var converted = ExtensionSettingsStore.ConvertToCurrentSchema(invalid.Settings);
+        ExtensionSettingsStore.Save(path, converted);
+        var repairedJson = File.ReadAllText(path);
+        Assert.Contains("\"schema\": 1", repairedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("futureRoot", repairedJson, StringComparison.Ordinal);
+        Assert.DoesNotContain("futureLimit", repairedJson, StringComparison.Ordinal);
+        Assert.Equal(InvalidSettings, File.ReadAllText(path + ".bak"));
     }
 
     [Fact]

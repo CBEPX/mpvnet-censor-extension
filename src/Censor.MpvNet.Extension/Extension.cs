@@ -870,8 +870,41 @@ public sealed class Extension : IExtension, IDisposable
         _watchdog.Change(
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite,
             settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite);
-        SaveSettings();
-        Show("Настройки сохранены.");
+        if (SaveSettings())
+            Show("Настройки сохранены.");
+    }
+
+    private void RepairSettings()
+    {
+        ExtensionSettings previous;
+        ExtensionSettings settings;
+        lock (_stateLock)
+        {
+            if (_settings.Schema == 1)
+                return;
+            previous = _settings;
+            settings = ExtensionSettingsStore.ConvertToCurrentSchema(previous);
+            _settings = settings;
+        }
+
+        InvokeWindow(window => window.SetSettings(settings));
+        if (SaveSettings())
+        {
+            Show("Файл настроек перезаписан в формате этой версии CensorPlayer.");
+            return;
+        }
+
+        var reverted = false;
+        lock (_stateLock)
+        {
+            if (ReferenceEquals(_settings, settings))
+            {
+                _settings = previous;
+                reverted = true;
+            }
+        }
+        if (reverted)
+            InvokeWindow(window => window.SetSettings(previous));
     }
 
     private void SaveDraft(
@@ -1179,7 +1212,7 @@ public sealed class Extension : IExtension, IDisposable
                 processArchitecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
             }, jsonOptions),
             ExtensionLog.FindFiles(Path.Combine(_localDataRoot, "Logs")),
-            document is null ? null : ScheduleText.Serialize(document));
+            includeSchedule && document is not null ? ScheduleText.Serialize(document) : null);
         DiagnosticsExporter.Export(path, snapshot, includeSchedule);
         InvokeWindow(window => window.ShowDiagnosticsResult(
             "Диагностический ZIP-архив сохранён:" + Environment.NewLine + path));
@@ -1638,6 +1671,7 @@ public sealed class Extension : IExtension, IDisposable
                             QueueSafely(() => SeekTo(Math.Max(0, milliseconds - 1_000)));
                         window.DiagnosticsRequested += includeSchedule =>
                             QueueSafely(() => ExportDiagnostics(includeSchedule));
+                        window.SettingsRepairRequested += () => QueueSafely(RepairSettings);
                         window.CurrentTimeRequested = GetCurrentTimeMs;
                         window.Shown += (_, _) =>
                         {
@@ -1944,7 +1978,7 @@ public sealed class Extension : IExtension, IDisposable
         return result;
     }
 
-    private void SaveSettings()
+    private bool SaveSettings()
     {
         try
         {
@@ -1955,13 +1989,18 @@ public sealed class Extension : IExtension, IDisposable
                     settings = _settings;
                 ExtensionSettingsStore.Save(_settingsPath, settings);
             }
+            return true;
         }
         catch (Exception exception)
         {
             Terminal.WriteError(exception, LogModule);
-            QueueShow(_settings.Schema == 1
+            int schema;
+            lock (_stateLock)
+                schema = _settings.Schema;
+            QueueShow(schema == 1
                 ? "Не удалось сохранить настройки."
-                : "Настройки не сохранены: файл создан более новой версией CensorPlayer.");
+                : "Настройки не сохранены: файл создан более новой версией CensorPlayer. Чтобы перезаписать его, откройте вкладку «Диагностика».");
+            return false;
         }
     }
 
@@ -2071,6 +2110,11 @@ public sealed class Extension : IExtension, IDisposable
             if (active.Plan.Chunks.All(chunk => ContainsLabel(filters, chunk.Label)))
             {
                 Interlocked.Exchange(ref _recoveryFailures, 0);
+                bool clearWarning;
+                lock (_stateLock)
+                    clearWarning = _windowStatus == "WARNING";
+                if (clearWarning)
+                    UpdateWindow("ACTIVE", active.Ticket);
                 return;
             }
 
@@ -2193,11 +2237,15 @@ public sealed class Extension : IExtension, IDisposable
     {
         if (_pauseHeldByExtension || !IsIntervalNear(intervals))
             return;
-        if (TryGetPropertyBool("pause", out var wasPaused) && !wasPaused)
-        {
-            Player.SetPropertyBool("pause", true);
-            _pauseHeldByExtension = true;
-        }
+        if (!TryGetPropertyBool("pause", out var wasPaused))
+            throw new InvalidOperationException("mpv не сообщил состояние паузы перед заменой фильтров.");
+        if (wasPaused)
+            return;
+        if (!TrySetPropertyBool("pause", true))
+            throw new InvalidOperationException("mpv не принял паузу перед заменой фильтров.");
+        _pauseHeldByExtension = true;
+        if (!TryGetPropertyBool("pause", out var paused) || !paused)
+            throw new InvalidOperationException("mpv не подтвердил паузу перед заменой фильтров.");
     }
 
     private void ReleasePauseIfHeld()
@@ -2211,8 +2259,13 @@ public sealed class Extension : IExtension, IDisposable
         }
         if (!TryGetPropertyBool("pause", out var paused))
             return;
-        if (paused)
-            Player.SetPropertyBool("pause", false);
+        if (paused &&
+            (!TrySetPropertyBool("pause", false) ||
+             !TryGetPropertyBool("pause", out paused) ||
+             paused))
+        {
+            return;
+        }
         _pauseHeldByExtension = false;
     }
 
@@ -2359,6 +2412,19 @@ public sealed class Extension : IExtension, IDisposable
             return false;
         value = raw.ToInt32() != 0;
         return true;
+    }
+
+    private bool TrySetPropertyBool(string name, bool value)
+    {
+        if (Player.Handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
+            return false;
+
+        long raw = value ? 1 : 0;
+        return mpv_set_property(
+            Player.Handle,
+            GetUtf8Bytes(name),
+            mpv_format.MPV_FORMAT_FLAG,
+            ref raw) >= 0;
     }
 
     private static bool ContainsLabel(string filters, string label) =>

@@ -164,6 +164,7 @@ internal sealed class CensorWindow : Form
     public event Action<long>? SeekRequested;
     public event Action<long>? PreviewRequested;
     public event Action<bool>? DiagnosticsRequested;
+    public event Action? SettingsRepairRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
 
@@ -597,7 +598,8 @@ internal sealed class CensorWindow : Form
         var controls = Flow(
             _includeSchedule,
             Button("Экспортировать диагностический ZIP-архив…", () =>
-                DiagnosticsRequested?.Invoke(_includeSchedule.Checked)));
+                DiagnosticsRequested?.Invoke(_includeSchedule.Checked)),
+            Button("Перезаписать файл настроек…", RepairSettings));
         var layout = new TableLayoutPanel { Dock = DockStyle.Fill, RowCount = 2 };
         layout.RowStyles.Add(new(SizeType.AutoSize));
         layout.RowStyles.Add(new(SizeType.Percent, 100));
@@ -860,6 +862,7 @@ internal sealed class CensorWindow : Form
             ? [selectedIndex.Value]
             : SelectedIndices();
         var restoreCurrent = selectedIndex ?? SelectedIndex();
+        _intervals.SuspendLayout();
         _rendering = true;
         try
         {
@@ -894,7 +897,14 @@ internal sealed class CensorWindow : Form
         }
         finally
         {
-            _rendering = false;
+            try
+            {
+                _intervals.ResumeLayout();
+            }
+            finally
+            {
+                _rendering = false;
+            }
         }
         if (_intervals.Rows.Count == 0)
             return;
@@ -948,10 +958,19 @@ internal sealed class CensorWindow : Form
     {
         _draftDiagnostics = diagnostics;
         RenderWarnings(diagnostics);
-        _offset.Value = Math.Clamp(
-            _draft!.Document.Metadata.OffsetMs ?? 0,
-            (long)_offset.Minimum,
-            (long)_offset.Maximum);
+        var wasRendering = _rendering;
+        _rendering = true;
+        try
+        {
+            _offset.Value = Math.Clamp(
+                _draft!.Document.Metadata.OffsetMs ?? 0,
+                (long)_offset.Minimum,
+                (long)_offset.Maximum);
+        }
+        finally
+        {
+            _rendering = wasRendering;
+        }
         _draftState.Text = _draft.IsDirty
             ? "Изменения не применены и не сохранены"
             : "Сохранено";
@@ -1011,6 +1030,26 @@ internal sealed class CensorWindow : Form
             (long)_mergeGap.Value,
             (long)_durationTolerance.Value,
             (long)_earlyGuard.Value));
+    }
+
+    private void RepairSettings()
+    {
+        if (_settings.Schema == 1)
+        {
+            Warn("Файл настроек уже совместим с этой версией CensorPlayer.");
+            return;
+        }
+
+        if (MessageBox.Show(
+                this,
+                "Файл settings.json создан более новой версией CensorPlayer. Перезаписать его настройками, которые сейчас показаны в окне? Неизвестные параметры будут удалены, а исходный файл останется в settings.json.bak.",
+                "CensorPlayer",
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2) == DialogResult.Yes)
+        {
+            SettingsRepairRequested?.Invoke();
+        }
     }
 
     private void PopulateSettings(ExtensionSettings settings)
