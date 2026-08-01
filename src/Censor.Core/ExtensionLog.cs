@@ -206,7 +206,7 @@ public sealed class ExtensionLog : IDisposable
                         streamDate = entryDate;
                     }
 
-                    var droppedEvents = Interlocked.Exchange(ref _droppedEvents, 0);
+                    var droppedEvents = Interlocked.Read(ref _droppedEvents);
                     if (droppedEvents > 0)
                     {
                         await WriteEntryAsync(
@@ -221,6 +221,7 @@ public sealed class ExtensionLog : IDisposable
                                 {
                                     ["droppedCount"] = droppedEvents,
                                 })).ConfigureAwait(false);
+                        Interlocked.Add(ref _droppedEvents, -droppedEvents);
                     }
                     await WriteEntryAsync(stream, entry).ConfigureAwait(false);
                 }

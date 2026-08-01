@@ -65,6 +65,7 @@ jobs:
             -ArtifactDirectory artifacts/windows/release
           ./scripts/smoke-installer.ps1 `
             -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
+          # Keep runtime smoke after installer smoke: it owns a temporary CensorPlayer data root.
           ./scripts/smoke-extension-runtime.ps1 `
             -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName `
             -VerifyAudioWatchdog

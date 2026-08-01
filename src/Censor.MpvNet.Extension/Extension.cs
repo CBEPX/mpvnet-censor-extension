@@ -27,6 +27,7 @@ public sealed class Extension : IExtension, IDisposable
 
     // Nested runtime acquisition order: _filterGate -> _stateLock -> _windowLock.
     // _settingsWriteLock may wrap _stateLock, but never nests with _filterGate or _windowLock.
+    // Session-token cancellation callbacks must never acquire _stateLock.
     private readonly Lock _stateLock = new();
     private readonly Lock _windowLock = new();
     private readonly Lock _settingsWriteLock = new();
@@ -154,6 +155,7 @@ public sealed class Extension : IExtension, IDisposable
             if (Player.StringPropChangeActions.TryGetValue("af", out actions))
                 actions.Remove(OnFiltersChanged);
         }
+        // Pinned mpv.net 7.1.2.0 registers these observers with reply_userdata == 0.
         if (Player.Handle != IntPtr.Zero)
             _ = mpv_unobserve_property(Player.Handle, 0);
     }
@@ -1120,6 +1122,8 @@ public sealed class Extension : IExtension, IDisposable
         var markWindowSaved = false;
         var saveSettings = false;
         string? savedScheduleDirectory;
+        // This gate prevents ApplyAsync from committing between the save decision
+        // and the corresponding pending/active state update.
         _filterGate.Wait();
         try
         {
@@ -1429,20 +1433,15 @@ public sealed class Extension : IExtension, IDisposable
                 // normal 10–20-scene plans; revisit only if measured workloads grow.
                 var pendingPlan = FilterCompiler.Compile(currentPending.Intervals, settings);
                 // Invalidate an ApplyPendingScheduleAsync snapshot before replacing its plan.
-                ticket = _revisions.BeginOperation();
-                previousCancellation = _operationCancellation;
-                _operationCancellation =
-                    CancellationTokenSource.CreateLinkedTokenSource(
-                        _revisions.SessionToken);
-                token = _operationCancellation.Token;
-                _scheduleLoadTicket = null;
+                var operation = BeginOperationUnsafe(clearPending: false, scheduleLoad: false);
+                ticket = operation.Ticket;
+                token = operation.Token;
+                previousCancellation = operation.PreviousCancellation;
                 _pendingSchedule = currentPending with
                 {
                     Ticket = ticket,
                     Plan = pendingPlan,
                 };
-                if (_activeSchedule is { } currentActive)
-                    _activeSchedule = currentActive with { Ticket = ticket };
                 pending = _pendingSchedule;
             }
             else if (_activeSchedule is { } currentActive)
@@ -1450,14 +1449,10 @@ public sealed class Extension : IExtension, IDisposable
                 if (useCurrentSelection && currentActive.Plan.Blur == settings)
                     return;
                 activePlan = FilterCompiler.Compile(currentActive.Intervals, settings);
-                ticket = _revisions.BeginOperation();
-                previousCancellation = _operationCancellation;
-                _operationCancellation =
-                    CancellationTokenSource.CreateLinkedTokenSource(
-                        _revisions.SessionToken);
-                token = _operationCancellation.Token;
-                _scheduleLoadTicket = null;
-                _activeSchedule = currentActive with { Ticket = ticket };
+                var operation = BeginOperationUnsafe(clearPending: false, scheduleLoad: false);
+                ticket = operation.Ticket;
+                token = operation.Token;
+                previousCancellation = operation.PreviousCancellation;
                 active = _activeSchedule;
             }
             else
@@ -1726,7 +1721,15 @@ public sealed class Extension : IExtension, IDisposable
                     preset = AudioCompressionPresets.Find(
                         _settings.AudioCompressionPreset) ?? AudioCompressionPresets.Off;
                 }
-                ApplyAudioCompressionPreset(preset);
+                var matches = TryGetPropertyString("af", out var filters) &&
+                    (preset.Filter is null
+                        ? !ContainsLabel(filters, AudioCompressionPresets.FilterLabel)
+                        : FilterReadback.MatchesSingle(
+                            filters,
+                            AudioCompressionPresets.FilterLabel,
+                            preset.Filter));
+                if (!matches)
+                    ApplyAudioCompressionPreset(preset);
                 ResetAudioWatchdogState();
             }
             finally
@@ -1839,30 +1842,44 @@ public sealed class Extension : IExtension, IDisposable
     private (OperationTicket Ticket, CancellationToken Token)? StartNewOperation(
         bool scheduleLoad = false)
     {
-        CancellationTokenSource previous;
-        OperationTicket ticket;
-        CancellationToken token;
+        (OperationTicket Ticket, CancellationToken Token, CancellationTokenSource PreviousCancellation)
+            operation;
         lock (_stateLock)
         {
             if (Volatile.Read(ref _stopping) != 0 || string.IsNullOrEmpty(_currentMediaPath))
                 return null;
 
-            ticket = _revisions.BeginOperation();
-            previous = _operationCancellation;
-            _operationCancellation =
-                CancellationTokenSource.CreateLinkedTokenSource(
-                    _revisions.SessionToken);
-            token = _operationCancellation.Token;
-            _pendingSchedule = null;
-            _scheduleLoadTicket = scheduleLoad ? ticket : null;
-            if (_activeSchedule is not null)
-                _activeSchedule = _activeSchedule with { Ticket = ticket };
+            operation = BeginOperationUnsafe(
+                clearPending: true,
+                scheduleLoad: scheduleLoad);
         }
 
-        previous.Cancel();
-        previous.Dispose();
+        operation.PreviousCancellation.Cancel();
+        operation.PreviousCancellation.Dispose();
 
-        return (ticket, token);
+        return (operation.Ticket, operation.Token);
+    }
+
+    // Caller must hold _stateLock. Cancellation stays outside the lock.
+    private (
+        OperationTicket Ticket,
+        CancellationToken Token,
+        CancellationTokenSource PreviousCancellation) BeginOperationUnsafe(
+            bool clearPending,
+            bool scheduleLoad)
+    {
+        var ticket = _revisions.BeginOperation();
+        var previousCancellation = _operationCancellation;
+        _operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+            _revisions.SessionToken);
+        _scheduleLoadTicket = scheduleLoad ? ticket : null;
+        if (clearPending)
+            _pendingSchedule = null;
+        else if (_pendingSchedule is { } pending)
+            _pendingSchedule = pending with { Ticket = ticket };
+        if (_activeSchedule is { } active)
+            _activeSchedule = active with { Ticket = ticket };
+        return (ticket, _operationCancellation.Token, previousCancellation);
     }
 
     private async Task<bool> ConfirmDurationMismatchAsync(CancellationToken token)

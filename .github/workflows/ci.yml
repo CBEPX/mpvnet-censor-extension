@@ -99,6 +99,7 @@ jobs:
 
       - name: Smoke extension runtime on pinned mpv.net
         shell: pwsh
+        # Keep this after installer smoke: it owns a temporary CensorPlayer data root.
         run: >-
           ./scripts/smoke-extension-runtime.ps1
           -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
