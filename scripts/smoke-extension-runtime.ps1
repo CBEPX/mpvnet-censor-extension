@@ -88,6 +88,26 @@ function Wait-ForFilter {
     throw "Filter '$Label' did not reach expected presence '$Present'. Current vf: $(Get-FilterText)"
 }
 
+function Wait-ForMedia {
+    param([Parameter(Mandatory)][string]$ExpectedPath)
+
+    $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        try {
+            $Response = Invoke-MpvCommand @("get_property", "path")
+            if ([IO.Path]::GetFullPath([string]$Response.data) -eq $ExpectedPath) {
+                return
+            }
+        }
+        catch {
+            # The path property is unavailable until loadfile reaches StartFile.
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "mpv.net did not load the runtime-smoke media file."
+}
+
 try {
     $Header = [Text.Encoding]::ASCII.GetBytes("P6`n64 64`n255`n")
     $Pixels = [byte[]]::new(64 * 64 * 3)
@@ -113,8 +133,7 @@ try {
             "--msg-level=all=warn",
             "--image-display-duration=60",
             "--loop-file=inf",
-            "--input-ipc-server=\\.\pipe\$PipeName",
-            $MediaPath
+            "--input-ipc-server=\\.\pipe\$PipeName"
         ) `
         -RedirectStandardOutput $StdOut `
         -RedirectStandardError $StdErr `
@@ -130,6 +149,9 @@ try {
     $Writer = [IO.StreamWriter]::new($Pipe, [Text.UTF8Encoding]::new($false), 4096, $true)
     $Writer.AutoFlush = $true
 
+    Start-Sleep -Seconds 1
+    [void](Invoke-MpvCommand @("loadfile", $MediaPath, "replace"))
+    Wait-ForMedia $MediaPath
     [void](Invoke-MpvCommand @("vf", "add", "@censor_smoke_user:lavfi=[hflip]"))
     Wait-ForFilter "censor_smoke_user" $true
     Wait-ForFilter "censor_blur_000" $true
