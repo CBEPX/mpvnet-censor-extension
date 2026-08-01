@@ -273,8 +273,7 @@ public sealed class Extension : IExtension, IDisposable
             _sessionCleanup = Task.Run(() => RunSafely(() => ClearSession(ticket)));
         }
 
-        previous.Cancel();
-        previous.Dispose();
+        CancelSupersededOperation(previous);
         UpdateWindow(status, ticket);
     }
 
@@ -1369,6 +1368,30 @@ public sealed class Extension : IExtension, IDisposable
                 IncludePaths = false,
             },
         };
+        var includeScheduleInArchive = includeSchedule && document is not null;
+        var scheduleSerializationFailed = false;
+        string? scheduleText = null;
+        if (includeScheduleInArchive)
+        {
+            try
+            {
+                scheduleText = ScheduleText.Serialize(document!);
+            }
+            catch (Exception exception) when (exception is ArgumentException or OverflowException)
+            {
+                includeScheduleInArchive = false;
+                scheduleSerializationFailed = true;
+                Terminal.WriteError(exception, LogModule);
+                _log.Write(
+                    "diagnostics-schedule-serialization-error",
+                    ticket,
+                    new Dictionary<string, object?>
+                    {
+                        ["error"] = ProtectError(exception),
+                    },
+                    ExtensionLogLevel.Error);
+            }
+        }
         var snapshot = new DiagnosticsSnapshot(
             JsonSerializer.Serialize(new
             {
@@ -1413,10 +1436,14 @@ public sealed class Extension : IExtension, IDisposable
                 processArchitecture = System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture.ToString(),
             }, jsonOptions),
             ExtensionLog.FindFiles(Path.Combine(_localDataRoot, "Logs")),
-            includeSchedule && document is not null ? ScheduleText.Serialize(document) : null);
+            scheduleText);
         try
         {
-            DiagnosticsExporter.Export(path, snapshot, includeSchedule, _pathHashKey);
+            DiagnosticsExporter.Export(
+                path,
+                snapshot,
+                includeScheduleInArchive,
+                _pathHashKey);
         }
         catch (Exception exception) when (IsFileWriteException(exception))
         {
@@ -1428,8 +1455,14 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
         InvokeWindow(window => window.ShowDiagnosticsResult(
-            "Диагностический ZIP-архив сохранён:" + Environment.NewLine + path));
-        Show("Диагностика экспортирована в ZIP-архив.");
+            (scheduleSerializationFailed
+                ? "Диагностический ZIP-архив сохранён без расписания:"
+                : "Диагностический ZIP-архив сохранён:") +
+            Environment.NewLine +
+            path));
+        Show(scheduleSerializationFailed
+            ? "Диагностика экспортирована без расписания: черновик содержит ошибки."
+            : "Диагностика экспортирована в ZIP-архив.");
     }
 
     private void ReloadSchedule()
@@ -1524,10 +1557,7 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         if (previousCancellation is not null)
-        {
-            previousCancellation.Cancel();
-            previousCancellation.Dispose();
-        }
+            CancelSupersededOperation(previousCancellation);
 
         if (loadInProgress)
         {
@@ -1911,8 +1941,7 @@ public sealed class Extension : IExtension, IDisposable
                 scheduleLoad: scheduleLoad);
         }
 
-        operation.PreviousCancellation.Cancel();
-        operation.PreviousCancellation.Dispose();
+        CancelSupersededOperation(operation.PreviousCancellation);
 
         return (operation.Ticket, operation.Token);
     }
@@ -1937,6 +1966,13 @@ public sealed class Extension : IExtension, IDisposable
         if (_activeSchedule is { } active)
             _activeSchedule = active with { Ticket = ticket };
         return (ticket, _operationCancellation.Token, previousCancellation);
+    }
+
+    private static void CancelSupersededOperation(CancellationTokenSource cancellation)
+    {
+        // A worker may still register this captured token after the switch.
+        // Disposing here would turn that harmless race into ObjectDisposedException.
+        cancellation.Cancel();
     }
 
     private async Task<bool> ConfirmDurationMismatchAsync(CancellationToken token)

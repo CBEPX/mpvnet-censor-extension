@@ -90,7 +90,10 @@ public static class AtomicFile
         try
         {
             var cutoff = DateTime.UtcNow - StaleTempAge;
-            foreach (var path in Directory.EnumerateFiles(directory, $".{fileName}.*.tmp"))
+            foreach (var path in Directory.EnumerateFiles(directory, "*.tmp")
+                         .Where(path => Path.GetFileName(path).StartsWith(
+                             $".{fileName}.",
+                             StringComparison.Ordinal)))
             {
                 try
                 {

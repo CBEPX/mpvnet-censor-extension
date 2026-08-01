@@ -20,6 +20,10 @@ $SetupLog = Join-Path $TempRoot "censorplayer-setup.log"
 $UninstallLog = Join-Path $TempRoot "censorplayer-uninstall.log"
 $PortableConfig = Join-Path $InstallRoot "portable_config"
 $InputConfig = Join-Path $PortableConfig "input.conf"
+$MpvConfig = Join-Path $PortableConfig "mpv.conf"
+$MpvNetConfig = Join-Path $PortableConfig "mpvnet.conf"
+$ConfigPaths = @($InputConfig, $MpvConfig, $MpvNetConfig)
+$ConfigMarker = "# installer-update-preservation-smoke"
 $RuntimeState = Join-Path $PortableConfig "installer-runtime-state.txt"
 $ExtensionDirectory = Join-Path $PortableConfig "extensions/CensorExtension"
 $InstalledDll = Join-Path $ExtensionDirectory "CensorExtension.dll"
@@ -40,11 +44,14 @@ if ($Setup.ExitCode -ne 0) {
     throw "Installer failed with exit code $($Setup.ExitCode)."
 }
 if (-not (Test-Path (Join-Path $InstallRoot "mpvnet.exe") -PathType Leaf) -or
-    -not (Test-Path $InstalledDll -PathType Leaf)) {
+    -not (Test-Path $InstalledDll -PathType Leaf) -or
+    @($ConfigPaths | Where-Object { -not (Test-Path $_ -PathType Leaf) }).Count -ne 0) {
     throw "Installed payload is incomplete."
 }
 $ExpectedDllHash = (Get-FileHash $InstalledDll -Algorithm SHA256).Hash
-Add-Content $InputConfig "# installer-update-preservation-smoke"
+foreach ($ConfigPath in $ConfigPaths) {
+    Add-Content $ConfigPath $ConfigMarker
+}
 "runtime state" | Set-Content $RuntimeState
 [IO.File]::WriteAllBytes($InstalledDll, [byte[]](1..32))
 "legacy" | Set-Content $LegacyCore
@@ -61,9 +68,10 @@ if ($Update.ExitCode -ne 0 -or
     (Get-FileHash $InstalledDll -Algorithm SHA256).Hash -ne $ExpectedDllHash -or
     (Test-Path $LegacyCore) -or
     (Test-Path $LegacyDeps) -or
-    -not ((Get-Content $InputConfig -Raw).Contains(
-        "# installer-update-preservation-smoke",
-        [StringComparison]::Ordinal))) {
+    @($ConfigPaths | Where-Object {
+            -not (Test-Path $_ -PathType Leaf) -or
+            -not ((Get-Content $_ -Raw).Contains($ConfigMarker, [StringComparison]::Ordinal))
+        }).Count -ne 0) {
     throw "Update did not replace the extension cleanly or removed user data."
 }
 
@@ -88,7 +96,7 @@ if ((Test-Path (Join-Path $InstallRoot "mpvnet.exe")) -or
     throw "Program payload remained after uninstall."
 }
 if (-not (Test-Path $Marker -PathType Leaf) -or
-    -not (Test-Path $InputConfig -PathType Leaf) -or
+    @($ConfigPaths | Where-Object { -not (Test-Path $_ -PathType Leaf) }).Count -ne 0 -or
     -not (Test-Path $RuntimeState -PathType Leaf)) {
     throw "Uninstall removed user data without explicit opt-in."
 }
