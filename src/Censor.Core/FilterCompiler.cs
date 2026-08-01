@@ -30,6 +30,8 @@ public static class FilterCompiler
     {
         ArgumentNullException.ThrowIfNull(intervals);
         ArgumentNullException.ThrowIfNull(blur);
+        if (intervals.Count > ScheduleText.MaxIntervals)
+            throw new ArgumentOutOfRangeException(nameof(intervals));
         Validate(intervals, blur);
 
         if (intervals.Count == 0)

@@ -205,6 +205,17 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void NormalizesMultilineNotesAtDraftBoundary()
+    {
+        var draft = new ScheduleDraft(Document(
+            new CensorInterval(0, 1_000, "line one\r\nline two")));
+
+        Assert.Equal("line one line two", draft.Document.Intervals[0].Note);
+        draft.Update(0, 0, 1_000, "line three\nline four");
+        Assert.Equal("line three line four", draft.Document.Intervals[0].Note);
+    }
+
+    [Fact]
     public void InvalidGlobalOffsetIsReportedOutsideIntervalRows()
     {
         var draft = new ScheduleDraft(

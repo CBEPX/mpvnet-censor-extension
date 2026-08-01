@@ -194,6 +194,17 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void RejectsMultilineIntervalNote()
+    {
+        var document = new ScheduleDocument(
+            new(),
+            [new(1_000, 2_000, "line one\nline two")],
+            []);
+
+        Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
+    }
+
+    [Fact]
     public void RejectsTimestampAtOneHundredHours()
     {
         var document = new ScheduleDocument(
@@ -239,18 +250,21 @@ public sealed class ScheduleTextTests
         var start = startValue.Get % 359_000_000;
         var length = (lengthValue.Get % 999_999) + 1L;
         var end = Math.Min(start + length, 359_999_999);
+        var normalizedNote = string.IsNullOrWhiteSpace(note)
+            ? null
+            : note.Replace("\r\n", " ", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
         var document = new ScheduleDocument(
             new ScheduleMetadata(Title: "Фильм"),
-            [new CensorInterval(start, end, note)],
+            [new CensorInterval(start, end, normalizedNote)],
             ["# future-key: keep"]);
 
         var parsed = ScheduleText.Parse(ScheduleText.Serialize(document));
-        var expectedNote = string.IsNullOrWhiteSpace(note)
-            ? null
-            : note.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
         return parsed.IsSuccess &&
-            parsed.Document!.Intervals.Single() == new CensorInterval(start, end, expectedNote) &&
+            parsed.Document!.Intervals.Single() == new CensorInterval(start, end, normalizedNote) &&
             parsed.Document.PreservedHeaderLines.SequenceEqual(["# future-key: keep"]);
     }
 }

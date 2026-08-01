@@ -57,6 +57,9 @@ jobs:
             -RunId $env:GITHUB_RUN_ID
           ./scripts/smoke-audio-filters.ps1 `
             -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "CensorPlayer")) {
+            throw "Audio filter smoke unexpectedly loaded the extension and created user data."
+          }
           ./scripts/verify-release-artifacts.ps1 `
             -ArtifactDirectory artifacts/windows/release
           ./scripts/smoke-installer.ps1 `

@@ -47,6 +47,17 @@ public sealed class FilterCompilerTests
     }
 
     [Fact]
+    public void RejectsInputBeyondParserSafetyLimit()
+    {
+        var intervals = Enumerable.Range(0, ScheduleText.MaxIntervals + 1)
+            .Select(index => new NormalizedInterval(index * 2L, (index * 2L) + 1))
+            .ToArray();
+
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            FilterCompiler.Compile(intervals, new()));
+    }
+
+    [Fact]
     public void ExposesNamedBlurPresets()
     {
         Assert.Equal(new(30, 2), BlurSettings.Moderate);

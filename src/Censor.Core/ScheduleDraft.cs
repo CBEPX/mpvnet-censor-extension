@@ -321,7 +321,9 @@ public sealed class ScheduleDraft
     private static ScheduleDocument Copy(ScheduleDocument document) =>
         document with
         {
-            Intervals = Array.AsReadOnly(document.Intervals.ToArray()),
+            Intervals = Array.AsReadOnly(document.Intervals
+                .Select(interval => interval with { Note = NormalizeNote(interval.Note) })
+                .ToArray()),
             PreservedHeaderLines = Array.AsReadOnly(document.PreservedHeaderLines.ToArray()),
         };
 
@@ -347,7 +349,12 @@ public sealed class ScheduleDraft
         left.PreservedHeaderLines.SequenceEqual(right.PreservedHeaderLines);
 
     private static string? NormalizeNote(string? note) =>
-        string.IsNullOrWhiteSpace(note) ? null : note.Trim();
+        string.IsNullOrWhiteSpace(note)
+            ? null
+            : note.Replace("\r\n", " ", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
 
     private static ParseDiagnostic Error(int intervalIndex, string message) =>
         new(DiagnosticSeverity.Error, intervalIndex + 1, 1, message);

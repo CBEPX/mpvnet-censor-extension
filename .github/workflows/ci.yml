@@ -62,9 +62,12 @@ jobs:
 
       - name: Verify audio filters on pinned mpv.net
         shell: pwsh
-        run: >-
-          ./scripts/smoke-audio-filters.ps1
-          -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+        run: |
+          ./scripts/smoke-audio-filters.ps1 `
+            -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "CensorPlayer")) {
+            throw "Audio filter smoke unexpectedly loaded the extension and created user data."
+          }
 
       - name: Verify release artifacts
         shell: pwsh

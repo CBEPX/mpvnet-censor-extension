@@ -23,7 +23,7 @@ public sealed class SubtitleScheduleTextTests
         Assert.True(result.IsSuccess);
         Assert.Equal(
             [
-                new CensorInterval(1_250, 2_500, "first\nsecond"),
+                new CensorInterval(1_250, 2_500, "first second"),
                 new CensorInterval(4_000, 5_000, "another"),
             ],
             result.Document!.Intervals);

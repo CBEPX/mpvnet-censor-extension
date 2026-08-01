@@ -393,7 +393,9 @@ public sealed class Extension : IExtension, IDisposable
 
             await LoadScheduleAsync(ticket, sidecars[0], automatic: true, token).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (Exception exception) when (
+            token.IsCancellationRequested &&
+            exception is OperationCanceledException or ObjectDisposedException)
         {
         }
         catch (Exception exception)
@@ -587,7 +589,9 @@ public sealed class Extension : IExtension, IDisposable
                     token);
             }
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (Exception exception) when (
+            token.IsCancellationRequested &&
+            exception is OperationCanceledException or ObjectDisposedException)
         {
         }
         catch (Exception exception)
@@ -854,10 +858,11 @@ public sealed class Extension : IExtension, IDisposable
     private void ApplyDraftDocument(ScheduleDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
+        var settings = _settings;
         var validation = ScheduleDraft.Validate(
             document,
-            _settings.Limits.MaxIntervals,
-            _settings.Limits.MaxTextFileBytes);
+            settings.Limits.MaxIntervals,
+            settings.Limits.MaxTextFileBytes);
         if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
             UpdateWindow("INVALID DRAFT");
@@ -883,8 +888,8 @@ public sealed class Extension : IExtension, IDisposable
 
         var normalized = ScheduleNormalizer.Normalize(
             document.Intervals,
-            _settings.ResolveNormalizationOptions(document.Metadata));
-        var plan = FilterCompiler.Compile(normalized, _settings.Blur);
+            settings.ResolveNormalizationOptions(document.Metadata));
+        var plan = FilterCompiler.Compile(normalized, settings.Blur);
         if (plan.Chunks.Count == 0)
         {
             if (ClearSchedule(operation.Value.Ticket) &&
@@ -2273,17 +2278,32 @@ public sealed class Extension : IExtension, IDisposable
     private void CloseWindow()
     {
         CensorWindow? window;
+        Thread? windowThread;
         lock (_windowLock)
+        {
             window = _window;
-        if (window is null || window.IsDisposed || !window.IsHandleCreated)
-            return;
-
-        try
-        {
-            window.BeginInvoke(new Action(window.Shutdown));
+            windowThread = _windowThread;
         }
-        catch (InvalidOperationException)
+
+        if (window is not null && !window.IsDisposed && window.IsHandleCreated)
         {
+            try
+            {
+                window.BeginInvoke(new Action(window.Shutdown));
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
+
+        if (windowThread is not null &&
+            windowThread != Thread.CurrentThread &&
+            windowThread.IsAlive &&
+            !windowThread.Join(ShutdownWaitTimeout))
+        {
+            Terminal.WriteError(
+                "Окно CensorPlayer не закрылось за 5 секунд; последние изменения черновика могли не сохраниться.",
+                LogModule);
         }
     }
 

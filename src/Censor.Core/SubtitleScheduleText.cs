@@ -105,7 +105,7 @@ public static class SubtitleScheduleText
                 break;
             }
 
-            var note = string.Join('\n', block.Skip(timingIndex + 1)).Trim();
+            var note = string.Join(' ', block.Skip(timingIndex + 1)).Trim();
             intervals.Add(new(startMs, endMs, note.Length == 0 ? null : note));
         }
 

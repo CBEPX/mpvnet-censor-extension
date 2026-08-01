@@ -32,6 +32,7 @@ public static class ScheduleText
             throw new ArgumentOutOfRangeException(nameof(maxIntervals));
 
         var diagnostics = new List<ParseDiagnostic>();
+        // The file-size limit covers the original UTF-8 bytes, including a BOM.
         if (Encoding.UTF8.GetByteCount(text) > maxTextFileBytes)
         {
             diagnostics.Add(new(
@@ -225,6 +226,13 @@ public static class ScheduleText
 
         foreach (var interval in document.Intervals)
         {
+            if (interval.Note?.Contains('\r') == true ||
+                interval.Note?.Contains('\n') == true)
+            {
+                throw new ArgumentException(
+                    "Заметка к интервалу должна помещаться в одну строку.",
+                    nameof(document));
+            }
             builder.Append(FormatTimestamp(interval.StartMs))
                 .Append(" --> ")
                 .Append(FormatTimestamp(interval.EndMs));
@@ -232,7 +240,7 @@ public static class ScheduleText
             if (!string.IsNullOrWhiteSpace(interval.Note))
             {
                 builder.Append(" | ")
-                    .Append(interval.Note.Replace('\r', ' ').Replace('\n', ' '));
+                    .Append(interval.Note);
             }
 
             builder.Append('\n');
