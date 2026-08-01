@@ -129,7 +129,14 @@ public sealed class Extension : IExtension, IDisposable
 
         StopRuntime(removeFilters: true);
         CloseWindow(waitForExit: true);
-        _watchdog.Dispose();
+        using var watchdogStopped = new ManualResetEvent(false);
+        if (_watchdog.Dispose(watchdogStopped) &&
+            !watchdogStopped.WaitOne(ShutdownWaitTimeout))
+        {
+            Terminal.WriteError(
+                "Контроль фильтров не завершился за 5 секунд.",
+                LogModule);
+        }
         lock (_stateLock)
         {
             _operationCancellation.Dispose();
@@ -787,6 +794,8 @@ public sealed class Extension : IExtension, IDisposable
             Show("Не удалось открыть расписание: путь некорректен или формат файла не поддерживается.");
             return;
         }
+
+        schedulePath = Path.GetFullPath(schedulePath);
 
         var operation = StartNewOperation(scheduleLoad: true);
         if (operation is null)
@@ -1972,6 +1981,7 @@ public sealed class Extension : IExtension, IDisposable
     {
         // A worker may still register this captured token after the switch.
         // Disposing here would turn that harmless race into ObjectDisposedException.
+        // The linked registration remains bounded to the current media session.
         cancellation.Cancel();
     }
 
@@ -2618,7 +2628,7 @@ public sealed class Extension : IExtension, IDisposable
 
             if (active is not null && IsCurrent(active.Ticket))
                 CheckVideoFilters(active, watchdogEnabled);
-            if (hasMedia && audioPreset.Filter is not null)
+            if (hasMedia)
                 CheckAudioFilter(audioPreset, ticket, watchdogEnabled);
             else
                 ResetAudioWatchdogState();
@@ -2725,10 +2735,13 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         Interlocked.Exchange(ref _afReadFailures, 0);
-        if (FilterReadback.MatchesSingle(
+        var matches = preset.Filter is null
+            ? !ContainsLabel(filters, AudioCompressionPresets.FilterLabel)
+            : FilterReadback.MatchesSingle(
                 filters,
                 AudioCompressionPresets.FilterLabel,
-                preset.Filter!))
+                preset.Filter);
+        if (matches)
         {
             Interlocked.Exchange(ref _audioMismatchReported, 0);
             Interlocked.Exchange(ref _audioRecoveryFailures, 0);

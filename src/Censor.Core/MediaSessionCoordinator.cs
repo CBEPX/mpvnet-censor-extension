@@ -40,6 +40,7 @@ public sealed class MediaSessionCoordinator : IDisposable
         previous.Cancel();
         // A caller may still hold the canceled token; disposing its source would
         // make a later Register or linked-token creation throw unexpectedly.
+        // The source becomes collectible after those late consumers finish.
         return ticket;
     }
 
