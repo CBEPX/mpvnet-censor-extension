@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace Censor.Core;
 
@@ -100,5 +101,53 @@ public static class FilterCompiler
                     "Нормализованные интервалы должны быть отсортированы и не пересекаться.",
                     nameof(intervals));
         }
+    }
+}
+
+public static class FilterReadback
+{
+    private static readonly Regex OwnedLabelPattern = new(
+        "@censor_blur_[^:,\\s]+:",
+        RegexOptions.CultureInvariant | RegexOptions.NonBacktracking);
+
+    public static bool MatchesBlurPlan(string filters, FilterPlan plan)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+        ArgumentNullException.ThrowIfNull(plan);
+
+        var ownedLabels = FindOwnedBlurLabels(filters);
+        if (ownedLabels.Count != plan.Chunks.Count)
+            return false;
+
+        var expectedLabels = plan.Chunks
+            .Select(chunk => chunk.Label)
+            .ToHashSet(StringComparer.Ordinal);
+        return ownedLabels.Distinct(StringComparer.Ordinal).Count() == ownedLabels.Count &&
+            ownedLabels.All(expectedLabels.Contains) &&
+            plan.Chunks.All(chunk => filters.Contains(chunk.Filter, StringComparison.Ordinal));
+    }
+
+    public static IReadOnlyList<string> FindOwnedBlurLabels(string filters)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+
+        var labels = new List<string>();
+        foreach (Match match in OwnedLabelPattern.Matches(filters))
+            labels.Add(match.Value[..^1]);
+
+        return labels;
+    }
+
+    public static bool MatchesSingle(string filters, string label, string expectedFilter)
+    {
+        ArgumentNullException.ThrowIfNull(filters);
+        ArgumentException.ThrowIfNullOrWhiteSpace(label);
+        ArgumentException.ThrowIfNullOrWhiteSpace(expectedFilter);
+
+        var marker = label + ":";
+        var first = filters.IndexOf(marker, StringComparison.Ordinal);
+        return first >= 0 &&
+            first == filters.LastIndexOf(marker, StringComparison.Ordinal) &&
+            filters.Contains(expectedFilter, StringComparison.Ordinal);
     }
 }

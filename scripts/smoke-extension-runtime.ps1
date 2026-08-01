@@ -84,6 +84,21 @@ function Wait-ForFilter {
     throw "Filter '$Label' did not reach expected presence '$Present'. Current vf: $(Get-FilterText)"
 }
 
+function Wait-ForBlurIdentity {
+    $Deadline = [DateTime]::UtcNow.AddSeconds(15)
+    do {
+        $Filters = Get-FilterText
+        if ($Filters.Contains("censor_blur_000", [StringComparison]::Ordinal) -and
+            $Filters.Contains("sigma=40", [StringComparison]::Ordinal) -and
+            $Filters.Contains("steps=2", [StringComparison]::Ordinal)) {
+            return
+        }
+        Start-Sleep -Milliseconds 200
+    } while ([DateTime]::UtcNow -lt $Deadline)
+
+    throw "Blur filter did not return to the expected 40/2 identity. Current vf: $(Get-FilterText)"
+}
+
 function Wait-ForMedia {
     param([Parameter(Mandatory)][string]$ExpectedPath)
 
@@ -176,8 +191,16 @@ try {
         throw "Extension leaked pause after applying the blur graph."
     }
 
+    # IPC mutations are synchronous: the wrong same-label graph exists before
+    # the watchdog can claim a successful identity check.
     [void](Invoke-MpvCommand @("vf", "remove", "@censor_blur_000"))
-    Wait-ForFilter "censor_blur_000" $true
+    [void](Invoke-MpvCommand @(
+        "vf",
+        "add",
+        "@censor_blur_000:lavfi=[gblur=sigma=1:steps=1]"))
+    [void](Invoke-MpvCommand @("vf", "add", "@censor_blur_stale:lavfi=[vflip]"))
+    Wait-ForBlurIdentity
+    Wait-ForFilter "censor_blur_stale" $false
 
     Send-CensorMessage @("censor-disable")
     Wait-ForFilter "censor_blur_000" $false
@@ -192,7 +215,7 @@ try {
         $Output -match '(?im)(ReflectionTypeLoadException|Could not load file or assembly|error running command)') {
         throw "Extension runtime smoke reported an error:`n$Output"
     }
-    Write-Host "Extension apply, watchdog recovery, pause ownership, and disable smoke passed."
+    Write-Host "Extension apply, exact-identity watchdog recovery, pause ownership, and disable smoke passed."
 }
 catch {
     $Output = (Get-Content $StdOut, $StdErr -Raw -ErrorAction SilentlyContinue) -join "`n"

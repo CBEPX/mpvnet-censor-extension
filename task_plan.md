@@ -392,6 +392,25 @@ Opus-review проходят без практических замечаний.
 **Выход:** две сборки из разных каталогов дают одинаковый SHA, 88 Core-тестов,
 оба Windows CI и следующий полный Opus-review проходят.
 
+### 23. Исправления после пятнадцатого Claude Opus 5 review
+
+- Подтверждать не только labels, а точное содержимое всех blur-фильтров и
+  отсутствие лишних или дублированных `@censor_blur_*`.
+- Подтверждать точный аудиограф выбранного пресета, а не общий label
+  компрессора.
+- При очистке удалять все обнаруженные labels расширения, сохраняя чужие
+  пользовательские filters.
+- В runtime-smoke подменять ожидаемый blur filter графом с тем же label и
+  добавлять stale chunk; ждать восстановления параметров `40/2` и удаления
+  хвоста.
+- Не терять runtime diagnostics при пустом черновике и явно показывать источник
+  несвязанного черновика.
+- Включить подтверждение паузы в recovery cleanup и не считать штатную гонку
+  watchdog с shutdown ошибкой.
+
+**Выход:** 91 Core-тест, Release build, оба Windows CI и следующий полный
+Opus-review проходят без actionable findings.
+
 ## Обязательные проверки и review gates
 
 - Parser: malformed timestamps, `start >= end`, BOM/Unicode, metadata ambiguity, limits, SRT/VTT fixtures и round-trip.

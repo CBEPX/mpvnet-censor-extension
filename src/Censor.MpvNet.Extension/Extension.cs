@@ -596,9 +596,9 @@ public sealed class Extension : IExtension, IDisposable
             }
 
             if (!TryGetPropertyString("vf", out var filters) ||
-                labels.Any(label => !ContainsLabel(filters, label)))
+                !FilterReadback.MatchesBlurPlan(filters, plan))
             {
-                throw new InvalidOperationException("После применения mpv не сообщил обо всех созданных фильтрах.");
+                throw new InvalidOperationException("После применения mpv не подтвердил точный набор фильтров цензуры.");
             }
             filtersReady = true;
 
@@ -646,14 +646,11 @@ public sealed class Extension : IExtension, IDisposable
                 {
                     foreach (var chunk in previous.Plan.Chunks)
                         Player.CommandV("vf", "add", chunk.Filter);
-                    var previousLabels = previous.Plan.Chunks
-                        .Select(chunk => chunk.Label)
-                        .ToArray();
                     if (!TryGetPropertyString("vf", out var restoredFilters) ||
-                        previousLabels.Any(label => !ContainsLabel(restoredFilters, label)))
+                        !FilterReadback.MatchesBlurPlan(restoredFilters, previous.Plan))
                     {
                         throw new InvalidOperationException(
-                            "После отката mpv не сообщил обо всех прежних фильтрах.");
+                            "После отката mpv не подтвердил точный набор прежних фильтров.");
                     }
                     filtersReady = true;
                 }
@@ -907,9 +904,16 @@ public sealed class Extension : IExtension, IDisposable
         }
 
         InvokeWindow(window => window.SetSettings(settings));
-        _watchdog.Change(
-            settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite,
-            settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite);
+        try
+        {
+            _watchdog.Change(
+                settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite,
+                settings.WatchdogEnabled ? settings.WatchdogIntervalMs : Timeout.Infinite);
+        }
+        catch (ObjectDisposedException) when (
+            Volatile.Read(ref _stopping) != 0 || Volatile.Read(ref _disposed) != 0)
+        {
+        }
         if (SaveSettings())
         {
             Show(normalizationChanged && hasSchedule
@@ -1614,10 +1618,13 @@ public sealed class Extension : IExtension, IDisposable
 
         Player.CommandV("af", "add", preset.Filter);
         if (!TryGetPropertyString("af", out filters) ||
-            !ContainsLabel(filters, AudioCompressionPresets.FilterLabel))
+            !FilterReadback.MatchesSingle(
+                filters,
+                AudioCompressionPresets.FilterLabel,
+                preset.Filter))
         {
             throw new InvalidOperationException(
-                "mpv не подтвердил применение фильтра компрессии звука.");
+                "mpv не подтвердил точный фильтр компрессии звука.");
         }
     }
 
@@ -2141,7 +2148,10 @@ public sealed class Extension : IExtension, IDisposable
     {
         // Pinned mpv.net CommandV logs per-command errors instead of throwing,
         // so an absent label cannot stop removal of the remaining labels.
-        foreach (var label in labels)
+        var ownedLabels = labels.ToHashSet(StringComparer.Ordinal);
+        if (TryGetPropertyString("vf", out var filters))
+            ownedLabels.UnionWith(FilterReadback.FindOwnedBlurLabels(filters));
+        foreach (var label in ownedLabels)
             Player.CommandV("vf", "remove", label);
     }
 
@@ -2290,7 +2300,7 @@ public sealed class Extension : IExtension, IDisposable
             }
 
             Interlocked.Exchange(ref _vfReadFailures, 0);
-            if (active.Plan.Chunks.All(chunk => ContainsLabel(filters, chunk.Label)))
+            if (FilterReadback.MatchesBlurPlan(filters, active.Plan))
             {
                 Interlocked.Exchange(ref _recoveryFailures, 0);
                 bool clearWarning;
@@ -2384,11 +2394,10 @@ public sealed class Extension : IExtension, IDisposable
 
     private bool RecoverFilters(ActiveSchedule active)
     {
-        HoldPauseIfNeeded(active.Intervals);
-
         var filtersReady = false;
         try
         {
+            HoldPauseIfNeeded(active.Intervals);
             var labels = active.Plan.Chunks.Select(chunk => chunk.Label).ToArray();
             RemoveFilters(labels);
             foreach (var chunk in active.Plan.Chunks)
@@ -2400,9 +2409,9 @@ public sealed class Extension : IExtension, IDisposable
             }
 
             if (!TryGetPropertyString("vf", out var filters) ||
-                labels.Any(label => !ContainsLabel(filters, label)))
+                !FilterReadback.MatchesBlurPlan(filters, active.Plan))
             {
-                throw new InvalidOperationException("После восстановления mpv не сообщил обо всех созданных фильтрах.");
+                throw new InvalidOperationException("После восстановления mpv не подтвердил точный набор фильтров цензуры.");
             }
 
             filtersReady = true;
@@ -2611,6 +2620,7 @@ public sealed class Extension : IExtension, IDisposable
             ref raw) >= 0;
     }
 
+    // MpvClient marshals flag values as bool; libmpv's MPV_FORMAT_FLAG ABI uses int.
     [DllImport(
         "libmpv-2.dll",
         EntryPoint = "mpv_get_property",

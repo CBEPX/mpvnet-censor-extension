@@ -53,6 +53,51 @@ public sealed class FilterCompilerTests
         Assert.Equal(new(50, 3), BlurSettings.Maximum);
     }
 
+    [Fact]
+    public void ReadbackRequiresExactOwnedGraphAndAllowsUserFilters()
+    {
+        var plan = FilterCompiler.Compile([new(1_000, 2_000)], BlurSettings.Balanced);
+        var readback = $"@user:lavfi=[hflip],{plan.Chunks[0].Filter}";
+
+        Assert.True(FilterReadback.MatchesBlurPlan(readback, plan));
+        Assert.False(FilterReadback.MatchesBlurPlan(
+            readback.Replace("sigma=40", "sigma=1", StringComparison.Ordinal),
+            plan));
+        Assert.False(FilterReadback.MatchesBlurPlan(
+            $"{readback},@censor_blur_999:lavfi=[hflip]",
+            plan));
+        Assert.False(FilterReadback.MatchesBlurPlan($"{readback},{plan.Chunks[0].Filter}", plan));
+    }
+
+    [Fact]
+    public void FindsAllReservedBlurLabelsForCleanup()
+    {
+        Assert.Equal(
+            ["@censor_blur_000", "@censor_blur_old"],
+            FilterReadback.FindOwnedBlurLabels(
+                "@user:lavfi=[hflip],@censor_blur_000:lavfi=[gblur],@censor_blur_old:lavfi=[vflip]"));
+    }
+
+    [Fact]
+    public void SingleFilterReadbackRejectsOldOrDuplicatedGraph()
+    {
+        var expected = AudioCompressionPresets.All[1].Filter!;
+        var old = AudioCompressionPresets.All[2].Filter!;
+
+        Assert.True(FilterReadback.MatchesSingle(
+            $"@user:lavfi=[anull],{expected}",
+            AudioCompressionPresets.FilterLabel,
+            expected));
+        Assert.False(FilterReadback.MatchesSingle(
+            old,
+            AudioCompressionPresets.FilterLabel,
+            expected));
+        Assert.False(FilterReadback.MatchesSingle(
+            $"{expected},{expected}",
+            AudioCompressionPresets.FilterLabel,
+            expected));
+    }
+
     [Theory]
     [InlineData(0.001, 2)]
     [InlineData(1_025, 2)]

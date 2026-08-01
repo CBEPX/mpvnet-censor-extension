@@ -225,6 +225,8 @@ internal sealed class CensorWindow : Form
         }
         if (reconciliation == DraftReconciliationAction.KeepDirtyDraft)
         {
+            _schedule.Text =
+                $"{_schedule.Text} (черновик: {(string.IsNullOrEmpty(_sourcePath) ? "новый" : _sourcePath)})";
             RenderDraft();
             _draftState.Text = "Несохранённый черновик не связан с текущим расписанием";
             return;
@@ -895,6 +897,7 @@ internal sealed class CensorWindow : Form
             {
                 _draftDiagnostics = [];
                 _draftState.Text = "Нет черновика";
+                RenderWarnings([]);
                 return;
             }
 
