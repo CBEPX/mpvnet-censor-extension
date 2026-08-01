@@ -31,6 +31,7 @@ jobs:
         run: bash scripts/restore-mpvnet.sh
 
       - name: Restore, build, and test
+        shell: pwsh
         run: |
           dotnet restore CensorPlayer.sln --locked-mode
           dotnet build CensorPlayer.sln --configuration Release --no-restore `

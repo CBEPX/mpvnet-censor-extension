@@ -126,7 +126,7 @@ public sealed class Extension : IExtension, IDisposable
         UnsubscribePlayerEvents();
 
         StopRuntime(removeFilters: true);
-        CloseWindow();
+        CloseWindow(waitForExit: true);
         _watchdog.Dispose();
         lock (_stateLock)
         {
@@ -173,7 +173,7 @@ public sealed class Extension : IExtension, IDisposable
     private void OnShutdown() => RunSafely(() =>
     {
         StopRuntime(removeFilters: false);
-        CloseWindow();
+        CloseWindow(waitForExit: false);
     });
 
     private void OnClientMessage(string[] args)
@@ -839,7 +839,9 @@ public sealed class Extension : IExtension, IDisposable
             if (UpdateWindow("ACTIVE", pending.Ticket, token))
                 Show($"Расписание применено. Интервалов: {pending.Plan.IntervalCount}.", pending.Ticket, token);
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        catch (Exception exception) when (
+            token.IsCancellationRequested &&
+            exception is OperationCanceledException or ObjectDisposedException)
         {
         }
         catch (Exception exception)
@@ -1411,9 +1413,6 @@ public sealed class Extension : IExtension, IDisposable
                 return;
 
             previousBlur = _activeSchedule?.Plan.Blur ?? _settings.Blur;
-            if (!useCurrentSelection)
-                _settings = _settings with { Blur = settings };
-
             hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
             loadInProgress = _scheduleLoadTicket is { } loadTicket &&
                 _revisions.IsCurrent(loadTicket);
@@ -1429,10 +1428,22 @@ public sealed class Extension : IExtension, IDisposable
                 // ponytail: Compiling under the state lock is bounded and trivial for
                 // normal 10–20-scene plans; revisit only if measured workloads grow.
                 var pendingPlan = FilterCompiler.Compile(currentPending.Intervals, settings);
-                _pendingSchedule = currentPending with { Plan = pendingPlan };
-                pending = _pendingSchedule;
-                ticket = currentPending.Ticket;
+                // Invalidate an ApplyPendingScheduleAsync snapshot before replacing its plan.
+                ticket = _revisions.BeginOperation();
+                previousCancellation = _operationCancellation;
+                _operationCancellation =
+                    CancellationTokenSource.CreateLinkedTokenSource(
+                        _revisions.SessionToken);
                 token = _operationCancellation.Token;
+                _scheduleLoadTicket = null;
+                _pendingSchedule = currentPending with
+                {
+                    Ticket = ticket,
+                    Plan = pendingPlan,
+                };
+                if (_activeSchedule is { } currentActive)
+                    _activeSchedule = currentActive with { Ticket = ticket };
+                pending = _pendingSchedule;
             }
             else if (_activeSchedule is { } currentActive)
             {
@@ -1454,6 +1465,8 @@ public sealed class Extension : IExtension, IDisposable
                 ticket = _revisions.Snapshot();
                 token = _operationCancellation.Token;
             }
+            if (!useCurrentSelection)
+                _settings = _settings with { Blur = settings };
         }
 
         if (previousCancellation is not null)
@@ -2275,7 +2288,7 @@ public sealed class Extension : IExtension, IDisposable
             RunSafely(() => action.Run(window));
     }
 
-    private void CloseWindow()
+    private void CloseWindow(bool waitForExit)
     {
         CensorWindow? window;
         Thread? windowThread;
@@ -2296,7 +2309,8 @@ public sealed class Extension : IExtension, IDisposable
             }
         }
 
-        if (windowThread is not null &&
+        if (waitForExit &&
+            windowThread is not null &&
             windowThread != Thread.CurrentThread &&
             windowThread.IsAlive &&
             !windowThread.Join(ShutdownWaitTimeout))

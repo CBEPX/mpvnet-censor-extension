@@ -347,7 +347,8 @@ public static class ScheduleText
         var remainder = line[(separator + 3)..].Trim();
         var noteSeparator = remainder.IndexOf('|');
         var endText = noteSeparator >= 0 ? remainder[..noteSeparator].Trim() : remainder;
-        var note = noteSeparator >= 0 ? remainder[(noteSeparator + 1)..].Trim() : null;
+        var noteText = noteSeparator >= 0 ? remainder[(noteSeparator + 1)..].Trim() : null;
+        var note = string.IsNullOrWhiteSpace(noteText) ? null : noteText;
 
         if (!TryParseTimestamp(startText, out var startMs))
         {

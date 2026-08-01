@@ -98,6 +98,15 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void BareNoteSeparatorProducesNoNote()
+    {
+        var parsed = ScheduleText.Parse("00:00:01.000 --> 00:00:02.000 |   ");
+
+        Assert.True(parsed.IsSuccess);
+        Assert.Null(parsed.Document!.Intervals.Single().Note);
+    }
+
+    [Fact]
     public void PreservesCommentWithColonWithoutMetadataWarning()
     {
         const string text = """
