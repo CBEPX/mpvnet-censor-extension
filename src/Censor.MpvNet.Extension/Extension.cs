@@ -22,6 +22,7 @@ public sealed class Extension : IExtension, IDisposable
         "Чтобы перезаписать его, откройте вкладку «Диагностика».";
 
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly TimeSpan AuthoringCaptureTimeout = TimeSpan.FromMilliseconds(50);
     private static readonly TimeSpan DialogTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OsdGateTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ShutdownWaitTimeout = TimeSpan.FromSeconds(5);
@@ -271,7 +272,7 @@ public sealed class Extension : IExtension, IDisposable
             case CensorClientCommandKind.Authoring:
                 var capturedTimeMs = message.Argument is
                     "mark-start" or "mark-end" or "set-start" or "set-end"
-                    ? GetCurrentTimeMs()
+                    ? GetCurrentTimeMs(AuthoringCaptureTimeout)
                     : null;
                 QueueWindowAction(window =>
                     window.HandleAuthoringCommand(message.Argument!, capturedTimeMs));
@@ -1377,11 +1378,14 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private long? GetCurrentTimeMs()
+    private long? GetCurrentTimeMs() => GetCurrentTimeMs(TimeSpan.Zero);
+
+    private long? GetCurrentTimeMs(TimeSpan waitTimeout)
     {
-        // This runs synchronously on the UI thread. Never wait for a worker that
-        // may hold the gate while marshalling back into the same window.
-        if (!_filterGate.Wait(0))
+        // The UI callback passes zero to avoid waiting for a worker that may hold
+        // the gate while marshalling back into the same window. Client messages
+        // run on the thread pool and can safely wait for a short capture window.
+        if (!_filterGate.Wait(waitTimeout))
             return null;
         try
         {
