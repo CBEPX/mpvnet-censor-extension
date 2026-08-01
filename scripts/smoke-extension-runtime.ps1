@@ -140,22 +140,6 @@ function Wait-ForMedia {
     throw "mpv.net did not load the runtime-smoke media file."
 }
 
-function Set-MediaPosition {
-    param([Parameter(Mandatory)][double]$Seconds)
-
-    [void](Invoke-MpvCommand @("seek", $Seconds, "absolute", "exact"))
-    $Deadline = [DateTime]::UtcNow.AddSeconds(5)
-    do {
-        $Response = Invoke-MpvCommand @("get_property", "time-pos")
-        if ([Math]::Abs(([double]$Response.data) - $Seconds) -lt 0.25) {
-            return
-        }
-        Start-Sleep -Milliseconds 100
-    } while ([DateTime]::UtcNow -lt $Deadline)
-
-    throw "mpv.net did not seek to $Seconds seconds."
-}
-
 function Wait-ForExtension {
     $Deadline = [DateTime]::UtcNow.AddSeconds(15)
     do {
@@ -236,10 +220,8 @@ try {
     [void](Invoke-MpvCommand @("vf", "add", "@censor_smoke_user:lavfi=[hflip]"))
     Wait-ForFilter "censor_smoke_user" $true
     Wait-ForFilter "censor_blur_000" $false
-    Set-MediaPosition 1
     Send-CensorMessage @("censor-mark-start")
-    Start-Sleep -Milliseconds 1000
-    Set-MediaPosition 3
+    Start-Sleep -Milliseconds 2000
     Send-CensorMessage @("censor-mark-end")
     Start-Sleep -Milliseconds 1000
     Send-CensorMessage @("censor-apply")
