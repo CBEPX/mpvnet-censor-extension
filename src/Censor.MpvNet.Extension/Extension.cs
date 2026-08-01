@@ -595,9 +595,17 @@ public sealed class Extension : IExtension, IDisposable
                     throw new OperationCanceledException(token);
             }
 
-            if (!TryGetPropertyString("vf", out var filters) ||
-                !FilterReadback.MatchesBlurPlan(filters, plan))
+            var verified = TryGetPropertyString("vf", out var filters) &&
+                FilterReadback.MatchesBlurPlan(filters, plan);
+            if (!verified)
             {
+                if (!string.IsNullOrEmpty(filters))
+                {
+                    Terminal.WriteError(
+                        "VF_READBACK_BASE64=" +
+                        Convert.ToBase64String(Encoding.UTF8.GetBytes(filters)),
+                        LogModule);
+                }
                 throw new InvalidOperationException("После применения mpv не подтвердил точный набор фильтров цензуры.");
             }
             filtersReady = true;
