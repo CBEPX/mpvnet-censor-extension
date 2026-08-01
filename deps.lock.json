@@ -10,7 +10,7 @@
     "compileReferencePolicy": "Built from the pinned source commit with the pinned SDK and verified against the platform-specific SHA-256 below.",
     "compileReferenceSha256": {
       "osx-arm64": "00da16e2d6f2d8ed2dfc6dd406e9cd367e7fa785fc084b6849b08a59f704820a",
-      "windows-x64": ""
+      "windows-x64": "e45b85cda80fda0ae8228f273b22e2d0777e6c36dac0e4610e673d882f299580"
     },
     "portableX64": {
       "url": "https://github.com/mpvnet-player/mpv.net/releases/download/v7.1.2.0/mpv.net-v7.1.2.0-portable-x64.zip",

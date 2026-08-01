@@ -14,8 +14,9 @@
   Логи используют один дневной handle; schedule сериализуется только с consent;
   аварийные temp-файлы скрываются на Windows и очищаются по возрасту.
 - Lock reader переведён с Node.js на file-based .NET 10 helper. macOS arm64
-  compile hash закреплён; Windows x64 hash будет взят из первого CI этого цикла
-  и затем станет обязательным gate.
+  compile hash закреплён. Windows x64 hash `e45b85c…f299580` независимо
+  подтверждён push `30677612391` и PR `30677614377` и закреплён как
+  обязательный gate.
 - Локально: Release build без предупреждений и 79/79 тестов — PASS; полный
   набор format/restore/syntax проверок выполняется перед коммитом.
 - Commit `f73be51` подтверждён двумя полными Windows CI: push `30675372654` и

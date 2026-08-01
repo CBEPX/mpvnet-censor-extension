@@ -29,6 +29,10 @@ if [[ -z "$version" || -z "$tag" || -z "$source_commit" ]]; then
   echo "deps.lock.json has incomplete mpv.net values" >&2
   exit 1
 fi
+if [[ -z "$expected_reference_sha256" ]]; then
+  echo "deps.lock.json has no compile-reference SHA-256 for $platform" >&2
+  exit 1
+fi
 source_dir="$repo_root/.deps/mpvnet-source"
 reference_dir="$repo_root/.deps/mpvnet"
 
@@ -60,8 +64,7 @@ actual_reference_sha256="$(
   "$dotnet_cmd" run --file "$repo_root/scripts/deps-lock.cs" -- sha256 "$source_dll"
 )"
 printf 'compile reference sha256 (%s): %s\n' "$platform" "$actual_reference_sha256"
-if [[ -n "$expected_reference_sha256" &&
-      "$actual_reference_sha256" != "$expected_reference_sha256" ]]; then
+if [[ "$actual_reference_sha256" != "$expected_reference_sha256" ]]; then
   echo "libmpvnet.dll SHA-256 mismatch for $platform" >&2
   exit 1
 fi
