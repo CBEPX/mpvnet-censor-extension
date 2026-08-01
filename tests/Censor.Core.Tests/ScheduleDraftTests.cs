@@ -249,6 +249,22 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void FullValidationReportsUnserializableMetadataAndHeaders()
+    {
+        var draft = new ScheduleDraft(new(
+            new(SchemaVersion: 2, MediaDurationMs: 0, LeadInMs: -1),
+            [],
+            ["not a comment"]));
+
+        var diagnostics = draft.Validate();
+
+        Assert.Contains(diagnostics, item => item.Message.Contains("schema 1", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, item => item.Message.Contains("положительным", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, item => item.Message.Contains("не может быть отрицательным", StringComparison.Ordinal));
+        Assert.Contains(diagnostics, item => item.Message.Contains("однострочными комментариями", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void EnforcesConfiguredIntervalAndUtf8SizeLimits()
     {
         var tooMany = new ScheduleDraft(Document(

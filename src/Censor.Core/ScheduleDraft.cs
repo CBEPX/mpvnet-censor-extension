@@ -46,6 +46,30 @@ public sealed class ScheduleDraft
         if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
             throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
         var diagnostics = new List<ParseDiagnostic>();
+        if (document.Metadata.SchemaVersion != 1)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                0,
+                1,
+                "Поддерживается только schema 1 формата censor-timeline."));
+        }
+        if (document.Metadata.MediaDurationMs is <= 0)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                0,
+                1,
+                "Длительность фильма должна быть положительным целым числом."));
+        }
+        if (document.Metadata.LeadInMs is < 0 || document.Metadata.LeadOutMs is < 0)
+        {
+            diagnostics.Add(new(
+                DiagnosticSeverity.Error,
+                0,
+                1,
+                "Запас до и после интервала не может быть отрицательным."));
+        }
         if (document.Intervals.Count > maxIntervals)
         {
             diagnostics.Add(new(

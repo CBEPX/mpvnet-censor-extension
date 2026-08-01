@@ -1122,10 +1122,22 @@ public sealed class Extension : IExtension, IDisposable
         {
             if (!ConfirmSubtitleExport())
                 return;
-            AtomicFile.WriteUtf8Text(
-                path,
-                SubtitleScheduleText.Export(document, exportFormat),
-                Path.GetFullPath(path) + ".bak");
+            try
+            {
+                AtomicFile.WriteUtf8Text(
+                    path,
+                    SubtitleScheduleText.Export(document, exportFormat),
+                    Path.GetFullPath(path) + ".bak");
+            }
+            catch (Exception exception) when (IsFileWriteException(exception))
+            {
+                ReportFileWriteError(
+                    "schedule-export-error",
+                    "Не удалось экспортировать файл. Проверьте доступ к папке и свободное место.",
+                    exception,
+                    path);
+                return;
+            }
             Show($"Файл {Path.GetFileName(path)} экспортирован. Черновик не отмечен как сохранённый.");
             return;
         }
@@ -1134,11 +1146,24 @@ public sealed class Extension : IExtension, IDisposable
             document.Intervals,
             settings.ResolveNormalizationOptions(document.Metadata));
         var plan = FilterCompiler.Compile(normalized, settings.Blur);
-        var savedBytes = AtomicScheduleWriter.Write(
-            path,
-            document,
-            settings.Limits.MaxIntervals,
-            settings.Limits.MaxTextFileBytes);
+        byte[] savedBytes;
+        try
+        {
+            savedBytes = AtomicScheduleWriter.Write(
+                path,
+                document,
+                settings.Limits.MaxIntervals,
+                settings.Limits.MaxTextFileBytes);
+        }
+        catch (Exception exception) when (IsFileWriteException(exception))
+        {
+            ReportFileWriteError(
+                "schedule-save-error",
+                "Не удалось сохранить расписание. Проверьте доступ к файлу, блокировку другой программой и свободное место.",
+                exception,
+                path);
+            return;
+        }
         var savedHash = ComputeHash(savedBytes);
 
         var markWindowSaved = false;
@@ -1389,7 +1414,19 @@ public sealed class Extension : IExtension, IDisposable
             }, jsonOptions),
             ExtensionLog.FindFiles(Path.Combine(_localDataRoot, "Logs")),
             includeSchedule && document is not null ? ScheduleText.Serialize(document) : null);
-        DiagnosticsExporter.Export(path, snapshot, includeSchedule, _pathHashKey);
+        try
+        {
+            DiagnosticsExporter.Export(path, snapshot, includeSchedule, _pathHashKey);
+        }
+        catch (Exception exception) when (IsFileWriteException(exception))
+        {
+            ReportFileWriteError(
+                "diagnostics-export-error",
+                "Не удалось сохранить диагностический ZIP-архив. Проверьте доступ к папке и свободное место.",
+                exception,
+                path);
+            return;
+        }
         InvokeWindow(window => window.ShowDiagnosticsResult(
             "Диагностический ZIP-архив сохранён:" + Environment.NewLine + path));
         Show("Диагностика экспортирована в ZIP-архив.");
@@ -2626,7 +2663,11 @@ public sealed class Extension : IExtension, IDisposable
                 },
                 ExtensionLogLevel.Error);
             if (recoveryFailures == MaxRecoveryFailures)
-                QueueShow("Не удалось восстановить фильтры. Автовосстановление остановлено.");
+            {
+                QueueShow(
+                    "Не удалось восстановить фильтры. Автовосстановление остановлено. " +
+                    "Если воспроизведение осталось на паузе, выберите «Цензура → Отключить».");
+            }
         }
     }
 
@@ -2748,6 +2789,27 @@ public sealed class Extension : IExtension, IDisposable
             ExtensionLogLevel.Error);
         Show(message + " Подробности — в журнале mpv.net.");
     }
+
+    private void ReportFileWriteError(
+        string eventName,
+        string message,
+        Exception exception,
+        string path)
+    {
+        Terminal.WriteError(exception, LogModule);
+        _log.Write(
+            eventName,
+            _revisions.Snapshot(),
+            new Dictionary<string, object?> { ["error"] = ProtectError(exception, path) },
+            ExtensionLogLevel.Error);
+        Show(message + " Подробности — в журнале mpv.net.");
+    }
+
+    private static bool IsFileWriteException(Exception exception) =>
+        exception is IOException or
+            UnauthorizedAccessException or
+            NotSupportedException or
+            System.Security.SecurityException;
 
     private bool RecoverFilters(ActiveSchedule active)
     {

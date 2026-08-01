@@ -6,6 +6,9 @@ namespace Censor.MpvNet.Extension;
 
 internal sealed class CensorWindow : Form
 {
+    private static readonly IReadOnlyList<CensorInterval> EmptyIntervals =
+        Array.Empty<CensorInterval>();
+
     private readonly List<(string Label, BlurSettings Settings)> _blurPresets =
     [
         ("Умеренное (30 / 2)", BlurSettings.Moderate),
@@ -178,7 +181,7 @@ internal sealed class CensorWindow : Form
         IReadOnlyList<ParseDiagnostic> diagnostics,
         bool hasActiveSchedule)
     {
-        var intervals = document?.Intervals ?? [];
+        var intervals = document?.Intervals ?? EmptyIntervals;
         if (!string.Equals(_mediaPath, mediaPath, StringComparison.OrdinalIgnoreCase))
         {
             _mediaPath = mediaPath;
@@ -927,8 +930,7 @@ internal sealed class CensorWindow : Form
 
             var draftDiagnostics = _draft.Validate(
                 _settings.Limits.MaxIntervals,
-                _settings.Limits.MaxTextFileBytes,
-                checkSerializedSize: false);
+                _settings.Limits.MaxTextFileBytes);
             var errorRows = draftDiagnostics
                 .Where(item => item.Line > 0)
                 .Select(item => item.Line - 1)
@@ -991,8 +993,7 @@ internal sealed class CensorWindow : Form
         {
             var diagnostics = _draft.Validate(
                 _settings.Limits.MaxIntervals,
-                _settings.Limits.MaxTextFileBytes,
-                checkSerializedSize: false);
+                _settings.Limits.MaxTextFileBytes);
             PopulateIntervalRow(
                 _intervals.Rows[index],
                 index,
