@@ -13,7 +13,8 @@ public static class SidecarLocator
             {
                 if (!uri.IsFile)
                     return null;
-                mediaPath = uri.LocalPath;
+                if (mediaPath.StartsWith("file:", StringComparison.OrdinalIgnoreCase))
+                    mediaPath = uri.LocalPath;
             }
 
             var fullPath = Path.GetFullPath(mediaPath);

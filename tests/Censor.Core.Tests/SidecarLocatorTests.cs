@@ -17,6 +17,45 @@ public sealed class SidecarLocatorTests
     }
 
     [Theory]
+    [InlineData("Episode #3.mkv", "Episode #3.censor.txt")]
+    [InlineData("50%20.mkv", "50%20.censor.txt")]
+    [InlineData("50%25.mkv", "50%25.censor.txt")]
+    public void PreservesPathCharactersThatHaveUriSemantics(
+        string mediaName,
+        string sidecarName)
+    {
+        var mediaPath = Path.Combine(Path.GetTempPath(), mediaName);
+
+        Assert.Equal(
+            Path.Combine(Path.GetTempPath(), sidecarName),
+            SidecarLocator.SuggestCanonicalPath(mediaPath));
+    }
+
+    [Fact]
+    public void ConvertsExplicitFileUri()
+    {
+        var mediaPath = Path.Combine(Path.GetTempPath(), "Film Name.mkv");
+
+        Assert.Equal(
+            Path.Combine(Path.GetTempPath(), "Film Name.censor.txt"),
+            SidecarLocator.SuggestCanonicalPath(new Uri(mediaPath).AbsoluteUri));
+    }
+
+    [Fact]
+    public void PreservesWindowsDriveAndUncPaths()
+    {
+        if (!OperatingSystem.IsWindows())
+            return;
+
+        Assert.Equal(
+            @"C:\Movies\Episode #3.censor.txt",
+            SidecarLocator.SuggestCanonicalPath(@"C:\Movies\Episode #3.mkv"));
+        Assert.Equal(
+            @"\\server\share\50%25.censor.txt",
+            SidecarLocator.SuggestCanonicalPath(@"\\server\share\50%25.mkv"));
+    }
+
+    [Theory]
     [InlineData(null)]
     [InlineData("")]
     [InlineData("https://example.test/Film.mkv")]

@@ -63,6 +63,7 @@ public sealed class Extension : IExtension, IDisposable
     private int _recoveryFailures;
     private int _stopping;
     private int _vfReadFailures;
+    private ManualResetEvent? _watchdogShutdownWaitHandle;
 
     public Extension()
     {
@@ -129,13 +130,21 @@ public sealed class Extension : IExtension, IDisposable
 
         StopRuntime(removeFilters: true);
         CloseWindow(waitForExit: true);
-        using var watchdogStopped = new ManualResetEvent(false);
+        var watchdogStopped = new ManualResetEvent(false);
         if (_watchdog.Dispose(watchdogStopped) &&
             !watchdogStopped.WaitOne(ShutdownWaitTimeout))
         {
+            // ponytail: Keep the notification handle rooted after a rare timeout;
+            // the timer may still signal it when its hung callback finally exits.
+            // The extension is process-scoped, so one shutdown-only handle is bounded.
+            _watchdogShutdownWaitHandle = watchdogStopped;
             Terminal.WriteError(
                 "Контроль фильтров не завершился за 5 секунд.",
                 LogModule);
+        }
+        else
+        {
+            watchdogStopped.Dispose();
         }
         lock (_stateLock)
         {
@@ -1154,6 +1163,15 @@ public sealed class Extension : IExtension, IDisposable
                 settings.Limits.MaxIntervals,
                 settings.Limits.MaxTextFileBytes);
         }
+        catch (Exception exception) when (IsSchedulePreparationException(exception))
+        {
+            ReportFileWriteError(
+                "schedule-save-error",
+                "Не удалось подготовить файл интервалов. Проверьте имя файла, заголовок и интервалы.",
+                exception,
+                path);
+            return;
+        }
         catch (Exception exception) when (IsFileWriteException(exception))
         {
             ReportFileWriteError(
@@ -1282,6 +1300,15 @@ public sealed class Extension : IExtension, IDisposable
                 SubtitleScheduleText.Export(document, format),
                 Path.GetFullPath(path) + ".bak");
         }
+        catch (Exception exception) when (IsSchedulePreparationException(exception))
+        {
+            ReportFileWriteError(
+                "schedule-export-error",
+                "Не удалось подготовить экспорт. Проверьте имя файла и интервалы.",
+                exception,
+                path);
+            return;
+        }
         catch (Exception exception) when (IsFileWriteException(exception))
         {
             ReportFileWriteError(
@@ -1342,6 +1369,8 @@ public sealed class Extension : IExtension, IDisposable
 
     private long? GetCurrentTimeMs()
     {
+        // This runs synchronously on the UI thread. Never wait for a worker that
+        // may hold the gate while marshalling back into the same window.
         if (!_filterGate.Wait(0))
             return null;
         try
@@ -2841,11 +2870,17 @@ public sealed class Extension : IExtension, IDisposable
         if (FilterReadback.MatchesBlurPlan(filters, active.Plan))
         {
             Interlocked.Exchange(ref _recoveryFailures, 0);
-            bool clearWarning;
+            string? restoredStatus;
             lock (_stateLock)
-                clearWarning = _windowStatus == "WARNING";
-            if (clearWarning)
-                UpdateWindow("ACTIVE", active.Ticket);
+            {
+                restoredStatus = _windowStatus != "WARNING"
+                    ? null
+                    : _pendingSchedule is null
+                        ? "ACTIVE"
+                        : "READY TO APPLY";
+            }
+            if (restoredStatus is not null)
+                UpdateWindow(restoredStatus, active.Ticket);
             return;
         }
 
@@ -3040,6 +3075,9 @@ public sealed class Extension : IExtension, IDisposable
             UnauthorizedAccessException or
             NotSupportedException or
             System.Security.SecurityException;
+
+    private static bool IsSchedulePreparationException(Exception exception) =>
+        exception is ArgumentException or InvalidOperationException;
 
     private bool RecoverFilters(ActiveSchedule active)
     {
