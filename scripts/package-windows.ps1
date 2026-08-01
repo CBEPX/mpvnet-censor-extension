@@ -40,11 +40,9 @@ $StageParent = Join-Path $OutputRoot "stage"
 $StageRoot = Join-Path $StageParent "CensorPlayer-$Version-win-x64"
 $ArtifactRoot = Join-Path $OutputRoot "release"
 
-if (-not $OutputRoot.StartsWith(
-    $ArtifactsPrefix,
-    [StringComparison]::OrdinalIgnoreCase
-)) {
-    throw "OutputDirectory must resolve below $ArtifactsRoot."
+if (-not $OutputRoot.Equals($ArtifactsRoot, [StringComparison]::OrdinalIgnoreCase) -and
+    -not $OutputRoot.StartsWith($ArtifactsPrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "OutputDirectory must resolve to $ArtifactsRoot or one of its subdirectories."
 }
 if ([string]::IsNullOrWhiteSpace($Commit)) {
     $Commit = (& git -C $RepoRoot rev-parse HEAD).Trim()

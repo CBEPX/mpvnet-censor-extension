@@ -2,6 +2,23 @@
 
 ## 2026-08-01
 
+- Финальный head восьмого цикла `d8cf0dc` подтверждён Windows CI push
+  `30677800019` и PR `30677801518`; оба прошли закреплённый compile SHA,
+  build/test/loader, package, аудиографы и installer smoke.
+- Девятый полный `cc review` на `claude-opus-5` нашёл рассинхронизацию blur
+  preset при ошибке apply, несогласованный settings snapshot, отрицательный
+  seek/editor timestamp, неверную ширину mpv flag и пробел в runtime-тестах.
+- Владелец продукта уточнил реальный профиль: 10–20 сцен на фильм. Виртуальный
+  режим таблицы для 10 000 строк не добавляется; это число остаётся защитным
+  пределом входных данных.
+- Blur сохраняется после подтверждённого apply и откатывает settings/UI при
+  ошибке. Загрузка расписания использует один снимок; отрицательная метка
+  времени черновика и переход к нулю согласованы; флаг mpv передаётся как `int`.
+- Добавлена Windows CI-проверка настоящего runtime расширения: применение
+  sidecar, чтение `vf`, владение паузой, восстановление watchdog, Disable и
+  сохранение чужого фильтра.
+- Локально: Release build без предупреждений, format и 81/81 тест — PASS;
+  Windows runtime smoke и повторный Opus review ожидают следующего push.
 - Commit `5cbef7b` подтверждён двумя полными Windows CI: push `30676321729` и
   PR `30676323633`. Оба прошли 78 тестов, loader, package, аудиографы,
   release verification и installer smoke.
@@ -117,8 +134,8 @@
   `30669608246` доказал, что DLL не bit-identical между платформами. Binary pin
   удалён сознательно; точный source commit и чистый checkout обязательны.
 - Node.js явно указан как build prerequisite для чтения `deps.lock.json`.
-- Large-draft validation cache и zero-copy `Freeze` намеренно сохранены: они
-  закрывают уже подтверждённый сценарий редактирования 10 000 интервалов.
+- Large-draft validation cache и zero-copy `Freeze` сохранены как защита от
+  чрезмерного входного файла. Целевая UI-нагрузка — обычные 10–20 сцен фильма.
 - Первый полный `cc review` на `claude-opus-5` одобрил session/revision и
   filter transaction design, но нашёл шесть edge findings: privacy ZIP,
   отказ логирования, shutdown wait, stale recovery, large-draft UI и очередь

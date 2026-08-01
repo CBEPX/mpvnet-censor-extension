@@ -11,6 +11,7 @@ public static class ScheduleFileKinds
     public static IReadOnlyList<string> SidecarSuffixes { get; } =
         Array.AsReadOnly([CanonicalSuffix, ".censor" + SrtSuffix, ".censor" + WebVttSuffix]);
 
+    // Manual import accepts ordinary subtitle files; auto-discovery remains .censor.* only.
     public static bool IsSupportedPath(string? path) =>
         IsCanonicalPath(path) || TryGetSubtitleFormat(path, out _);
 

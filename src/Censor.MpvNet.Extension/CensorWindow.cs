@@ -300,6 +300,23 @@ internal sealed class CensorWindow : Form
         }
     }
 
+    public void SetBlurPreset(BlurSettings settings)
+    {
+        _rendering = true;
+        try
+        {
+            var index = EnsureBlurPreset(settings);
+            while (_blurPreset.Items.Count < _blurPresets.Count)
+                _blurPreset.Items.Add(_blurPresets[_blurPreset.Items.Count].Label);
+            _settings = _settings with { Blur = settings };
+            _blurPreset.SelectedIndex = index;
+        }
+        finally
+        {
+            _rendering = false;
+        }
+    }
+
     public void SetSettings(ExtensionSettings settings)
     {
         ArgumentNullException.ThrowIfNull(settings);
@@ -800,15 +817,15 @@ internal sealed class CensorWindow : Form
             CultureInfo.InvariantCulture) ?? "";
         var timestampValid = column switch
         {
-            "start" => ScheduleText.TryParseTimestamp(text.AsSpan(), out start),
-            "end" => ScheduleText.TryParseTimestamp(text.AsSpan(), out end),
+            "start" => ScheduleText.TryParseDraftTimestamp(text, out start),
+            "end" => ScheduleText.TryParseDraftTimestamp(text, out end),
             _ => true,
         };
         if (!timestampValid)
         {
             DeferRender(
                 e.RowIndex,
-                "Формат времени: ЧЧ:ММ:СС.мс",
+                "Формат времени: ЧЧ:ММ:СС.мс; минус ставится перед часами.",
                 renderSelectedOnly: true);
             return;
         }

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -392,17 +393,18 @@ public sealed class Extension : IExtension, IDisposable
     {
         try
         {
+            var settings = _settings;
             var totalTimer = Stopwatch.StartNew();
             UpdateWindow("LOADING", ticket, token);
-            if (new FileInfo(schedulePath).Length > _settings.Limits.MaxTextFileBytes)
+            if (new FileInfo(schedulePath).Length > settings.Limits.MaxTextFileBytes)
                 throw new InvalidDataException(
-                    $"Размер расписания превышает {_settings.Limits.MaxTextFileBytes} байт.");
+                    $"Размер расписания превышает {settings.Limits.MaxTextFileBytes} байт.");
             var bytes = await File.ReadAllBytesAsync(schedulePath, token).ConfigureAwait(false);
             var text = StrictUtf8.GetString(bytes);
             var sourceHash = ComputeHash(bytes);
             token.ThrowIfCancellationRequested();
             var parseTimer = Stopwatch.StartNew();
-            var parsed = Parse(schedulePath, text);
+            var parsed = Parse(schedulePath, text, settings.Limits);
             parseTimer.Stop();
             token.ThrowIfCancellationRequested();
             if (!parsed.IsSuccess)
@@ -432,7 +434,9 @@ public sealed class Extension : IExtension, IDisposable
                     "Один или несколько интервалов выходят за длительность фильма."));
             }
             token.ThrowIfCancellationRequested();
-            if (!MatchesCurrentDuration(document.Metadata.MediaDurationMs))
+            if (!MatchesCurrentDuration(
+                    document.Metadata.MediaDurationMs,
+                    settings.DurationToleranceMs))
             {
                 token.ThrowIfCancellationRequested();
                 var applyAnyway = !automatic && ConfirmDurationMismatch();
@@ -453,8 +457,8 @@ public sealed class Extension : IExtension, IDisposable
 
             var normalized = ScheduleNormalizer.Normalize(
                 document.Intervals,
-                _settings.ResolveNormalizationOptions(document.Metadata));
-            var blurSettings = _settings.Blur;
+                settings.ResolveNormalizationOptions(document.Metadata));
+            var blurSettings = settings.Blur;
             var compileTimer = Stopwatch.StartNew();
             var plan = FilterCompiler.Compile(normalized, blurSettings);
             compileTimer.Stop();
@@ -465,7 +469,7 @@ public sealed class Extension : IExtension, IDisposable
                 {
                     ["schedulePath"] = ExtensionLog.ProtectPath(
                         schedulePath,
-                        _settings.Logging.IncludePaths),
+                        settings.Logging.IncludePaths),
                     ["sourceIntervals"] = document.Intervals.Count,
                     ["normalizedIntervals"] = normalized.Count,
                     ["warnings"] = diagnostics.Count,
@@ -660,14 +664,14 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
-    private bool MatchesCurrentDuration(long? expectedMs)
+    private bool MatchesCurrentDuration(long? expectedMs, long toleranceMs)
     {
         if (expectedMs is null)
             return true;
 
         lock (_stateLock)
             return _currentDurationMs is { } actualMs &&
-                Math.Abs(actualMs - expectedMs.Value) <= _settings.DurationToleranceMs;
+                Math.Abs(actualMs - expectedMs.Value) <= toleranceMs;
     }
 
     private void LoadManualSchedule(string schedulePath)
@@ -1083,7 +1087,7 @@ public sealed class Extension : IExtension, IDisposable
 
     private void SeekTo(long milliseconds)
     {
-        ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
+        milliseconds = Math.Max(0, milliseconds);
         _filterGate.Wait();
         try
         {
@@ -1237,29 +1241,41 @@ public sealed class Extension : IExtension, IDisposable
     {
         ActiveSchedule? active;
         PendingSchedule? pending;
+        FilterPlan? activePlan;
+        BlurSettings previousBlur;
         CancellationToken token;
         OperationTicket ticket;
         CancellationTokenSource previousCancellation;
         while (true)
         {
+            ActiveSchedule? observedActive;
             PendingSchedule? observedPending;
             lock (_stateLock)
             {
                 if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
                     return;
+                previousBlur = _settings.Blur;
+                observedActive = _activeSchedule;
                 observedPending = _pendingSchedule;
             }
 
             var pendingPlan = observedPending is null
                 ? null
                 : FilterCompiler.Compile(observedPending.Intervals, settings);
+            activePlan = observedActive is null
+                ? null
+                : FilterCompiler.Compile(observedActive.Intervals, settings);
 
             lock (_stateLock)
             {
                 if (Volatile.Read(ref _stopping) != 0 || _settings.Blur == settings)
                     return;
-                if (!ReferenceEquals(_pendingSchedule, observedPending))
+                if (_settings.Blur != previousBlur ||
+                    !ReferenceEquals(_activeSchedule, observedActive) ||
+                    !ReferenceEquals(_pendingSchedule, observedPending))
+                {
                     continue;
+                }
 
                 _settings = _settings with { Blur = settings };
                 ticket = _revisions.BeginOperation();
@@ -1286,37 +1302,37 @@ public sealed class Extension : IExtension, IDisposable
 
         previousCancellation.Cancel();
         previousCancellation.Dispose();
-        SaveSettings();
 
         if (pending is not null)
         {
+            SaveSettings();
             UpdateWindow("READY TO APPLY", ticket, token);
             return;
         }
 
         if (active is null)
         {
+            SaveSettings();
             UpdateWindow("NO SCHEDULE", ticket, token);
             return;
         }
 
-        try
-        {
-            var plan = FilterCompiler.Compile(active.Intervals, settings);
-            UpdateWindow("APPLYING", ticket, token);
-            _ = ApplyBlurPresetAsync(ticket, active, plan, token);
-        }
-        catch (Exception exception)
-        {
-            Terminal.WriteError(exception, LogModule);
-            UpdateWindow("ERROR", ticket, token);
-        }
+        UpdateWindow("APPLYING", ticket, token);
+        _ = ApplyBlurPresetAsync(
+            ticket,
+            active,
+            activePlan!,
+            settings,
+            previousBlur,
+            token);
     }
 
     private async Task ApplyBlurPresetAsync(
         OperationTicket ticket,
         ActiveSchedule active,
         FilterPlan plan,
+        BlurSettings requestedBlur,
+        BlurSettings previousBlur,
         CancellationToken token)
     {
         try
@@ -1330,17 +1346,56 @@ public sealed class Extension : IExtension, IDisposable
                 active.Intervals,
                 active.Diagnostics,
                 token).ConfigureAwait(false);
-            UpdateWindow("ACTIVE", ticket, token);
+            if (UpdateWindow("ACTIVE", ticket, token))
+                SaveSettings();
+            else
+                SaveBlurPresetIfStillSelected(requestedBlur);
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
+            SaveBlurPresetIfStillSelected(requestedBlur);
         }
         catch (Exception exception)
         {
             Terminal.WriteError(exception, LogModule);
+            var reverted = RevertBlurPreset(ticket, requestedBlur, previousBlur);
             if (UpdateWindow("ERROR", ticket, token))
-                Show("Не удалось изменить степень размытия. Проверьте состояние фильтра.", ticket, token);
+            {
+                Show(
+                    reverted
+                        ? "Не удалось изменить степень размытия. Возвращена предыдущая настройка; проверьте состояние фильтра."
+                        : "Не удалось изменить степень размытия. Проверьте состояние фильтра.",
+                    ticket,
+                    token);
+            }
         }
+    }
+
+    private bool RevertBlurPreset(
+        OperationTicket ticket,
+        BlurSettings requestedBlur,
+        BlurSettings previousBlur)
+    {
+        lock (_stateLock)
+        {
+            if (!IsCurrent(ticket) || _settings.Blur != requestedBlur)
+                return false;
+            _settings = _settings with { Blur = previousBlur };
+        }
+
+        InvokeWindow(window => window.SetBlurPreset(previousBlur));
+        SaveSettings();
+        return true;
+    }
+
+    private void SaveBlurPresetIfStillSelected(BlurSettings requestedBlur)
+    {
+        lock (_stateLock)
+        {
+            if (Volatile.Read(ref _stopping) != 0 || _settings.Blur != requestedBlur)
+                return;
+        }
+        SaveSettings();
     }
 
     private void ChangeAudioCompressionPreset(string presetId)
@@ -1946,9 +2001,11 @@ public sealed class Extension : IExtension, IDisposable
     private bool IsCurrent(OperationTicket ticket) =>
         Volatile.Read(ref _stopping) == 0 && _revisions.IsCurrent(ticket);
 
-    private ParseResult Parse(string path, string text)
+    private static ParseResult Parse(
+        string path,
+        string text,
+        SettingsLimits limits)
     {
-        var limits = _settings.Limits;
         ParseResult result;
         if (ScheduleFileKinds.TryGetSubtitleFormat(path, out var subtitleFormat))
             result = SubtitleScheduleText.Import(
@@ -2403,14 +2460,14 @@ public sealed class Extension : IExtension, IDisposable
         if (Player.Handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
             return false;
 
-        var error = mpv_get_property(
+        var error = mpv_get_property_flag(
             Player.Handle,
             GetUtf8Bytes(name),
             mpv_format.MPV_FORMAT_FLAG,
-            out IntPtr raw);
+            out var raw);
         if (error < 0)
             return false;
-        value = raw.ToInt32() != 0;
+        value = raw != 0;
         return true;
     }
 
@@ -2419,13 +2476,35 @@ public sealed class Extension : IExtension, IDisposable
         if (Player.Handle == IntPtr.Zero || Volatile.Read(ref _stopping) != 0)
             return false;
 
-        long raw = value ? 1 : 0;
-        return mpv_set_property(
+        var raw = value ? 1 : 0;
+        return mpv_set_property_flag(
             Player.Handle,
             GetUtf8Bytes(name),
             mpv_format.MPV_FORMAT_FLAG,
             ref raw) >= 0;
     }
+
+    [DllImport(
+        "libmpv-2.dll",
+        EntryPoint = "mpv_get_property",
+        ExactSpelling = true,
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int mpv_get_property_flag(
+        nint handle,
+        byte[] name,
+        mpv_format format,
+        out int value);
+
+    [DllImport(
+        "libmpv-2.dll",
+        EntryPoint = "mpv_set_property",
+        ExactSpelling = true,
+        CallingConvention = CallingConvention.Cdecl)]
+    private static extern int mpv_set_property_flag(
+        nint handle,
+        byte[] name,
+        mpv_format format,
+        ref int value);
 
     private static bool ContainsLabel(string filters, string label) =>
         filters.Contains(label + ":", StringComparison.Ordinal);

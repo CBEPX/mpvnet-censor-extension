@@ -60,7 +60,8 @@ source-provenance gate.
 - Разобрать UTF-8 `*.censor.txt`, metadata, dot/comma timestamps, notes и неизвестную необязательную metadata с line/column diagnostics.
 - Добавить минимальные SRT/WebVTT import/export adapters: cue → blur interval, cue text → note.
 - Реализовать validation, lead-in/out, offset, clamp к нулю, sort, overlap/`merge_gap_ms` merge и canonical UTF-8 без BOM serializer.
-- Ограничить файл 2 MiB и 10 000 исходных интервалов; сохранять atomically через temp + replace с backup.
+- Ограничить файл 2 MiB и 10 000 исходных интервалов как защитным пределом;
+  типичный фильм содержит 10–20 сцен. Сохранять atomically через temp + replace с backup.
 - Использовать xUnit и FsCheck.Xunit; отдельный fuzz dependency не добавлять до измеримой необходимости.
 
 **Выход:** round-trip fixtures и deterministic unit/property/fuzz checks проходят; повреждённый input не меняет активную модель и не портит существующий файл.
@@ -170,7 +171,8 @@ actionable findings.
   `censor-diagnostics` из примера.
 - Удалить лишний Extension writer wrapper и generic `Dispatch` overloads,
   объединить test helper и зафиксировать порядок блокировок. Validation cache
-  и zero-copy `Freeze` сохранить как защиту сценария с 10 000 интервалов.
+  и zero-copy `Freeze` сохранить как защиту от чрезмерного входного файла,
+  не считая 10 000 строк целевой нагрузкой UI.
 - Не использовать общий `compileReferenceSha256`: одинаковый source commit и
   SDK дают разные DLL на macOS и Windows. Закреплять commit и требовать чистый
   mpv.net source checkout перед каждой сборкой.
@@ -188,7 +190,7 @@ actionable findings.
   обязательный readback после изменения.
 - Ограничить ожидание OSD на filter gate до 250 мс: потеря уведомления не должна
   задерживать media lifecycle.
-- Обновлять runtime warnings без перерисовки 10 000 строк, передавать окну
+- Обновлять runtime warnings без лишней перерисовки таблицы, передавать окну
   корневой каталог данных напрямую и синхронизировать dispose operation token.
 - Удалить устаревшую команду из README и пояснить намеренную single-DLL
   компиляцию Core. Node.js оставить: он читает единый `deps.lock.json`, а его
@@ -285,6 +287,24 @@ merge.
 **Выход:** локальные тесты и оба Windows CI подтверждают новую UI/runtime/build
 логику, Windows SHA добавлен в lock file, полный `cc review` на
 `claude-opus-5` не оставляет замечаний.
+
+### 17. Исправления после девятого Claude Opus 5 review
+
+- Считать 10–20 интервалов обычной нагрузкой редактора; не добавлять виртуальный
+  режим таблицы ради защитного лимита 10 000 строк и убрать такую проверку из Phase 0.
+- Сохранять пресет размытия только после подтверждённого применения к рабочему
+  графу; при ошибке
+  синхронно возвращать runtime settings и ComboBox к предыдущему значению.
+- Брать один снимок настроек на загрузку расписания, ограничивать отрицательный
+  seek нулём и разрешить редактору повторно разобрать показанное им отрицательное
+  время.
+- Передавать `MPV_FORMAT_FLAG` как нативный 32-битный `int`, пояснить намеренный
+  ручной импорт обычных субтитров и исправить корневой artifacts path guard.
+- Добавить CI-проверку с настоящим закреплённым mpv.net для применения, паузы,
+  восстановления watchdog, Disable и сохранения чужого `vf`.
+
+**Выход:** 81 Core-тест, Release build, оба Windows CI и повторный полный
+`cc review` на `claude-opus-5` проходят без actionable findings.
 
 ## Обязательные проверки и review gates
 

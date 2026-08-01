@@ -7,6 +7,17 @@ namespace Censor.Core.Tests;
 
 public sealed class ScheduleTextTests
 {
+    [Theory]
+    [InlineData("00:00:01.250", 1_250)]
+    [InlineData("-00:00:01.250", -1_250)]
+    public void ParsesDraftTimestampsRenderedByTheEditor(string text, long expected)
+    {
+        Assert.True(ScheduleText.TryParseDraftTimestamp(text, out var actual));
+        Assert.Equal(expected, actual);
+        if (expected < 0)
+            Assert.False(ScheduleText.TryParseTimestamp(text, out _));
+    }
+
     [Fact]
     public void ParsesCanonicalFixture()
     {

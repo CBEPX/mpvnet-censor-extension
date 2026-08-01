@@ -236,7 +236,7 @@ public static class ScheduleText
         return builder.ToString();
     }
 
-    internal static bool TryParseTimestamp(ReadOnlySpan<char> value, out long milliseconds)
+    public static bool TryParseTimestamp(ReadOnlySpan<char> value, out long milliseconds)
     {
         milliseconds = 0;
         if (value.Length != 12 ||
@@ -258,6 +258,20 @@ public static class ScheduleText
             ((long)minutes * 60_000) +
             ((long)seconds * 1_000) +
             millis);
+        return true;
+    }
+
+    public static bool TryParseDraftTimestamp(
+        ReadOnlySpan<char> value,
+        out long milliseconds)
+    {
+        var negative = value.Length > 0 && value[0] == '-';
+        if (negative)
+            value = value[1..];
+        if (!TryParseTimestamp(value, out milliseconds))
+            return false;
+        if (negative)
+            milliseconds = -milliseconds;
         return true;
     }
 

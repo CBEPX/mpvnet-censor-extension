@@ -66,6 +66,12 @@ jobs:
           ./scripts/smoke-audio-filters.ps1
           -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
 
+      - name: Smoke extension runtime on pinned mpv.net
+        shell: pwsh
+        run: >-
+          ./scripts/smoke-extension-runtime.ps1
+          -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+
       - name: Verify release artifacts
         shell: pwsh
         run: ./scripts/verify-release-artifacts.ps1 -ArtifactDirectory artifacts/windows/release
