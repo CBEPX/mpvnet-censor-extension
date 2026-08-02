@@ -842,9 +842,9 @@ internal sealed class CensorWindow : Form
 
     private void AddInterval()
     {
-        if (!HasCurrentMedia())
+        if (!CanEditCurrentMedia())
         {
-            Warn("Сначала откройте фильм.");
+            WarnCannotEdit();
             return;
         }
         CommitCurrentCellEdit();
@@ -918,7 +918,10 @@ internal sealed class CensorWindow : Form
     private void CaptureBoundary(bool start, long? capturedTimeMs = null)
     {
         if (!CanEditCurrentMedia())
+        {
+            WarnCannotEdit();
             return;
+        }
         if (_draft is null || SelectedIndex() is not { } index)
             return;
         if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
