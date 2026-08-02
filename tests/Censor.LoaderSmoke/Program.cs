@@ -107,7 +107,7 @@ static void RunUiContractSmoke(Assembly assembly)
                 throw new InvalidOperationException("The watchdog setting does not describe both protected filters.");
             }
 
-            VerifyDiscardClearsEditor(assembly, window);
+            VerifyEditorWorkflow(assembly, window);
         }
         catch (Exception exception)
         {
@@ -125,7 +125,7 @@ static void RunUiContractSmoke(Assembly assembly)
         throw new InvalidOperationException("The Windows editor contract smoke failed.", failure);
 }
 
-static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
+static void VerifyEditorWorkflow(Assembly assembly, Form window)
 {
     var parse = assembly.GetType("Censor.Core.ScheduleText", throwOnError: true)!
         .GetMethod("Parse", BindingFlags.Public | BindingFlags.Static)!;
@@ -386,17 +386,22 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     }
 
     var warnings = new List<string>();
-    window.GetType().GetProperty("WarningRequested")!.SetValue(
+    var warningSinkProperty = window.GetType().GetProperty("WarningSink")!;
+    warningSinkProperty.SetValue(
         window,
         (Action<string>)warnings.Add);
     var handleCommand = window.GetType().GetMethod("HandleAuthoringCommand")!;
+    var draftState = (Label)window.GetType().GetField(
+        "_draftState",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
     handleCommand.Invoke(window, ["set-start", 1_000L]);
     handleCommand.Invoke(window, ["previous", null]);
     if (!warnings.SequenceEqual(
             [
                 "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
-                "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
-            ]))
+            ]) ||
+        draftState.Text !=
+            "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
     {
         throw new InvalidOperationException(
             "Blocked authoring commands did not explain the detached draft.");
@@ -408,7 +413,8 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     warnings.Clear();
     handleCommand.Invoke(window, ["set-start", 1_000L]);
     handleCommand.Invoke(window, ["previous", null]);
-    if (!warnings.SequenceEqual(["Сначала добавьте интервал.", "Сначала добавьте интервал."]))
+    if (!warnings.SequenceEqual(["Сначала добавьте интервал."]) ||
+        draftState.Text != "Сначала добавьте интервал.")
     {
         throw new InvalidOperationException(
             "Authoring commands did not explain that the draft is empty.");
@@ -420,12 +426,15 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     grid.CurrentCell = null;
     grid.ClearSelection();
     warnings.Clear();
-    handleCommand.Invoke(window, ["set-start", 1_000L]);
+    window.GetType().GetMethod(
+        "CaptureBoundary",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [true, 1_000L]);
     if (!warnings.SequenceEqual(["Сначала выберите интервал."]))
     {
         throw new InvalidOperationException(
             "Boundary editing did not explain that no interval is selected.");
     }
+    warningSinkProperty.SetValue(window, null);
 }
 
 static IEnumerable<Control> Descendants(Control root)

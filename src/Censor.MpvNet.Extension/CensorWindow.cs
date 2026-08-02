@@ -135,7 +135,6 @@ internal sealed class CensorWindow : Form
     private FlowLayoutPanel _primaryActions = null!;
     private bool _allowClose;
     private bool _rendering;
-    private bool _warningVisible;
     private long? _pendingStartMs;
     private string? _mediaPath;
     private long _mediaSessionId;
@@ -241,8 +240,9 @@ internal sealed class CensorWindow : Form
     public event Action<string, Exception>? PersistenceError;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
+    // Loader-smoke seam: capture warnings without opening modal dialogs.
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Action<string>? WarningRequested { get; set; }
+    public Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
         string? mediaPath,
@@ -876,9 +876,9 @@ internal sealed class CensorWindow : Form
 
     private void DuplicateSelected()
     {
-        if (_draft is null || SelectedIndex() is not { } index)
+        if (!TryGetEditableInterval(out var index))
             return;
-        _draft.Duplicate(index);
+        _draft!.Duplicate(index);
         Changed(selectedIndex: index + 1);
     }
 
@@ -900,7 +900,7 @@ internal sealed class CensorWindow : Form
 
     private void SplitSelected()
     {
-        if (_draft is null || SelectedIndex() is not { } index)
+        if (!TryGetEditableInterval(out var index))
             return;
         if (CurrentTimeRequested?.Invoke() is not { } position)
         {
@@ -909,7 +909,7 @@ internal sealed class CensorWindow : Form
         }
         try
         {
-            _draft.Split(index, position);
+            _draft!.Split(index, position);
             Changed(selectedIndex: index);
         }
         catch (ArgumentOutOfRangeException exception)
@@ -920,27 +920,14 @@ internal sealed class CensorWindow : Form
 
     private void CaptureBoundary(bool start, long? capturedTimeMs = null)
     {
-        if (!CanEditCurrentMedia())
-        {
-            WarnCannotEdit();
+        if (!TryGetEditableInterval(out var index))
             return;
-        }
-        if (_draft is null || _draft.Document.Intervals.Count == 0)
-        {
-            Warn("Сначала добавьте интервал.");
-            return;
-        }
-        if (SelectedIndex() is not { } index)
-        {
-            Warn("Сначала выберите интервал.");
-            return;
-        }
         if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
         {
             Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
             return;
         }
-        var interval = _draft.Document.Intervals[index];
+        var interval = _draft!.Document.Intervals[index];
         _draft.Update(
             index,
             start ? position : interval.StartMs,
@@ -951,11 +938,11 @@ internal sealed class CensorWindow : Form
 
     private void ShiftSelected(bool start, long delta)
     {
-        if (_draft is null || SelectedIndex() is not { } index)
+        if (!TryGetEditableInterval(out var index))
             return;
         try
         {
-            _draft.ShiftBoundary(index, start, delta);
+            _draft!.ShiftBoundary(index, start, delta);
             Changed(selectedIndex: index, renderSelectedOnly: true);
         }
         catch (OverflowException)
@@ -1035,12 +1022,14 @@ internal sealed class CensorWindow : Form
     {
         if (!CanEditCurrentMedia())
         {
-            WarnCannotEdit();
+            _draftState.Text = HasDetachedDraft()
+                ? GetDetachedDraftActionMessage()
+                : "Сначала откройте фильм.";
             return;
         }
         if (_draft is null || _draft.Document.Intervals.Count == 0)
         {
-            Warn("Сначала добавьте интервал.");
+            _draftState.Text = "Сначала добавьте интервал.";
             return;
         }
         var current = SelectedIndex() ?? (direction > 0 ? -1 : 0);
@@ -1642,6 +1631,28 @@ internal sealed class CensorWindow : Form
 
     private bool CanEditCurrentMedia() => HasCurrentMedia() && !HasDetachedDraft();
 
+    private bool TryGetEditableInterval(out int index)
+    {
+        index = -1;
+        if (!CanEditCurrentMedia())
+        {
+            WarnCannotEdit();
+            return false;
+        }
+        if (_draft is null || _draft.Document.Intervals.Count == 0)
+        {
+            Warn("Сначала добавьте интервал.");
+            return false;
+        }
+        if (SelectedIndex() is not { } selected)
+        {
+            Warn("Сначала выберите интервал.");
+            return false;
+        }
+        index = selected;
+        return true;
+    }
+
     private static ScheduleDocument CreateNewDocument(
         string mediaPath,
         long? mediaDurationMs) =>
@@ -1879,27 +1890,17 @@ internal sealed class CensorWindow : Form
 
     private void Warn(string message)
     {
-        if (WarningRequested is { } warningRequested)
+        if (WarningSink is { } warningSink)
         {
-            warningRequested(message);
+            warningSink(message);
             return;
         }
-        if (_warningVisible)
-            return;
-        try
-        {
-            _warningVisible = true;
-            MessageBox.Show(
-                this,
-                message,
-                "CensorPlayer",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Warning);
-        }
-        finally
-        {
-            _warningVisible = false;
-        }
+        MessageBox.Show(
+            this,
+            message,
+            "CensorPlayer",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
     }
 
     private sealed record SidecarChoice(string Name, string Path);
