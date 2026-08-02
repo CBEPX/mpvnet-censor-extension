@@ -141,6 +141,13 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     var parsedType = parsed.GetType();
     var document = parsedType.GetProperty("Document")!.GetValue(parsed)!;
     var diagnostics = parsedType.GetProperty("Diagnostics")!.GetValue(parsed)!;
+    var warningSinkProperty = window.GetType().GetProperty(
+        "WarningSink",
+        BindingFlags.Instance | BindingFlags.NonPublic)!;
+    warningSinkProperty.SetValue(
+        window,
+        (Action<string>)(message => throw new InvalidOperationException(
+            $"Unexpected Warn() modal: {message}")));
     window.GetType().GetMethod("UpdateState")!.Invoke(
         window,
         [
@@ -394,13 +401,6 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     var authoringNotice = (Label)window.GetType().GetField(
         "_authoringNotice",
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-    var warningSinkProperty = window.GetType().GetProperty(
-        "WarningSink",
-        BindingFlags.Instance | BindingFlags.NonPublic)!;
-    warningSinkProperty.SetValue(
-        window,
-        (Action<string>)(message => throw new InvalidOperationException(
-            $"Unexpected modal authoring warning: {message}")));
     try
     {
         var detachedState = draftState.Text;
@@ -443,6 +443,24 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         }
 
         window.Show();
+        detachedDraft.GetType().GetMethod("Delete")!.Invoke(
+            detachedDraft,
+            [Enumerable.Repeat(0, 1)]);
+        window.GetType().GetMethod(
+            "RenderDraft",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+        var emptyState = (Label)window.GetType().GetField(
+            "_emptyState",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        if (grid.Rows.Count != 0 ||
+            emptyState.Visible != true ||
+            emptyState.Text !=
+                "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
+        {
+            throw new InvalidOperationException(
+                "An empty detached draft did not retain its actionable guidance.");
+        }
+
         window.GetType().GetMethod(
             "UseDraftForCurrentMedia",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
@@ -451,9 +469,6 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             throw new InvalidOperationException(
                 "Reattaching a draft did not clear stale authoring feedback.");
         }
-        window.GetType().GetMethod(
-            "ReplaceDraftFromRuntime",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
         notifications.Clear();
         var emptyDraftState = draftState.Text;
         handleCommand.Invoke(window, ["set-start", 1_000L]);

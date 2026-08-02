@@ -253,7 +253,8 @@ internal sealed class CensorWindow : Form
     public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
-    // Loader-smoke seam: fail instead of blocking CI on an unexpected modal.
+    // Loader-smoke seam: fail on an unexpected Warn() modal.
+    // A property is intentional because the Windows smoke assigns it via reflection.
     private Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
@@ -1155,6 +1156,7 @@ internal sealed class CensorWindow : Form
     private void RenderDraft(int? selectedIndex = null)
     {
         CommitCurrentCellEdit();
+        // Visible is false with a hidden parent form; text records the pending notice.
         if (HasDetachedDraft() && _authoringNotice.Text.Length > 0)
             _authoringNotice.Text = GetDetachedDraftActionMessage();
         else
