@@ -61,6 +61,12 @@ static void RunUiContractSmoke(Assembly assembly)
                 binder: null,
                 args: [settings, dataRoot],
                 culture: null)!;
+            window.GetType().GetProperty(
+                "WarningSink",
+                BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(
+                    window,
+                    (Action<string>)(message => throw new InvalidOperationException(
+                        $"Unexpected Warn() modal: {message}")));
             var tabs = Descendants(window).OfType<TabControl>().Single();
             var tabNames = tabs.TabPages.Cast<TabPage>().Select(page => page.Text).ToArray();
             if (tabNames is not ["Интервалы", "Настройки", "Диагностика"])
@@ -127,6 +133,8 @@ static void RunUiContractSmoke(Assembly assembly)
 
 static void VerifyEditorWorkflow(Assembly assembly, Form window)
 {
+    const string TransferableDraftMessage =
+        "Сначала сохраните изменения, используйте их для открытого фильма или удалите.";
     var parse = assembly.GetType("Censor.Core.ScheduleText", throwOnError: true)!
         .GetMethod("Parse", BindingFlags.Public | BindingFlags.Static)!;
     var parsed = parse.Invoke(
@@ -141,13 +149,6 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     var parsedType = parsed.GetType();
     var document = parsedType.GetProperty("Document")!.GetValue(parsed)!;
     var diagnostics = parsedType.GetProperty("Diagnostics")!.GetValue(parsed)!;
-    var warningSinkProperty = window.GetType().GetProperty(
-        "WarningSink",
-        BindingFlags.Instance | BindingFlags.NonPublic)!;
-    warningSinkProperty.SetValue(
-        window,
-        (Action<string>)(message => throw new InvalidOperationException(
-            $"Unexpected Warn() modal: {message}")));
     window.GetType().GetMethod("UpdateState")!.Invoke(
         window,
         [
@@ -409,12 +410,11 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         handleCommand.Invoke(window, ["previous", null]);
         if (window.Visible ||
             draftState.Text != detachedState ||
-            authoringNotice.Text !=
-                "Сначала сохраните изменения, используйте их для открытого фильма или удалите." ||
+            authoringNotice.Text != TransferableDraftMessage ||
             !notifications.SequenceEqual(
                 [
-                    "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
-                    "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
+                    TransferableDraftMessage,
+                    TransferableDraftMessage,
                 ]))
         {
             throw new InvalidOperationException(
@@ -435,8 +435,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
                 diagnostics,
                 false,
             ]);
-        if (authoringNotice.Text !=
-            "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
+        if (authoringNotice.Text != TransferableDraftMessage)
         {
             throw new InvalidOperationException(
                 "A background status update erased detached-draft feedback.");
@@ -454,10 +453,9 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
         if (grid.Rows.Count != 0 ||
             emptyState.Visible != true ||
-            emptyState.Text !=
-                "Сначала сохраните изменения, используйте их для открытого фильма или удалите." ||
-            authoringNotice.Text !=
-                "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
+            emptyState.Text != TransferableDraftMessage ||
+            authoringNotice.Visible != true ||
+            authoringNotice.Text != TransferableDraftMessage)
         {
             throw new InvalidOperationException(
                 "An empty detached draft did not retain its actionable guidance.");
