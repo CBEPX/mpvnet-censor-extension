@@ -448,7 +448,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             [Enumerable.Repeat(0, 1)]);
         window.GetType().GetMethod(
             "RenderDraft",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
         var emptyState = (Label)window.GetType().GetField(
             "_emptyState",
             BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
