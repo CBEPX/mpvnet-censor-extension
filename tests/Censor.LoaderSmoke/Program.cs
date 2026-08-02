@@ -323,17 +323,16 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     }
 
     grid.ClearSelection();
-    foreach (DataGridViewRow row in grid.Rows)
-        row.Selected = true;
+    grid.Rows[^1].Selected = true;
     window.GetType().GetMethod(
         "DeleteSelected",
         BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
     var detachedDraft = draftField.GetValue(window)!;
-    if (grid.Rows.Count != 0 ||
+    if (grid.Rows.Count != 1 ||
         !(bool)detachedDraft.GetType().GetProperty("IsDirty")!.GetValue(detachedDraft)!)
     {
         throw new InvalidOperationException(
-            "The detached-state smoke could not create an empty dirty draft.");
+            "The detached-state smoke could not create a non-empty dirty draft.");
     }
 
     window.GetType().GetMethod("UpdateState")!.Invoke(
@@ -396,6 +395,13 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     var authoringNotice = (Label)window.GetType().GetField(
         "_authoringNotice",
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+    var warningSinkProperty = window.GetType().GetProperty(
+        "WarningSink",
+        BindingFlags.Instance | BindingFlags.NonPublic)!;
+    warningSinkProperty.SetValue(
+        window,
+        (Action<string>)(message => throw new InvalidOperationException(
+            $"Unexpected modal authoring warning: {message}")));
     try
     {
         var detachedState = draftState.Text;
@@ -441,6 +447,14 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         window.GetType().GetMethod(
             "UseDraftForCurrentMedia",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+        if (authoringNotice.Text.Length != 0)
+        {
+            throw new InvalidOperationException(
+                "Reattaching a draft did not clear stale authoring feedback.");
+        }
+        window.GetType().GetMethod(
+            "ReplaceDraftFromRuntime",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
         notifications.Clear();
         var emptyDraftState = draftState.Text;
         handleCommand.Invoke(window, ["set-start", 1_000L]);
@@ -478,6 +492,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     finally
     {
         notificationEvent.RemoveEventHandler(window, notificationHandler);
+        warningSinkProperty.SetValue(window, null);
     }
 }
 

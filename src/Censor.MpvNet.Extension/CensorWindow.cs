@@ -253,6 +253,8 @@ internal sealed class CensorWindow : Form
     public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
+    // Loader-smoke seam: fail instead of blocking CI on an unexpected modal.
+    private Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
         string? mediaPath,
@@ -1153,7 +1155,9 @@ internal sealed class CensorWindow : Form
     private void RenderDraft(int? selectedIndex = null)
     {
         CommitCurrentCellEdit();
-        if (!HasDetachedDraft())
+        if (HasDetachedDraft() && _authoringNotice.Text.Length > 0)
+            _authoringNotice.Text = GetDetachedDraftActionMessage();
+        else
             ClearAuthoringNotification();
         _emptyState.Text = HasDetachedDraft()
             ? GetDetachedDraftActionMessage()
@@ -1231,14 +1235,22 @@ internal sealed class CensorWindow : Form
             UpdateActionStates();
             return;
         }
-        _intervals.ClearSelection();
-        foreach (var index in validIndices)
-            _intervals.Rows[index].Selected = true;
         var current = restoreCurrent.HasValue &&
             validIndices.Contains(restoreCurrent.Value)
                 ? restoreCurrent.Value
                 : validIndices[0];
-        _intervals.CurrentCell = _intervals.Rows[current].Cells["start"];
+        _rendering = true;
+        try
+        {
+            _intervals.ClearSelection();
+            foreach (var index in validIndices)
+                _intervals.Rows[index].Selected = true;
+            _intervals.CurrentCell = _intervals.Rows[current].Cells["start"];
+        }
+        finally
+        {
+            _rendering = false;
+        }
         UpdateActionStates();
     }
 
@@ -1937,6 +1949,11 @@ internal sealed class CensorWindow : Form
 
     private void Warn(string message)
     {
+        if (WarningSink is { } warningSink)
+        {
+            warningSink(message);
+            return;
+        }
         MessageBox.Show(
             this,
             message,
