@@ -281,9 +281,10 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     window.GetType().GetMethod(
         "ReplaceDraftFromRuntime",
         BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
-    var replacedDraft = window.GetType().GetField(
+    var draftField = window.GetType().GetField(
         "_draft",
-        BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        BindingFlags.Instance | BindingFlags.NonPublic)!;
+    var replacedDraft = draftField.GetValue(window)!;
     if (grid.Rows.Count != 2 ||
         grid.Rows[0].Cells["start"].Value as string != "00:00:01.000" ||
         (bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)!)
@@ -296,21 +297,23 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     grid.BeginEdit(selectAll: true);
     grid.CurrentCell.Value = "00:00:04";
     grid.EndEdit();
+    Application.DoEvents();
+    if (grid.Rows[0].Cells["start"].Value as string != "00:00:04.000")
+    {
+        throw new InvalidOperationException(
+            "A deferred edit did not render its normalized value.");
+    }
     grid.BeginEdit(selectAll: true);
     grid.CurrentCell.Value = "invalid";
     window.GetType().GetMethod(
         "ReplaceDraftFromRuntime",
         BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
     Application.DoEvents();
-    replacedDraft = window.GetType().GetField(
-        "_draft",
-        BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-    if ((bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)! ||
-        Descendants(window).OfType<Label>().Any(label =>
+    if (Descendants(window).OfType<Label>().Any(label =>
             label.Text.StartsWith("Введите время", StringComparison.Ordinal)))
     {
         throw new InvalidOperationException(
-            "A deferred edit callback changed the replacement draft.");
+            "A deferred edit leaked stale validation status into the replacement draft.");
     }
 
     grid.ClearSelection();
@@ -319,8 +322,9 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     window.GetType().GetMethod(
         "DeleteSelected",
         BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+    var detachedDraft = draftField.GetValue(window)!;
     if (grid.Rows.Count != 0 ||
-        !(bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)!)
+        !(bool)detachedDraft.GetType().GetProperty("IsDirty")!.GetValue(detachedDraft)!)
     {
         throw new InvalidOperationException(
             "The detached-state smoke could not create an empty dirty draft.");
@@ -346,6 +350,30 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     {
         throw new InvalidOperationException(
             "A detached draft does not explain why manual entry is unavailable.");
+    }
+
+    window.GetType().GetMethod("UpdateState")!.Invoke(
+        window,
+        [
+            @"C:\Video\Other.mkv",
+            3L,
+            null,
+            null,
+            "READY",
+            6_000L,
+            null,
+            null,
+            diagnostics,
+            false,
+        ]);
+    var transferableHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
+        label.Text == "Сначала сохраните изменения, перенесите их или удалите.");
+    var transferButton = Descendants(window).OfType<Button>().Single(button =>
+        button.Text.StartsWith("Использовать для «", StringComparison.Ordinal));
+    if (transferableHint?.Visible != true || !transferButton.Enabled)
+    {
+        throw new InvalidOperationException(
+            "A detached draft does not offer transfer when a target film is open.");
     }
 }
 

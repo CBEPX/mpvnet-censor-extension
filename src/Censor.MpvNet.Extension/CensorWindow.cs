@@ -21,8 +21,10 @@ internal enum AuthoringSaveMode
 
 internal sealed class CensorWindow : Form
 {
-    private const string DetachedDraftActionMessage =
+    private const string UnsavedDraftActionMessage =
         "Сначала сохраните изменения или удалите их.";
+    private const string TransferableDraftActionMessage =
+        "Сначала сохраните изменения, перенесите их или удалите.";
 
     // Draft reconciliation uses reference identity to recognize unchanged empty state.
     private static readonly IReadOnlyList<CensorInterval> EmptyIntervals =
@@ -464,7 +466,7 @@ internal sealed class CensorWindow : Form
                 if (!CanEditCurrentMedia())
                 {
                     Warn(HasDetachedDraft()
-                        ? DetachedDraftActionMessage
+                        ? GetDetachedDraftActionMessage()
                         : "Сначала откройте фильм.");
                     break;
                 }
@@ -478,7 +480,7 @@ internal sealed class CensorWindow : Form
                 if (!CanEditCurrentMedia())
                 {
                     Warn(HasDetachedDraft()
-                        ? DetachedDraftActionMessage
+                        ? GetDetachedDraftActionMessage()
                         : "Сначала откройте фильм.");
                     break;
                 }
@@ -1126,7 +1128,7 @@ internal sealed class CensorWindow : Form
     {
         CommitCurrentCellEdit();
         _emptyState.Text = HasDetachedDraft()
-            ? DetachedDraftActionMessage
+            ? GetDetachedDraftActionMessage()
             : !HasCurrentMedia()
                 ? "Откройте фильм, чтобы добавить интервалы."
                 : "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.";
@@ -1458,7 +1460,7 @@ internal sealed class CensorWindow : Form
         CommitCurrentCellEdit();
         if (_draft?.IsDirty == true)
         {
-            Warn("Сначала сохраните или удалите несохранённые изменения.");
+            Warn(UnsavedDraftActionMessage);
             return;
         }
         using var dialog = new OpenFileDialog
@@ -1503,7 +1505,7 @@ internal sealed class CensorWindow : Form
         CommitCurrentCellEdit();
         if (_draft?.IsDirty == true)
         {
-            Warn("Сначала сохраните или удалите несохранённые изменения.");
+            Warn(UnsavedDraftActionMessage);
             return;
         }
         if (TryGetDroppedSchedule(e.Data, out var path) && ConfirmSubtitleImport(path))
@@ -1618,6 +1620,9 @@ internal sealed class CensorWindow : Form
     }
 
     private bool HasCurrentMedia() => !string.IsNullOrWhiteSpace(_mediaPath);
+
+    private string GetDetachedDraftActionMessage() =>
+        HasCurrentMedia() ? TransferableDraftActionMessage : UnsavedDraftActionMessage;
 
     private bool CanEditCurrentMedia() => HasCurrentMedia() && !HasDetachedDraft();
 
