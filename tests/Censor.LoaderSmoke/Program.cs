@@ -141,11 +141,12 @@ static void RunUiContractSmoke(Assembly assembly)
     thread.SetApartmentState(ApartmentState.STA);
     thread.IsBackground = true;
     thread.Start();
-    // Exact-head Windows CI normally completes this step in about 3 seconds.
-    if (!thread.Join(TimeSpan.FromSeconds(30)))
+    // Exact-head Windows CI run 30772648082 completed this step in 3 seconds.
+    var timeout = TimeSpan.FromSeconds(30);
+    if (!thread.Join(timeout))
     {
         throw new InvalidOperationException(
-            "The Windows editor contract smoke timed out after 30 seconds; " +
+            $"The Windows editor contract smoke timed out after {timeout.TotalSeconds:0} seconds; " +
             "a modal dialog or hung UI path is likely.");
     }
     if (failure is not null)
