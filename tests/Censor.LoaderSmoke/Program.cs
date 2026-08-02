@@ -65,6 +65,12 @@ static void RunUiContractSmoke(Assembly assembly)
             var tabNames = tabs.TabPages.Cast<TabPage>().Select(page => page.Text).ToArray();
             if (tabNames is not ["Интервалы", "Настройки", "Диагностика"])
                 throw new InvalidOperationException("The editor must expose exactly three simple tabs.");
+            if (!Descendants(window).OfType<Label>().Any(label =>
+                    label.Text == "Откройте фильм, чтобы добавить интервалы."))
+            {
+                throw new InvalidOperationException(
+                    "The empty editor points at a disabled manual-entry button.");
+            }
 
             var buttonNames = Descendants(window).OfType<Button>()
                 .Select(button => button.Text)
@@ -183,28 +189,56 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
     if (grid.Rows.Count != 0 || enabledPrimaryActions.Length != 0)
         throw new InvalidOperationException("Discard left stale intervals or enabled primary actions.");
 
-    window.GetType().GetProperty("CurrentTimeRequested")!.SetValue(
-        window,
-        (Func<long?>)(() => null));
-    Descendants(window).OfType<Button>().Single(button =>
-        button.Text == "Добавить вручную").PerformClick();
-    if (grid.Rows.Count != 1 ||
-        grid.CurrentCell?.OwningColumn?.Name != "start" ||
-        grid.CurrentCell.Value as string != "00:00:00.000" ||
-        !grid.IsCurrentCellInEditMode)
+    var currentTimeProperty = window.GetType().GetProperty("CurrentTimeRequested")!;
+    var originalCurrentTime = currentTimeProperty.GetValue(window);
+    try
     {
-        throw new InvalidOperationException(
-            "Manual entry did not create a row and start editing its start time.");
-    }
+        currentTimeProperty.SetValue(window, (Func<long?>)(() => null));
+        var addButton = Descendants(window).OfType<Button>().Single(button =>
+            button.Text == "Добавить вручную");
+        addButton.PerformClick();
+        if (grid.Rows.Count != 1 ||
+            grid.CurrentCell?.OwningColumn?.Name != "start" ||
+            grid.CurrentCell.Value as string != "00:00:00.000" ||
+            !grid.IsCurrentCellInEditMode)
+        {
+            throw new InvalidOperationException(
+                "Manual entry did not create a row and start editing its start time.");
+        }
 
-    grid.CurrentCell.Value = "00:00:03";
-    window.GetType().GetMethod(
-        "RenderDraft",
-        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
-    if (grid.Rows[0].Cells["start"].Value as string != "00:00:03.000")
+        grid.CurrentCell.Value = "00:00:03";
+        window.GetType().GetMethod("UpdateState")!.Invoke(
+            window,
+            [
+                @"C:\Video\Film.mkv",
+                1L,
+                null,
+                null,
+                "READY",
+                6_000L,
+                null,
+                null,
+                diagnostics,
+                false,
+            ]);
+        if (grid.Rows[0].Cells["start"].Value as string != "00:00:03.000")
+        {
+            throw new InvalidOperationException(
+                "A runtime update discarded or failed to normalize the active cell edit.");
+        }
+
+        currentTimeProperty.SetValue(window, (Func<long?>)(() => 5_000));
+        addButton.PerformClick();
+        if (grid.Rows.Count != 2 ||
+            grid.CurrentCell?.Value as string != "00:00:05.000")
+        {
+            throw new InvalidOperationException(
+                "Manual entry ignored an available playback position.");
+        }
+    }
+    finally
     {
-        throw new InvalidOperationException(
-            "A full render discarded or failed to normalize the active cell edit.");
+        currentTimeProperty.SetValue(window, originalCurrentTime);
     }
 }
 

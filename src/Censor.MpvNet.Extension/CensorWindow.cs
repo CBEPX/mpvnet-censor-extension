@@ -55,7 +55,7 @@ internal sealed class CensorWindow : Form
     private readonly Label _emptyState = new()
     {
         Dock = DockStyle.Fill,
-        Text = "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.",
+        Text = "Откройте фильм, чтобы добавить интервалы.",
         TextAlign = ContentAlignment.MiddleCenter,
     };
     private readonly ListBox _warnings = new()
@@ -251,8 +251,10 @@ internal sealed class CensorWindow : Form
         var intervals = document?.Intervals ?? EmptyIntervals;
         var mediaChanged = _mediaSessionId != mediaSessionId ||
             !MediaPathsEqual(_mediaPath, mediaPath);
-        var keepDetachedDraft = mediaChanged && _draft?.IsDirty == true;
         var runtimeIntervalsUnchanged = ReferenceEquals(_runtimeIntervals, intervals);
+        if (mediaChanged || !runtimeIntervalsUnchanged)
+            CommitCurrentCellEdit();
+        var keepDetachedDraft = mediaChanged && _draft?.IsDirty == true;
         if (mediaChanged)
         {
             _mediaPath = mediaPath;
@@ -269,6 +271,9 @@ internal sealed class CensorWindow : Form
         _mediaHeading.Text = string.IsNullOrEmpty(mediaPath)
             ? "Фильм не открыт"
             : GetMediaTitle(mediaPath) ?? mediaPath;
+        _emptyState.Text = HasCurrentMedia()
+            ? "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены."
+            : "Откройте фильм, чтобы добавить интервалы.";
         _schedule.Text = string.IsNullOrEmpty(schedulePath) ? "Не выбран" : schedulePath;
         var localizedStatus = LocalizeStatus(status);
         _status.Text = localizedStatus;
@@ -445,6 +450,7 @@ internal sealed class CensorWindow : Form
 
     public void HandleAuthoringCommand(string command, long? capturedTimeMs = null)
     {
+        CommitCurrentCellEdit();
         if (command is "mark-start" or "mark-end" or "set-start" or "set-end")
         {
             Show();
@@ -660,6 +666,7 @@ internal sealed class CensorWindow : Form
 
     protected override void OnFormClosing(FormClosingEventArgs e)
     {
+        CommitCurrentCellEdit();
         if (!_allowClose && e.CloseReason == CloseReason.UserClosing)
         {
             SaveRecovery();
@@ -842,6 +849,7 @@ internal sealed class CensorWindow : Form
             Warn("Сначала откройте фильм.");
             return;
         }
+        CommitCurrentCellEdit();
         if (!EnsureDraft())
             return;
         var start = CurrentTimeRequested?.Invoke() ?? 0;
@@ -987,6 +995,7 @@ internal sealed class CensorWindow : Form
 
     private bool TryGetValidDraft(out AuthoringSnapshot snapshot)
     {
+        CommitCurrentCellEdit();
         snapshot = new(new(new(), [], []), null, null, null, null);
         if (_draft is null)
         {
@@ -1093,10 +1102,13 @@ internal sealed class CensorWindow : Form
         string? status = null,
         bool renderSelectedOnly = false)
     {
+        var draft = _draft;
         try
         {
             BeginInvoke(new Action(() =>
             {
+                if (!ReferenceEquals(_draft, draft))
+                    return;
                 if (renderSelectedOnly && selectedIndex is { } index)
                     RenderDraftRow(index);
                 else
@@ -1112,8 +1124,6 @@ internal sealed class CensorWindow : Form
 
     private void RenderDraft(int? selectedIndex = null)
     {
-        if (_intervals.IsCurrentCellInEditMode)
-            _intervals.EndEdit();
         var restoreIndices = selectedIndex.HasValue
             ? [selectedIndex.Value]
             : SelectedIndices();
@@ -1441,6 +1451,7 @@ internal sealed class CensorWindow : Form
 
     private void SelectSchedule()
     {
+        CommitCurrentCellEdit();
         if (_draft?.IsDirty == true)
         {
             Warn("Сначала сохраните или удалите несохранённые изменения.");
@@ -1485,6 +1496,7 @@ internal sealed class CensorWindow : Form
 
     private void OnDragDrop(object? sender, DragEventArgs e)
     {
+        CommitCurrentCellEdit();
         if (_draft?.IsDirty == true)
         {
             Warn("Сначала сохраните или удалите несохранённые изменения.");
@@ -1496,6 +1508,7 @@ internal sealed class CensorWindow : Form
 
     private void DiscardDraft()
     {
+        CommitCurrentCellEdit();
         if (_draft?.IsDirty == true &&
             MessageBox.Show(
                 this,
@@ -1654,6 +1667,12 @@ internal sealed class CensorWindow : Form
             return false;
         path = files[0];
         return ScheduleFileKinds.IsSupportedPath(path);
+    }
+
+    private void CommitCurrentCellEdit()
+    {
+        if (_intervals.IsCurrentCellInEditMode)
+            _intervals.EndEdit();
     }
 
     private bool ConfirmSubtitleImport(string path)
