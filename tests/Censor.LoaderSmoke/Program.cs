@@ -309,11 +309,17 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
         "ReplaceDraftFromRuntime",
         BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
     Application.DoEvents();
+    replacedDraft = draftField.GetValue(window)!;
+    if ((bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)!)
+    {
+        throw new InvalidOperationException(
+            "Replacing after an invalid edit left the runtime draft dirty.");
+    }
     if (Descendants(window).OfType<Label>().Any(label =>
             label.Text.StartsWith("Введите время", StringComparison.Ordinal)))
     {
         throw new InvalidOperationException(
-            "A deferred edit leaked stale validation status into the replacement draft.");
+            "A deferred edit leaked stale validation status into the editor header.");
     }
 
     grid.ClearSelection();
@@ -345,7 +351,7 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
             false,
         ]);
     var detachedHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
-        label.Text == "Сначала сохраните изменения или удалите их.");
+        label.Text == "Сначала сохраните или удалите несохранённые изменения.");
     if (detachedHint?.Visible != true || addButton.Enabled)
     {
         throw new InvalidOperationException(
@@ -367,10 +373,13 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
             false,
         ]);
     var transferableHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
-        label.Text == "Сначала сохраните изменения, перенесите их или удалите.");
-    var transferButton = Descendants(window).OfType<Button>().Single(button =>
+        label.Text ==
+            "Сначала сохраните изменения, используйте их для открытого фильма или удалите.");
+    var transferButton = Descendants(window).OfType<Button>().SingleOrDefault(button =>
         button.Text.StartsWith("Использовать для «", StringComparison.Ordinal));
-    if (transferableHint?.Visible != true || !transferButton.Enabled)
+    if (transferableHint?.Visible != true ||
+        transferButton?.Enabled != true ||
+        addButton.Enabled)
     {
         throw new InvalidOperationException(
             "A detached draft does not offer transfer when a target film is open.");

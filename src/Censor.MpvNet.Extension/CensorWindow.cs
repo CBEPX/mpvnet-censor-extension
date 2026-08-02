@@ -22,9 +22,9 @@ internal enum AuthoringSaveMode
 internal sealed class CensorWindow : Form
 {
     private const string UnsavedDraftActionMessage =
-        "Сначала сохраните изменения или удалите их.";
+        "Сначала сохраните или удалите несохранённые изменения.";
     private const string TransferableDraftActionMessage =
-        "Сначала сохраните изменения, перенесите их или удалите.";
+        "Сначала сохраните изменения, используйте их для открытого фильма или удалите.";
 
     // Draft reconciliation uses reference identity to recognize unchanged empty state.
     private static readonly IReadOnlyList<CensorInterval> EmptyIntervals =
@@ -465,9 +465,7 @@ internal sealed class CensorWindow : Form
             case "mark-start":
                 if (!CanEditCurrentMedia())
                 {
-                    Warn(HasDetachedDraft()
-                        ? GetDetachedDraftActionMessage()
-                        : "Сначала откройте фильм.");
+                    WarnCannotEdit();
                     break;
                 }
                 _pendingStartMs = capturedTimeMs ?? CurrentTimeRequested?.Invoke();
@@ -479,9 +477,7 @@ internal sealed class CensorWindow : Form
             case "mark-end":
                 if (!CanEditCurrentMedia())
                 {
-                    Warn(HasDetachedDraft()
-                        ? GetDetachedDraftActionMessage()
-                        : "Сначала откройте фильм.");
+                    WarnCannotEdit();
                     break;
                 }
                 if (_pendingStartMs is not { } start)
@@ -1857,6 +1853,9 @@ internal sealed class CensorWindow : Form
 
     private static string FormatDuration(long milliseconds) =>
         FormattableString.Invariant($"{milliseconds / 1_000}.{milliseconds % 1_000:D3} с");
+
+    private void WarnCannotEdit() =>
+        Warn(HasDetachedDraft() ? GetDetachedDraftActionMessage() : "Сначала откройте фильм.");
 
     private void Warn(string message) =>
         MessageBox.Show(this, message, "CensorPlayer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
