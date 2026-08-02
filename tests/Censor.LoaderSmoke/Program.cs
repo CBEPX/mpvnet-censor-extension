@@ -141,7 +141,7 @@ static void RunUiContractSmoke(Assembly assembly)
     thread.SetApartmentState(ApartmentState.STA);
     thread.IsBackground = true;
     thread.Start();
-    if (!thread.Join(TimeSpan.FromMinutes(1)))
+    if (!thread.Join(TimeSpan.FromSeconds(30)))
     {
         throw new InvalidOperationException(
             "The Windows editor contract smoke timed out, likely on a modal dialog.");
