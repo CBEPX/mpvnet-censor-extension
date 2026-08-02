@@ -9,8 +9,11 @@ public sealed class ScheduleTextTests
 {
     [Theory]
     [InlineData("00:00:01.250", 1_250)]
+    [InlineData("00:00:01", 1_000)]
     [InlineData("1:02:03.000", 3_723_000)]
+    [InlineData("1:02:03", 3_723_000)]
     [InlineData("-00:00:01.250", -1_250)]
+    [InlineData("-00:00:01", -1_000)]
     [InlineData("100:00:00.000", 360_000_000)]
     public void ParsesTimestampsAcceptedByTheEditor(string text, long expected)
     {

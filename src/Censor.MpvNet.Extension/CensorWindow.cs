@@ -55,7 +55,7 @@ internal sealed class CensorWindow : Form
     private readonly Label _emptyState = new()
     {
         Dock = DockStyle.Fill,
-        Text = "Интервалов пока нет. Во время просмотра отметьте начало и конец сцены",
+        Text = "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.",
         TextAlign = ContentAlignment.MiddleCenter,
     };
     private readonly ListBox _warnings = new()
@@ -683,6 +683,7 @@ internal sealed class CensorWindow : Form
 
     private TableLayoutPanel BuildIntervalsTab()
     {
+        _addButton = Button("Добавить вручную", AddInterval);
         _markStartButton = Button("Отметить начало (F7)", () =>
             HandleAuthoringCommand("mark-start"));
         _markEndButton = Button("Отметить конец (F8)", () =>
@@ -691,8 +692,7 @@ internal sealed class CensorWindow : Form
         _applyButton = Button("Применить интервалы", ApplyDraft);
         _saveButton = Button("Сохранить файл", () => SaveDraft(AuthoringSaveMode.Save));
         _primaryActions = Flow(
-            _markStartButton,
-            _markEndButton,
+            _addButton,
             _deleteButton,
             Button("Отменить", Undo),
             Button("Повторить", Redo),
@@ -700,11 +700,11 @@ internal sealed class CensorWindow : Form
             _applyButton,
             _saveButton);
 
-        _addButton = Button("Добавить вручную", AddInterval);
         _advancedActions = Flow(
+            _markStartButton,
+            _markEndButton,
             Button("Импортировать файл…", SelectSchedule),
             Button("Перезагрузить файл", () => ReloadRequested?.Invoke()),
-            _addButton,
             Button("Дублировать", DuplicateSelected),
             Button("Объединить", MergeSelected),
             Button("Разделить", SplitSelected),
@@ -851,6 +851,8 @@ internal sealed class CensorWindow : Form
             return;
         _draft!.Add(start, checked(start + 1_000));
         Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
+        _intervals.Focus();
+        _intervals.BeginEdit(selectAll: true);
     }
 
     private void DeleteSelected()
@@ -1064,7 +1066,7 @@ internal sealed class CensorWindow : Form
         {
             DeferRender(
                 e.RowIndex,
-                "Формат времени: ЧЧ:ММ:СС.мс; минус ставится перед часами.",
+                "Введите время как ЧЧ:ММ:СС или ЧЧ:ММ:СС.ммм. Минус ставится перед часами.",
                 renderSelectedOnly: true);
             return;
         }

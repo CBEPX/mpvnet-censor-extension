@@ -71,6 +71,7 @@ static void RunUiContractSmoke(Assembly assembly)
                 .ToHashSet(StringComparer.Ordinal);
             ReadOnlySpan<string> requiredButtons =
             [
+                "Добавить вручную",
                 "Отметить начало (F7)",
                 "Отметить конец (F8)",
                 "Применить интервалы",
@@ -82,6 +83,17 @@ static void RunUiContractSmoke(Assembly assembly)
             {
                 if (!buttonNames.Contains(required))
                     throw new InvalidOperationException($"The editor is missing the required action: {required}");
+            }
+            var addButton = Descendants(window).OfType<Button>().Single(button =>
+                button.Text == "Добавить вручную");
+            var applyButton = Descendants(window).OfType<Button>().Single(button =>
+                button.Text == "Применить интервалы");
+            var markStartButton = Descendants(window).OfType<Button>().Single(button =>
+                button.Text == "Отметить начало (F7)");
+            if (addButton.Parent != applyButton.Parent || addButton.Parent == markStartButton.Parent)
+            {
+                throw new InvalidOperationException(
+                    "Manual interval entry must be primary and F7/F8 must remain secondary.");
             }
             if (!Descendants(window).OfType<CheckBox>().Any(checkbox =>
                     checkbox.Text == "Автоматически восстанавливать размытие и компрессию звука"))
@@ -170,6 +182,19 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
         .ToArray();
     if (grid.Rows.Count != 0 || enabledPrimaryActions.Length != 0)
         throw new InvalidOperationException("Discard left stale intervals or enabled primary actions.");
+
+    window.GetType().GetProperty("CurrentTimeRequested")!.SetValue(
+        window,
+        (Func<long?>)(() => 2_000));
+    Descendants(window).OfType<Button>().Single(button =>
+        button.Text == "Добавить вручную").PerformClick();
+    if (grid.Rows.Count != 1 ||
+        grid.CurrentCell?.OwningColumn?.Name != "start" ||
+        !grid.IsCurrentCellInEditMode)
+    {
+        throw new InvalidOperationException(
+            "Manual entry did not create a row and start editing its start time.");
+    }
 }
 
 static IEnumerable<Control> Descendants(Control root)

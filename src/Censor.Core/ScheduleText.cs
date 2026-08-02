@@ -299,15 +299,22 @@ public static class ScheduleText
         if (negative)
             value = value[1..];
         var firstColon = value.IndexOf(':');
-        if (firstColon < 1 || value.Length - firstColon != 10)
+        var tailLength = value.Length - firstColon;
+        if (firstColon < 1 || tailLength is not (6 or 10))
             return false;
         var tail = value[firstColon..];
-        if (tail[3] != ':' || tail[6] is not ('.' or ',') ||
+        if (tail[3] != ':' ||
             !long.TryParse(value[..firstColon], NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
             !int.TryParse(tail.Slice(1, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
             !int.TryParse(tail.Slice(4, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
-            !int.TryParse(tail.Slice(7, 3), NumberStyles.None, CultureInfo.InvariantCulture, out var millis) ||
             minutes > 59 || seconds > 59)
+        {
+            return false;
+        }
+        var millis = 0;
+        if (tailLength == 10 &&
+            (tail[6] is not ('.' or ',') ||
+             !int.TryParse(tail.Slice(7, 3), NumberStyles.None, CultureInfo.InvariantCulture, out millis)))
         {
             return false;
         }
