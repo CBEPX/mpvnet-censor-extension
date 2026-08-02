@@ -254,7 +254,7 @@ internal sealed class CensorWindow : Form
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
     // Loader-smoke seam: fail on an unexpected Warn() modal.
-    // A property is intentional because the Windows smoke assigns it via reflection.
+    // Keep a property: nothing in this assembly assigns it, and CS0649 is an error.
     private Action<string>? WarningSink { get; set; }
 
     public void UpdateState(

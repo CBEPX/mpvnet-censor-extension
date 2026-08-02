@@ -455,6 +455,8 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         if (grid.Rows.Count != 0 ||
             emptyState.Visible != true ||
             emptyState.Text !=
+                "Сначала сохраните изменения, используйте их для открытого фильма или удалите." ||
+            authoringNotice.Text !=
                 "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
         {
             throw new InvalidOperationException(
@@ -506,7 +508,6 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     finally
     {
         notificationEvent.RemoveEventHandler(window, notificationHandler);
-        warningSinkProperty.SetValue(window, null);
     }
 }
 
