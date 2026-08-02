@@ -249,7 +249,27 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
         throw new InvalidOperationException(
             "Manual entry ignored an available playback position.");
     }
-    currentTimeProperty.SetValue(window, null);
+
+    window.GetType().GetMethod("UpdateState")!.Invoke(
+        window,
+        [
+            null,
+            2L,
+            null,
+            null,
+            "IDLE",
+            null,
+            null,
+            null,
+            diagnostics,
+            false,
+        ]);
+    if (!Descendants(window).OfType<Label>().Any(label =>
+            label.Text == "Сначала разберитесь с изменениями для другого фильма."))
+    {
+        throw new InvalidOperationException(
+            "A detached draft does not explain why manual entry is unavailable.");
+    }
 }
 
 static IEnumerable<Control> Descendants(Control root)

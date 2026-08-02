@@ -1122,10 +1122,10 @@ internal sealed class CensorWindow : Form
     private void RenderDraft(int? selectedIndex = null)
     {
         CommitCurrentCellEdit();
-        _emptyState.Text = !HasCurrentMedia()
-            ? "Откройте фильм, чтобы добавить интервалы."
-            : HasDetachedDraft()
-                ? "Сначала разберитесь с изменениями для другого фильма."
+        _emptyState.Text = HasDetachedDraft()
+            ? "Сначала разберитесь с изменениями для другого фильма."
+            : !HasCurrentMedia()
+                ? "Откройте фильм, чтобы добавить интервалы."
                 : "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.";
         var restoreIndices = selectedIndex.HasValue
             ? [selectedIndex.Value]
@@ -1561,6 +1561,7 @@ internal sealed class CensorWindow : Form
 
     private void ReplaceDraftFromRuntime()
     {
+        CommitCurrentCellEdit();
         _pendingStartMs = null;
         _sourcePath = _runtimeSchedulePath;
         _sourceHash = _runtimeSourceHash;
