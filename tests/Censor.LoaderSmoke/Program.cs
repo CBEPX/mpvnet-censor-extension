@@ -250,6 +250,58 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
             "Manual entry ignored an available playback position.");
     }
 
+    var replacement = parse.Invoke(
+        null,
+        [
+            "# censor-timeline: 1\n# title: Film\n# media-duration-ms: 6000\n\n" +
+            "00:00:01.000 --> 00:00:02.000\n" +
+            "00:00:02.000 --> 00:00:03.000\n",
+            2 * 1024 * 1024,
+            10_000,
+        ])!;
+    var replacementDocument = parsedType.GetProperty("Document")!.GetValue(replacement)!;
+    var replacementDiagnostics = parsedType.GetProperty("Diagnostics")!.GetValue(replacement)!;
+    window.GetType().GetMethod("UpdateState")!.Invoke(
+        window,
+        [
+            @"C:\Video\Film.mkv",
+            1L,
+            @"C:\Video\Film.mkv.censor.txt",
+            "replacement-hash",
+            "READY",
+            6_000L,
+            replacementDocument,
+            null,
+            replacementDiagnostics,
+            false,
+        ]);
+    grid.CurrentCell = grid.Rows[0].Cells["start"];
+    grid.BeginEdit(selectAll: true);
+    grid.CurrentCell.Value = "00:00:09";
+    window.GetType().GetMethod(
+        "ReplaceDraftFromRuntime",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+    var replacedDraft = window.GetType().GetField(
+        "_draft",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+    if (grid.Rows.Count != 2 ||
+        grid.Rows[0].Cells["start"].Value as string != "00:00:01.000" ||
+        (bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)!)
+    {
+        throw new InvalidOperationException(
+            "Replacing the draft copied an active edit into clean runtime intervals.");
+    }
+
+    currentTimeProperty.SetValue(window, null);
+    grid.ClearSelection();
+    foreach (DataGridViewRow row in grid.Rows)
+        row.Selected = true;
+    window.GetType().GetMethod(
+        "DeleteSelected",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+    if (grid.Rows.Count != 0)
+        throw new InvalidOperationException("The detached-state smoke could not clear the draft.");
+
     window.GetType().GetMethod("UpdateState")!.Invoke(
         window,
         [
@@ -264,8 +316,9 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
             diagnostics,
             false,
         ]);
-    if (!Descendants(window).OfType<Label>().Any(label =>
-            label.Text == "Сначала разберитесь с изменениями для другого фильма."))
+    var detachedHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
+        label.Text == "Сначала сохраните, перенесите или удалите несохранённые изменения.");
+    if (detachedHint?.Visible != true || addButton.Enabled)
     {
         throw new InvalidOperationException(
             "A detached draft does not explain why manual entry is unavailable.");

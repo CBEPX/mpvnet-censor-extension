@@ -461,7 +461,7 @@ internal sealed class CensorWindow : Form
                 if (!CanEditCurrentMedia())
                 {
                     Warn(HasDetachedDraft()
-                        ? "Сначала сохраните, перенесите или удалите изменения для другого фильма."
+                        ? "Сначала сохраните, перенесите или удалите несохранённые изменения."
                         : "Сначала откройте фильм.");
                     break;
                 }
@@ -475,7 +475,7 @@ internal sealed class CensorWindow : Form
                 if (!CanEditCurrentMedia())
                 {
                     Warn(HasDetachedDraft()
-                        ? "Сначала сохраните, перенесите или удалите изменения для другого фильма."
+                        ? "Сначала сохраните, перенесите или удалите несохранённые изменения."
                         : "Сначала откройте фильм.");
                     break;
                 }
@@ -1123,7 +1123,7 @@ internal sealed class CensorWindow : Form
     {
         CommitCurrentCellEdit();
         _emptyState.Text = HasDetachedDraft()
-            ? "Сначала разберитесь с изменениями для другого фильма."
+            ? "Сначала сохраните, перенесите или удалите несохранённые изменения."
             : !HasCurrentMedia()
                 ? "Откройте фильм, чтобы добавить интервалы."
                 : "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.";
@@ -1261,7 +1261,7 @@ internal sealed class CensorWindow : Form
             _draft.Matches(_runtimeActiveDocument);
         var saved = !_draft.IsDirty && !string.IsNullOrWhiteSpace(_sourcePath);
         _draftState.Text = HasDetachedDraft()
-            ? "Несохранённые изменения для другого фильма"
+            ? "Есть несохранённые изменения"
             : $"{(applied ? "Применено" : "Не применено")} · " +
               $"{(saved ? "Сохранено" : "Не сохранено")}";
         UpdateDetachedState();
