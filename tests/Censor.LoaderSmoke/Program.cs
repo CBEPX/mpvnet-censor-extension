@@ -384,6 +384,48 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
         throw new InvalidOperationException(
             "A detached draft does not offer transfer when a target film is open.");
     }
+
+    var warnings = new List<string>();
+    window.GetType().GetProperty("WarningRequested")!.SetValue(
+        window,
+        (Action<string>)warnings.Add);
+    var handleCommand = window.GetType().GetMethod("HandleAuthoringCommand")!;
+    handleCommand.Invoke(window, ["set-start", 1_000L]);
+    handleCommand.Invoke(window, ["previous", null]);
+    if (!warnings.SequenceEqual(
+            [
+                "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
+                "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
+            ]))
+    {
+        throw new InvalidOperationException(
+            "Blocked authoring commands did not explain the detached draft.");
+    }
+
+    window.GetType().GetMethod(
+        "UseDraftForCurrentMedia",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+    warnings.Clear();
+    handleCommand.Invoke(window, ["set-start", 1_000L]);
+    handleCommand.Invoke(window, ["previous", null]);
+    if (!warnings.SequenceEqual(["Сначала добавьте интервал.", "Сначала добавьте интервал."]))
+    {
+        throw new InvalidOperationException(
+            "Authoring commands did not explain that the draft is empty.");
+    }
+
+    addButton.PerformClick();
+    grid.EndEdit();
+    Application.DoEvents();
+    grid.CurrentCell = null;
+    grid.ClearSelection();
+    warnings.Clear();
+    handleCommand.Invoke(window, ["set-start", 1_000L]);
+    if (!warnings.SequenceEqual(["Сначала выберите интервал."]))
+    {
+        throw new InvalidOperationException(
+            "Boundary editing did not explain that no interval is selected.");
+    }
 }
 
 static IEnumerable<Control> Descendants(Control root)

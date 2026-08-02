@@ -135,6 +135,7 @@ internal sealed class CensorWindow : Form
     private FlowLayoutPanel _primaryActions = null!;
     private bool _allowClose;
     private bool _rendering;
+    private bool _warningVisible;
     private long? _pendingStartMs;
     private string? _mediaPath;
     private long _mediaSessionId;
@@ -240,6 +241,8 @@ internal sealed class CensorWindow : Form
     public event Action<string, Exception>? PersistenceError;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Action<string>? WarningRequested { get; set; }
 
     public void UpdateState(
         string? mediaPath,
@@ -922,8 +925,16 @@ internal sealed class CensorWindow : Form
             WarnCannotEdit();
             return;
         }
-        if (_draft is null || SelectedIndex() is not { } index)
+        if (_draft is null || _draft.Document.Intervals.Count == 0)
+        {
+            Warn("Сначала добавьте интервал.");
             return;
+        }
+        if (SelectedIndex() is not { } index)
+        {
+            Warn("Сначала выберите интервал.");
+            return;
+        }
         if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
         {
             Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
@@ -1023,9 +1034,15 @@ internal sealed class CensorWindow : Form
     private void NavigateInterval(int direction)
     {
         if (!CanEditCurrentMedia())
+        {
+            WarnCannotEdit();
             return;
+        }
         if (_draft is null || _draft.Document.Intervals.Count == 0)
+        {
+            Warn("Сначала добавьте интервал.");
             return;
+        }
         var current = SelectedIndex() ?? (direction > 0 ? -1 : 0);
         var next = Math.Clamp(current + direction, 0, _draft.Document.Intervals.Count - 1);
         SelectRow(next);
@@ -1860,8 +1877,30 @@ internal sealed class CensorWindow : Form
     private void WarnCannotEdit() =>
         Warn(HasDetachedDraft() ? GetDetachedDraftActionMessage() : "Сначала откройте фильм.");
 
-    private void Warn(string message) =>
-        MessageBox.Show(this, message, "CensorPlayer", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+    private void Warn(string message)
+    {
+        if (WarningRequested is { } warningRequested)
+        {
+            warningRequested(message);
+            return;
+        }
+        if (_warningVisible)
+            return;
+        try
+        {
+            _warningVisible = true;
+            MessageBox.Show(
+                this,
+                message,
+                "CensorPlayer",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+        finally
+        {
+            _warningVisible = false;
+        }
+    }
 
     private sealed record SidecarChoice(string Name, string Path);
 }
