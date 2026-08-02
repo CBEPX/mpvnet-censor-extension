@@ -238,11 +238,9 @@ internal sealed class CensorWindow : Form
     public event Action<bool>? DiagnosticsRequested;
     public event Action? SettingsRepairRequested;
     public event Action<string, Exception>? PersistenceError;
+    public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
-    // Loader-smoke seam: capture warnings without opening modal dialogs.
-    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
         string? mediaPath,
@@ -468,34 +466,36 @@ internal sealed class CensorWindow : Form
             case "mark-start":
                 if (!CanEditCurrentMedia())
                 {
-                    WarnCannotEdit();
+                    NotifyCannotEdit();
                     break;
                 }
                 _pendingStartMs = capturedTimeMs ?? CurrentTimeRequested?.Invoke();
-                _draftState.Text = _pendingStartMs.HasValue
-                    ? $"Начало отмечено: {FormatTimestamp(_pendingStartMs.Value)}"
-                    : "Текущая позиция воспроизведения недоступна";
+                if (_pendingStartMs.HasValue)
+                    _draftState.Text = $"Начало отмечено: {FormatTimestamp(_pendingStartMs.Value)}";
+                else
+                    NotifyAuthoring("Текущая позиция воспроизведения недоступна.");
                 UpdateActionStates();
                 break;
             case "mark-end":
                 if (!CanEditCurrentMedia())
                 {
-                    WarnCannotEdit();
+                    NotifyCannotEdit();
                     break;
                 }
                 if (_pendingStartMs is not { } start)
                 {
-                    Warn("Сначала отметьте начало интервала.");
+                    NotifyAuthoring("Сначала отметьте начало интервала.");
                     break;
                 }
                 if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } end)
                 {
-                    Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
+                    NotifyAuthoring(
+                        "Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
                     break;
                 }
                 if (end <= start)
                 {
-                    Warn("Конец интервала должен быть позже отмеченного начала.");
+                    NotifyAuthoring("Конец интервала должен быть позже отмеченного начала.");
                     break;
                 }
                 if (!EnsureDraft())
@@ -847,7 +847,7 @@ internal sealed class CensorWindow : Form
     {
         if (!CanEditCurrentMedia())
         {
-            WarnCannotEdit();
+            NotifyCannotEdit();
             return;
         }
         CommitCurrentCellEdit();
@@ -862,11 +862,22 @@ internal sealed class CensorWindow : Form
 
     private void DeleteSelected()
     {
-        if (_draft is null)
+        if (!CanEditCurrentMedia())
+        {
+            NotifyCannotEdit();
             return;
+        }
+        if (_draft is null || _draft.Document.Intervals.Count == 0)
+        {
+            NotifyAuthoring("Сначала добавьте интервал.");
+            return;
+        }
         var selected = SelectedIndices();
         if (selected.Length == 0)
+        {
+            NotifyAuthoring("Сначала выберите интервал.");
             return;
+        }
         _draft.Delete(selected);
         var next = _draft.Document.Intervals.Count == 0
             ? (int?)null
@@ -884,17 +895,30 @@ internal sealed class CensorWindow : Form
 
     private void MergeSelected()
     {
-        if (_draft is null)
+        if (!CanEditCurrentMedia())
+        {
+            NotifyCannotEdit();
             return;
+        }
+        if (_draft is null || _draft.Document.Intervals.Count == 0)
+        {
+            NotifyAuthoring("Сначала добавьте интервал.");
+            return;
+        }
+        var selected = SelectedIndices();
+        if (selected.Length == 0)
+        {
+            NotifyAuthoring("Сначала выберите интервалы.");
+            return;
+        }
         try
         {
-            var selected = SelectedIndices();
             _draft.Merge(selected);
             Changed(selectedIndex: selected[0]);
         }
         catch (ArgumentException exception)
         {
-            Warn(exception.Message);
+            NotifyAuthoring(exception.Message);
         }
     }
 
@@ -904,7 +928,8 @@ internal sealed class CensorWindow : Form
             return;
         if (CurrentTimeRequested?.Invoke() is not { } position)
         {
-            Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
+            NotifyAuthoring(
+                "Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
             return;
         }
         try
@@ -914,7 +939,7 @@ internal sealed class CensorWindow : Form
         }
         catch (ArgumentOutOfRangeException exception)
         {
-            Warn(exception.Message);
+            NotifyAuthoring(exception.Message);
         }
     }
 
@@ -924,7 +949,8 @@ internal sealed class CensorWindow : Form
             return;
         if ((capturedTimeMs ?? CurrentTimeRequested?.Invoke()) is not { } position)
         {
-            Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
+            NotifyAuthoring(
+                "Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
             return;
         }
         var interval = _draft!.Document.Intervals[index];
@@ -947,14 +973,22 @@ internal sealed class CensorWindow : Form
         }
         catch (OverflowException)
         {
-            Warn("Граница вышла за допустимый диапазон.");
+            NotifyAuthoring("Граница вышла за допустимый диапазон.");
         }
     }
 
     private void ShiftAll()
     {
-        if (_draft is null)
+        if (!CanEditCurrentMedia())
+        {
+            NotifyCannotEdit();
             return;
+        }
+        if (_draft is null || _draft.Document.Intervals.Count == 0)
+        {
+            NotifyAuthoring("Сначала добавьте интервал.");
+            return;
+        }
         try
         {
             _draft.ShiftAll((long)_shiftAll.Value);
@@ -962,7 +996,7 @@ internal sealed class CensorWindow : Form
         }
         catch (OverflowException)
         {
-            Warn("Сдвиг вышел за допустимый диапазон.");
+            NotifyAuthoring("Сдвиг вышел за допустимый диапазон.");
         }
     }
 
@@ -998,7 +1032,7 @@ internal sealed class CensorWindow : Form
         snapshot = new(new(new(), [], []), null, null, null, null);
         if (_draft is null)
         {
-            Warn("Сначала откройте фильм и создайте интервалы.");
+            NotifyAuthoring("Сначала откройте фильм и создайте интервалы.");
             return false;
         }
         var diagnostics = _draft.Validate(
@@ -1006,7 +1040,7 @@ internal sealed class CensorWindow : Form
             _settings.Limits.MaxTextFileBytes);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
-            Warn("Исправьте ошибки в интервалах перед применением или сохранением.");
+            NotifyAuthoring("Исправьте ошибки в интервалах перед применением или сохранением.");
             return false;
         }
         snapshot = new(
@@ -1022,14 +1056,12 @@ internal sealed class CensorWindow : Form
     {
         if (!CanEditCurrentMedia())
         {
-            _draftState.Text = HasDetachedDraft()
-                ? GetDetachedDraftActionMessage()
-                : "Сначала откройте фильм.";
+            NotifyCannotEdit();
             return;
         }
         if (_draft is null || _draft.Document.Intervals.Count == 0)
         {
-            _draftState.Text = "Сначала добавьте интервал.";
+            NotifyAuthoring("Сначала добавьте интервал.");
             return;
         }
         var current = SelectedIndex() ?? (direction > 0 ? -1 : 0);
@@ -1040,9 +1072,9 @@ internal sealed class CensorWindow : Form
 
     private void GoToSelectedStart()
     {
-        if (_draft is null || SelectedIndex() is not { } index)
+        if (!TryGetEditableInterval(out var index))
             return;
-        SeekRequested?.Invoke(_draft.Document.Intervals[index].StartMs);
+        SeekRequested?.Invoke(_draft!.Document.Intervals[index].StartMs);
     }
 
     private void OnCellEndEdit(object? sender, DataGridViewCellEventArgs e)
@@ -1636,17 +1668,17 @@ internal sealed class CensorWindow : Form
         index = -1;
         if (!CanEditCurrentMedia())
         {
-            WarnCannotEdit();
+            NotifyCannotEdit();
             return false;
         }
         if (_draft is null || _draft.Document.Intervals.Count == 0)
         {
-            Warn("Сначала добавьте интервал.");
+            NotifyAuthoring("Сначала добавьте интервал.");
             return false;
         }
         if (SelectedIndex() is not { } selected)
         {
-            Warn("Сначала выберите интервал.");
+            NotifyAuthoring("Сначала выберите интервал.");
             return false;
         }
         index = selected;
@@ -1885,16 +1917,15 @@ internal sealed class CensorWindow : Form
     private static string FormatDuration(long milliseconds) =>
         FormattableString.Invariant($"{milliseconds / 1_000}.{milliseconds % 1_000:D3} с");
 
-    private void WarnCannotEdit() =>
-        Warn(HasDetachedDraft() ? GetDetachedDraftActionMessage() : "Сначала откройте фильм.");
+    private void NotifyCannotEdit() =>
+        NotifyAuthoring(
+            HasDetachedDraft() ? GetDetachedDraftActionMessage() : "Сначала откройте фильм.");
+
+    private void NotifyAuthoring(string message) =>
+        AuthoringNotificationRequested?.Invoke(message);
 
     private void Warn(string message)
     {
-        if (WarningSink is { } warningSink)
-        {
-            warningSink(message);
-            return;
-        }
         MessageBox.Show(
             this,
             message,

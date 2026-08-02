@@ -385,56 +385,65 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             "A detached draft does not offer transfer when a target film is open.");
     }
 
-    var warnings = new List<string>();
-    var warningSinkProperty = window.GetType().GetProperty("WarningSink")!;
-    warningSinkProperty.SetValue(
-        window,
-        (Action<string>)warnings.Add);
+    var notifications = new List<string>();
+    var notificationEvent = window.GetType().GetEvent("AuthoringNotificationRequested")!;
+    Action<string> notificationHandler = notifications.Add;
+    notificationEvent.AddEventHandler(window, notificationHandler);
     var handleCommand = window.GetType().GetMethod("HandleAuthoringCommand")!;
     var draftState = (Label)window.GetType().GetField(
         "_draftState",
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-    handleCommand.Invoke(window, ["set-start", 1_000L]);
-    handleCommand.Invoke(window, ["previous", null]);
-    if (!warnings.SequenceEqual(
-            [
-                "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
-            ]) ||
-        draftState.Text !=
-            "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
+    try
     {
-        throw new InvalidOperationException(
-            "Blocked authoring commands did not explain the detached draft.");
-    }
+        var detachedState = draftState.Text;
+        handleCommand.Invoke(window, ["set-start", 1_000L]);
+        window.Hide();
+        handleCommand.Invoke(window, ["previous", null]);
+        if (window.Visible || draftState.Text != detachedState || !notifications.SequenceEqual(
+                [
+                    "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
+                    "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
+                ]))
+        {
+            throw new InvalidOperationException(
+                "Hidden authoring commands did not publish detached-draft OSD feedback.");
+        }
 
-    window.GetType().GetMethod(
-        "UseDraftForCurrentMedia",
-        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
-    warnings.Clear();
-    handleCommand.Invoke(window, ["set-start", 1_000L]);
-    handleCommand.Invoke(window, ["previous", null]);
-    if (!warnings.SequenceEqual(["Сначала добавьте интервал."]) ||
-        draftState.Text != "Сначала добавьте интервал.")
-    {
-        throw new InvalidOperationException(
-            "Authoring commands did not explain that the draft is empty.");
-    }
+        window.Show();
+        window.GetType().GetMethod(
+            "UseDraftForCurrentMedia",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+        notifications.Clear();
+        handleCommand.Invoke(window, ["set-start", 1_000L]);
+        handleCommand.Invoke(window, ["previous", null]);
+        if (draftState.Text != "Начало отмечено: 00:00:01.000" ||
+            !notifications.SequenceEqual(["Сначала добавьте интервал."]))
+        {
+            throw new InvalidOperationException(
+                "Authoring commands did not explain that the draft is empty.");
+        }
 
-    addButton.PerformClick();
-    grid.EndEdit();
-    Application.DoEvents();
-    grid.CurrentCell = null;
-    grid.ClearSelection();
-    warnings.Clear();
-    window.GetType().GetMethod(
-        "CaptureBoundary",
-        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [true, 1_000L]);
-    if (!warnings.SequenceEqual(["Сначала выберите интервал."]))
-    {
-        throw new InvalidOperationException(
-            "Boundary editing did not explain that no interval is selected.");
+        addButton.PerformClick();
+        grid.EndEdit();
+        Application.DoEvents();
+        grid.CurrentCell = null;
+        grid.ClearSelection();
+        notifications.Clear();
+        // Exercise the shared selection guard directly: activating a public
+        // hotkey command can let WinForms restore CurrentCell before dispatch.
+        window.GetType().GetMethod(
+            "DuplicateSelected",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+        if (!notifications.SequenceEqual(["Сначала выберите интервал."]))
+        {
+            throw new InvalidOperationException(
+                "Row actions did not explain that no interval is selected.");
+        }
     }
-    warningSinkProperty.SetValue(window, null);
+    finally
+    {
+        notificationEvent.RemoveEventHandler(window, notificationHandler);
+    }
 }
 
 static IEnumerable<Control> Descendants(Control root)
