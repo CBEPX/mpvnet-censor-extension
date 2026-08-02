@@ -21,6 +21,9 @@ internal enum AuthoringSaveMode
 
 internal sealed class CensorWindow : Form
 {
+    private const string DetachedDraftActionMessage =
+        "Сначала сохраните изменения или удалите их.";
+
     // Draft reconciliation uses reference identity to recognize unchanged empty state.
     private static readonly IReadOnlyList<CensorInterval> EmptyIntervals =
         Array.Empty<CensorInterval>();
@@ -461,7 +464,7 @@ internal sealed class CensorWindow : Form
                 if (!CanEditCurrentMedia())
                 {
                     Warn(HasDetachedDraft()
-                        ? "Сначала сохраните, перенесите или удалите несохранённые изменения."
+                        ? DetachedDraftActionMessage
                         : "Сначала откройте фильм.");
                     break;
                 }
@@ -475,7 +478,7 @@ internal sealed class CensorWindow : Form
                 if (!CanEditCurrentMedia())
                 {
                     Warn(HasDetachedDraft()
-                        ? "Сначала сохраните, перенесите или удалите несохранённые изменения."
+                        ? DetachedDraftActionMessage
                         : "Сначала откройте фильм.");
                     break;
                 }
@@ -1123,7 +1126,7 @@ internal sealed class CensorWindow : Form
     {
         CommitCurrentCellEdit();
         _emptyState.Text = HasDetachedDraft()
-            ? "Сначала сохраните, перенесите или удалите несохранённые изменения."
+            ? DetachedDraftActionMessage
             : !HasCurrentMedia()
                 ? "Откройте фильм, чтобы добавить интервалы."
                 : "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.";
@@ -1260,10 +1263,8 @@ internal sealed class CensorWindow : Form
         var applied = _runtimeActiveDocument is not null &&
             _draft.Matches(_runtimeActiveDocument);
         var saved = !_draft.IsDirty && !string.IsNullOrWhiteSpace(_sourcePath);
-        _draftState.Text = HasDetachedDraft()
-            ? "Есть несохранённые изменения"
-            : $"{(applied ? "Применено" : "Не применено")} · " +
-              $"{(saved ? "Сохранено" : "Не сохранено")}";
+        _draftState.Text = $"{(applied ? "Применено" : "Не применено")} · " +
+            $"{(saved ? "Сохранено" : "Не сохранено")}";
         UpdateDetachedState();
         UpdateActionStates();
     }
@@ -1431,7 +1432,6 @@ internal sealed class CensorWindow : Form
             _draftMediaPath = null;
             _draftMediaSessionId = null;
             _schedule.Text = "Восстановленные изменения не связаны с файлом";
-            _draftState.Text = "Восстановлены несохранённые изменения";
             RenderDraft();
         }
         else

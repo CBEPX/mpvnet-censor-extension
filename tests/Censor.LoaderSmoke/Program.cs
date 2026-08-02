@@ -292,15 +292,39 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
             "Replacing the draft copied an active edit into clean runtime intervals.");
     }
 
-    currentTimeProperty.SetValue(window, null);
+    grid.CurrentCell = grid.Rows[0].Cells["start"];
+    grid.BeginEdit(selectAll: true);
+    grid.CurrentCell.Value = "00:00:04";
+    grid.EndEdit();
+    grid.BeginEdit(selectAll: true);
+    grid.CurrentCell.Value = "invalid";
+    window.GetType().GetMethod(
+        "ReplaceDraftFromRuntime",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
+    Application.DoEvents();
+    replacedDraft = window.GetType().GetField(
+        "_draft",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+    if ((bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)! ||
+        Descendants(window).OfType<Label>().Any(label =>
+            label.Text.StartsWith("Введите время", StringComparison.Ordinal)))
+    {
+        throw new InvalidOperationException(
+            "A deferred edit callback changed the replacement draft.");
+    }
+
     grid.ClearSelection();
     foreach (DataGridViewRow row in grid.Rows)
         row.Selected = true;
     window.GetType().GetMethod(
         "DeleteSelected",
         BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
-    if (grid.Rows.Count != 0)
-        throw new InvalidOperationException("The detached-state smoke could not clear the draft.");
+    if (grid.Rows.Count != 0 ||
+        !(bool)replacedDraft.GetType().GetProperty("IsDirty")!.GetValue(replacedDraft)!)
+    {
+        throw new InvalidOperationException(
+            "The detached-state smoke could not create an empty dirty draft.");
+    }
 
     window.GetType().GetMethod("UpdateState")!.Invoke(
         window,
@@ -317,7 +341,7 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
             false,
         ]);
     var detachedHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
-        label.Text == "Сначала сохраните, перенесите или удалите несохранённые изменения.");
+        label.Text == "Сначала сохраните изменения или удалите их.");
     if (detachedHint?.Visible != true || addButton.Enabled)
     {
         throw new InvalidOperationException(
