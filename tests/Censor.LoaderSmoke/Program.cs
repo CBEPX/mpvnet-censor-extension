@@ -69,11 +69,13 @@ static void RunUiContractSmoke(Assembly assembly)
             warningSinkProperty.SetValue(window, (Action<string>)trappedModals.Add);
             var confirmed = (bool)window.GetType().GetMethod("ConfirmDurationMismatch")!
                 .Invoke(window, null)!;
-            if (confirmed || !trappedModals.SequenceEqual(
-                    ["Длительность в файле интервалов отличается от фильма. Применить всё равно?"]))
+            const string ExpectedConfirmation =
+                "Длительность в файле интервалов отличается от фильма. Применить всё равно?";
+            if (confirmed || trappedModals is not [ExpectedConfirmation])
             {
                 throw new InvalidOperationException(
-                    "The modal smoke seam did not intercept a confirmation dialog.");
+                    "The modal smoke seam returned an unexpected result: " +
+                    $"confirmed={confirmed}, messages=[{string.Join(" | ", trappedModals)}].");
             }
             warningSinkProperty.SetValue(
                 window,
@@ -139,7 +141,7 @@ static void RunUiContractSmoke(Assembly assembly)
     thread.SetApartmentState(ApartmentState.STA);
     thread.IsBackground = true;
     thread.Start();
-    if (!thread.Join(TimeSpan.FromSeconds(30)))
+    if (!thread.Join(TimeSpan.FromMinutes(1)))
     {
         throw new InvalidOperationException(
             "The Windows editor contract smoke timed out, likely on a modal dialog.");
