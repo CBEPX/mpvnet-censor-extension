@@ -61,12 +61,14 @@ static void RunUiContractSmoke(Assembly assembly)
                 binder: null,
                 args: [settings, dataRoot],
                 culture: null)!;
-            window.GetType().GetProperty(
+            var warningSinkProperty = window.GetType().GetProperty(
                 "WarningSink",
-                BindingFlags.Instance | BindingFlags.NonPublic)!.SetValue(
-                    window,
-                    (Action<string>)(message => throw new InvalidOperationException(
-                        $"Unexpected Warn() modal: {message}")));
+                BindingFlags.Instance | BindingFlags.NonPublic) ??
+                throw new InvalidOperationException("The modal smoke seam is missing.");
+            warningSinkProperty.SetValue(
+                window,
+                (Action<string>)(message => throw new InvalidOperationException(
+                    $"Unexpected warning or confirmation modal: {message}")));
             var tabs = Descendants(window).OfType<TabControl>().Single();
             var tabNames = tabs.TabPages.Cast<TabPage>().Select(page => page.Text).ToArray();
             if (tabNames is not ["Интервалы", "Настройки", "Диагностика"])

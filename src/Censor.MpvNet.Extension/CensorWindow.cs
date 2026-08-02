@@ -253,8 +253,9 @@ internal sealed class CensorWindow : Form
     public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
-    // Loader-smoke seam: fail on an unexpected Warn() modal.
-    // Keep a property (CS0649 is an error); the smoke assigns it by name via reflection.
+    // Loader-smoke seam: fail on an unexpected warning or confirmation dialog.
+    // Keep a property: no assignment here, and CS0649-on-fields is an error.
+    // The smoke assigns it by name via reflection.
     private Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
@@ -364,28 +365,22 @@ internal sealed class CensorWindow : Form
     }
 
     public bool ConfirmDurationMismatch() =>
-        MessageBox.Show(
-            this,
+        ShowConfirmation(
             "Длительность в файле интервалов отличается от фильма. Применить всё равно?",
-            "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2) == DialogResult.Yes;
 
     public DialogResult ConfirmExternalChange() =>
-        MessageBox.Show(
-            this,
+        ShowConfirmation(
             "Файл изменён другой программой.\n\nДа — перезаписать, Нет — сохранить как новый, Отмена — ничего не делать.",
-            "CensorPlayer",
             MessageBoxButtons.YesNoCancel,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button3);
 
     public bool ConfirmSubtitleExport() =>
-        MessageBox.Show(
-            this,
+        ShowConfirmation(
             "SRT и WebVTT сохраняют только интервалы и текст. Название, смещение, запас до и после интервала и служебные строки в экспорт не попадут.\n\nЭкспортировать копию? Несохранённые изменения останутся без изменений.",
-            "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2) == DialogResult.Yes;
@@ -1381,10 +1376,8 @@ internal sealed class CensorWindow : Form
             return;
         }
 
-        if (MessageBox.Show(
-                this,
+        if (ShowConfirmation(
                 "Файл settings.json создан более новой версией CensorPlayer. Перезаписать его настройками, которые сейчас показаны в окне? Неизвестные параметры будут удалены, а исходный файл останется в settings.json.pre-repair.",
-                "CensorPlayer",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2) == DialogResult.Yes)
@@ -1460,10 +1453,8 @@ internal sealed class CensorWindow : Form
             Warn(recovered.Warning ?? "Не удалось прочитать несохранённые изменения.");
             return;
         }
-        var restore = MessageBox.Show(
-            this,
+        var restore = ShowConfirmation(
             "Найдены несохранённые изменения. Восстановить их?",
-            "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Question) == DialogResult.Yes;
         if (restore)
@@ -1558,10 +1549,8 @@ internal sealed class CensorWindow : Form
     {
         CommitCurrentCellEdit();
         if (_draft?.IsDirty == true &&
-            MessageBox.Show(
-                this,
+            ShowConfirmation(
                 "Удалить несохранённые изменения?",
-                "CensorPlayer",
                 MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning,
                 MessageBoxDefaultButton.Button2) != DialogResult.Yes)
@@ -1764,10 +1753,8 @@ internal sealed class CensorWindow : Form
         if (!ScheduleFileKinds.TryGetSubtitleFormat(path, out _))
             return true;
 
-        return MessageBox.Show(
-            this,
+        return ShowConfirmation(
             "Каждый фрагмент субтитров станет отдельным интервалом размытия. Импортировать файл?",
-            "CensorPlayer",
             MessageBoxButtons.YesNo,
             MessageBoxIcon.Warning,
             MessageBoxDefaultButton.Button2) == DialogResult.Yes;
@@ -1962,6 +1949,20 @@ internal sealed class CensorWindow : Form
             "CensorPlayer",
             MessageBoxButtons.OK,
             MessageBoxIcon.Warning);
+    }
+
+    private DialogResult ShowConfirmation(
+        string message,
+        MessageBoxButtons buttons,
+        MessageBoxIcon icon,
+        MessageBoxDefaultButton defaultButton = MessageBoxDefaultButton.Button1)
+    {
+        if (WarningSink is { } warningSink)
+        {
+            warningSink(message);
+            return DialogResult.Cancel;
+        }
+        return MessageBox.Show(this, message, "CensorPlayer", buttons, icon, defaultButton);
     }
 
     private sealed record SidecarChoice(string Name, string Path);
