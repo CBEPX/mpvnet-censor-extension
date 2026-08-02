@@ -23,6 +23,20 @@ public sealed class ScheduleTextTests
             Assert.False(ScheduleText.TryParseTimestamp(text, out _));
     }
 
+    [Theory]
+    [InlineData("00:00")]
+    [InlineData("0:00:00.")]
+    [InlineData("0:00:00x000")]
+    [InlineData("00:60:00")]
+    [InlineData("00:00:60")]
+    [InlineData(":00:00")]
+    [InlineData("00:00:0100")]
+    public void RejectsMalformedEditorTimestamps(string text)
+    {
+        Assert.False(ScheduleText.TryParseDraftTimestamp(text, out var actual));
+        Assert.Equal(0, actual);
+    }
+
     [Fact]
     public void ParsesCanonicalFixture()
     {

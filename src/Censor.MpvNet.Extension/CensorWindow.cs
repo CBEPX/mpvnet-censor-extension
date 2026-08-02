@@ -842,13 +842,9 @@ internal sealed class CensorWindow : Form
             Warn("Сначала откройте фильм.");
             return;
         }
-        if (CurrentTimeRequested?.Invoke() is not { } start)
-        {
-            Warn("Текущая позиция воспроизведения недоступна. Повторите после завершения операции.");
-            return;
-        }
         if (!EnsureDraft())
             return;
+        var start = CurrentTimeRequested?.Invoke() ?? 0;
         _draft!.Add(start, checked(start + 1_000));
         Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
         _intervals.Focus();
@@ -1116,6 +1112,8 @@ internal sealed class CensorWindow : Form
 
     private void RenderDraft(int? selectedIndex = null)
     {
+        if (_intervals.IsCurrentCellInEditMode)
+            _intervals.EndEdit();
         var restoreIndices = selectedIndex.HasValue
             ? [selectedIndex.Value]
             : SelectedIndices();

@@ -185,15 +185,26 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
 
     window.GetType().GetProperty("CurrentTimeRequested")!.SetValue(
         window,
-        (Func<long?>)(() => 2_000));
+        (Func<long?>)(() => null));
     Descendants(window).OfType<Button>().Single(button =>
         button.Text == "Добавить вручную").PerformClick();
     if (grid.Rows.Count != 1 ||
         grid.CurrentCell?.OwningColumn?.Name != "start" ||
+        grid.CurrentCell.Value as string != "00:00:00.000" ||
         !grid.IsCurrentCellInEditMode)
     {
         throw new InvalidOperationException(
             "Manual entry did not create a row and start editing its start time.");
+    }
+
+    grid.CurrentCell.Value = "00:00:03";
+    window.GetType().GetMethod(
+        "RenderDraft",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
+    if (grid.Rows[0].Cells["start"].Value as string != "00:00:03.000")
+    {
+        throw new InvalidOperationException(
+            "A full render discarded or failed to normalize the active cell edit.");
     }
 }
 
