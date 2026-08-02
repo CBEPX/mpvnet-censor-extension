@@ -151,10 +151,13 @@ public sealed class ScheduleDraft
     public void Update(int index, long startMs, long endMs, string? note)
     {
         EnsureIndex(index);
+        var updated = new CensorInterval(startMs, endMs, NormalizeSingleLine(note));
+        if (_document.Intervals[index] == updated)
+            return;
         Change(document =>
         {
             var intervals = document.Intervals.ToArray();
-            intervals[index] = new(startMs, endMs, NormalizeSingleLine(note));
+            intervals[index] = updated;
             return document with { Intervals = intervals };
         });
     }

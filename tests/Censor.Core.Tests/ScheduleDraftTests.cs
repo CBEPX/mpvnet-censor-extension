@@ -228,6 +228,19 @@ public sealed class ScheduleDraftTests
     }
 
     [Fact]
+    public void UnchangedUpdateDoesNotCreateDirtyStateOrUndoHistory()
+    {
+        var draft = new ScheduleDraft(Document(new CensorInterval(0, 1_000, "note")));
+        var document = draft.Document;
+
+        draft.Update(0, 0, 1_000, " note ");
+
+        Assert.Same(document, draft.Document);
+        Assert.False(draft.IsDirty);
+        Assert.False(draft.CanUndo);
+    }
+
+    [Fact]
     public void FailedEditDoesNotCreateUndoHistory()
     {
         var draft = new ScheduleDraft(Document(new CensorInterval(1, 1_000)));

@@ -271,9 +271,6 @@ internal sealed class CensorWindow : Form
         _mediaHeading.Text = string.IsNullOrEmpty(mediaPath)
             ? "Фильм не открыт"
             : GetMediaTitle(mediaPath) ?? mediaPath;
-        _emptyState.Text = HasCurrentMedia()
-            ? "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены."
-            : "Откройте фильм, чтобы добавить интервалы.";
         _schedule.Text = string.IsNullOrEmpty(schedulePath) ? "Не выбран" : schedulePath;
         var localizedStatus = LocalizeStatus(status);
         _status.Text = localizedStatus;
@@ -1124,6 +1121,12 @@ internal sealed class CensorWindow : Form
 
     private void RenderDraft(int? selectedIndex = null)
     {
+        CommitCurrentCellEdit();
+        _emptyState.Text = !HasCurrentMedia()
+            ? "Откройте фильм, чтобы добавить интервалы."
+            : HasDetachedDraft()
+                ? "Сначала разберитесь с изменениями для другого фильма."
+                : "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены.";
         var restoreIndices = selectedIndex.HasValue
             ? [selectedIndex.Value]
             : SelectedIndices();
@@ -1420,6 +1423,7 @@ internal sealed class CensorWindow : Form
             MessageBoxIcon.Question) == DialogResult.Yes;
         if (restore)
         {
+            CommitCurrentCellEdit();
             _draft = new(recovered.Document!);
             _draft.MarkDirty();
             _sourcePath = null;

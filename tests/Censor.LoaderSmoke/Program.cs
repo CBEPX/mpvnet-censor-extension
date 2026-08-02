@@ -188,58 +188,68 @@ static void VerifyDiscardClearsEditor(Assembly assembly, Form window)
         .ToArray();
     if (grid.Rows.Count != 0 || enabledPrimaryActions.Length != 0)
         throw new InvalidOperationException("Discard left stale intervals or enabled primary actions.");
+    if (!Descendants(window).OfType<Label>().Any(label =>
+            label.Text == "Интервалов пока нет. Нажмите «Добавить вручную» и укажите время сцены."))
+    {
+        throw new InvalidOperationException(
+            "The empty editor does not direct the user to the primary action.");
+    }
 
     var currentTimeProperty = window.GetType().GetProperty("CurrentTimeRequested")!;
-    var originalCurrentTime = currentTimeProperty.GetValue(window);
-    try
+    currentTimeProperty.SetValue(window, (Func<long?>)(() => null));
+    var addButton = Descendants(window).OfType<Button>().Single(button =>
+        button.Text == "Добавить вручную");
+    addButton.PerformClick();
+    if (grid.Rows.Count != 1 ||
+        grid.CurrentCell?.OwningColumn?.Name != "start" ||
+        grid.CurrentCell.Value as string != "00:00:00.000" ||
+        !grid.IsCurrentCellInEditMode)
     {
-        currentTimeProperty.SetValue(window, (Func<long?>)(() => null));
-        var addButton = Descendants(window).OfType<Button>().Single(button =>
-            button.Text == "Добавить вручную");
-        addButton.PerformClick();
-        if (grid.Rows.Count != 1 ||
-            grid.CurrentCell?.OwningColumn?.Name != "start" ||
-            grid.CurrentCell.Value as string != "00:00:00.000" ||
-            !grid.IsCurrentCellInEditMode)
-        {
-            throw new InvalidOperationException(
-                "Manual entry did not create a row and start editing its start time.");
-        }
-
-        grid.CurrentCell.Value = "00:00:03";
-        window.GetType().GetMethod("UpdateState")!.Invoke(
-            window,
-            [
-                @"C:\Video\Film.mkv",
-                1L,
-                null,
-                null,
-                "READY",
-                6_000L,
-                null,
-                null,
-                diagnostics,
-                false,
-            ]);
-        if (grid.Rows[0].Cells["start"].Value as string != "00:00:03.000")
-        {
-            throw new InvalidOperationException(
-                "A runtime update discarded or failed to normalize the active cell edit.");
-        }
-
-        currentTimeProperty.SetValue(window, (Func<long?>)(() => 5_000));
-        addButton.PerformClick();
-        if (grid.Rows.Count != 2 ||
-            grid.CurrentCell?.Value as string != "00:00:05.000")
-        {
-            throw new InvalidOperationException(
-                "Manual entry ignored an available playback position.");
-        }
+        throw new InvalidOperationException(
+            "Manual entry did not create a row and start editing its start time.");
     }
-    finally
+
+    grid.CurrentCell.Value = "00:00:03";
+    window.GetType().GetMethod("UpdateState")!.Invoke(
+        window,
+        [
+            @"C:\Video\Film.mkv",
+            1L,
+            null,
+            null,
+            "READY",
+            6_000L,
+            null,
+            null,
+            diagnostics,
+            false,
+        ]);
+    if (grid.Rows[0].Cells["start"].Value as string != "00:00:03.000")
     {
-        currentTimeProperty.SetValue(window, originalCurrentTime);
+        throw new InvalidOperationException(
+            "A runtime update discarded or failed to normalize the active cell edit.");
     }
+
+    grid.BeginEdit(selectAll: true);
+    grid.CurrentCell!.Value = "00:00:04";
+    window.GetType().GetMethod(
+        "RenderDraft",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
+    if (grid.Rows[0].Cells["start"].Value as string != "00:00:04.000")
+    {
+        throw new InvalidOperationException(
+            "A full render discarded or failed to normalize the active cell edit.");
+    }
+
+    currentTimeProperty.SetValue(window, (Func<long?>)(() => 5_000));
+    addButton.PerformClick();
+    if (grid.Rows.Count != 2 ||
+        grid.CurrentCell?.Value as string != "00:00:05.000")
+    {
+        throw new InvalidOperationException(
+            "Manual entry ignored an available playback position.");
+    }
+    currentTimeProperty.SetValue(window, null);
 }
 
 static IEnumerable<Control> Descendants(Control root)
