@@ -414,10 +414,15 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             "UseDraftForCurrentMedia",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
         notifications.Clear();
+        var emptyDraftState = draftState.Text;
         handleCommand.Invoke(window, ["set-start", 1_000L]);
         handleCommand.Invoke(window, ["previous", null]);
-        if (draftState.Text != "Начало отмечено: 00:00:01.000" ||
-            !notifications.SequenceEqual(["Сначала добавьте интервал."]))
+        if (draftState.Text != emptyDraftState ||
+            !notifications.SequenceEqual(
+                [
+                    "Сначала добавьте интервал.",
+                    "Сначала добавьте интервал.",
+                ]))
         {
             throw new InvalidOperationException(
                 "Authoring commands did not explain that the draft is empty.");
