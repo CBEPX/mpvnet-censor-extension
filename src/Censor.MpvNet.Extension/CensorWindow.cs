@@ -43,6 +43,13 @@ internal sealed class CensorWindow : Form
     private readonly Label _duration = ValueLabel();
     private readonly Label _filterState = new() { AutoSize = true };
     private readonly Label _draftState = new() { AutoSize = true };
+    private readonly Label _authoringNotice = new()
+    {
+        AccessibleName = "Сообщение редактора",
+        AutoSize = true,
+        ForeColor = Color.DarkGoldenrod,
+        Visible = false,
+    };
     private readonly Label _mediaHeading = new()
     {
         AutoEllipsis = true,
@@ -209,7 +216,12 @@ internal sealed class CensorWindow : Form
         Controls.Add(tabs);
 
         _intervals.CellEndEdit += OnCellEndEdit;
-        _intervals.SelectionChanged += (_, _) => UpdateActionStates();
+        _intervals.SelectionChanged += (_, _) =>
+        {
+            if (!_rendering)
+                ClearAuthoringNotification();
+            UpdateActionStates();
+        };
         _offset.ValueChanged += (_, _) =>
         {
             if (_rendering || _draft is null)
@@ -241,6 +253,9 @@ internal sealed class CensorWindow : Form
     public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
+    // Loader-smoke seam: fail instead of blocking CI on an unexpected modal.
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
         string? mediaPath,
@@ -471,7 +486,10 @@ internal sealed class CensorWindow : Form
                 }
                 _pendingStartMs = capturedTimeMs ?? CurrentTimeRequested?.Invoke();
                 if (_pendingStartMs.HasValue)
+                {
+                    ClearAuthoringNotification();
                     _draftState.Text = $"Начало отмечено: {FormatTimestamp(_pendingStartMs.Value)}";
+                }
                 else
                     NotifyAuthoring("Текущая позиция воспроизведения недоступна.");
                 UpdateActionStates();
@@ -759,7 +777,12 @@ internal sealed class CensorWindow : Form
         _detachedActions.Padding = new(6);
         _detachedActions.Visible = false;
 
-        var header = Flow(_mediaHeading, _intervalCount, _filterState, _draftState);
+        var header = Flow(
+            _mediaHeading,
+            _intervalCount,
+            _filterState,
+            _draftState,
+            _authoringNotice);
         header.Padding = new(3, 3, 3, 0);
 
         var gridHost = new Panel { Dock = DockStyle.Fill };
@@ -862,26 +885,18 @@ internal sealed class CensorWindow : Form
 
     private void DeleteSelected()
     {
-        if (!CanEditCurrentMedia())
-        {
-            NotifyCannotEdit();
+        if (!TryGetEditableDraft(out var draft))
             return;
-        }
-        if (_draft is null || _draft.Document.Intervals.Count == 0)
-        {
-            NotifyAuthoring("Сначала добавьте интервал.");
-            return;
-        }
         var selected = SelectedIndices();
         if (selected.Length == 0)
         {
             NotifyAuthoring("Сначала выберите интервал.");
             return;
         }
-        _draft.Delete(selected);
-        var next = _draft.Document.Intervals.Count == 0
+        draft.Delete(selected);
+        var next = draft.Document.Intervals.Count == 0
             ? (int?)null
-            : Math.Min(selected[0], _draft.Document.Intervals.Count - 1);
+            : Math.Min(selected[0], draft.Document.Intervals.Count - 1);
         Changed(selectedIndex: next);
     }
 
@@ -895,16 +910,8 @@ internal sealed class CensorWindow : Form
 
     private void MergeSelected()
     {
-        if (!CanEditCurrentMedia())
-        {
-            NotifyCannotEdit();
+        if (!TryGetEditableDraft(out var draft))
             return;
-        }
-        if (_draft is null || _draft.Document.Intervals.Count == 0)
-        {
-            NotifyAuthoring("Сначала добавьте интервал.");
-            return;
-        }
         var selected = SelectedIndices();
         if (selected.Length == 0)
         {
@@ -913,7 +920,7 @@ internal sealed class CensorWindow : Form
         }
         try
         {
-            _draft.Merge(selected);
+            draft.Merge(selected);
             Changed(selectedIndex: selected[0]);
         }
         catch (ArgumentException exception)
@@ -979,19 +986,11 @@ internal sealed class CensorWindow : Form
 
     private void ShiftAll()
     {
-        if (!CanEditCurrentMedia())
-        {
-            NotifyCannotEdit();
+        if (!TryGetEditableDraft(out var draft))
             return;
-        }
-        if (_draft is null || _draft.Document.Intervals.Count == 0)
-        {
-            NotifyAuthoring("Сначала добавьте интервал.");
-            return;
-        }
         try
         {
-            _draft.ShiftAll((long)_shiftAll.Value);
+            draft.ShiftAll((long)_shiftAll.Value);
             Changed();
         }
         catch (OverflowException)
@@ -1049,25 +1048,18 @@ internal sealed class CensorWindow : Form
             _sourceHash,
             _draftMediaPath,
             _draftMediaSessionId);
+        ClearAuthoringNotification();
         return true;
     }
 
     private void NavigateInterval(int direction)
     {
-        if (!CanEditCurrentMedia())
-        {
-            NotifyCannotEdit();
+        if (!TryGetEditableDraft(out var draft))
             return;
-        }
-        if (_draft is null || _draft.Document.Intervals.Count == 0)
-        {
-            NotifyAuthoring("Сначала добавьте интервал.");
-            return;
-        }
         var current = SelectedIndex() ?? (direction > 0 ? -1 : 0);
-        var next = Math.Clamp(current + direction, 0, _draft.Document.Intervals.Count - 1);
+        var next = Math.Clamp(current + direction, 0, draft.Document.Intervals.Count - 1);
         SelectRow(next);
-        SeekRequested?.Invoke(_draft.Document.Intervals[next].StartMs);
+        SeekRequested?.Invoke(draft.Document.Intervals[next].StartMs);
     }
 
     private void GoToSelectedStart()
@@ -1164,6 +1156,7 @@ internal sealed class CensorWindow : Form
     private void RenderDraft(int? selectedIndex = null)
     {
         CommitCurrentCellEdit();
+        ClearAuthoringNotification();
         _emptyState.Text = HasDetachedDraft()
             ? GetDetachedDraftActionMessage()
             : !HasCurrentMedia()
@@ -1663,9 +1656,9 @@ internal sealed class CensorWindow : Form
 
     private bool CanEditCurrentMedia() => HasCurrentMedia() && !HasDetachedDraft();
 
-    private bool TryGetEditableInterval(out int index)
+    private bool TryGetEditableDraft(out ScheduleDraft draft)
     {
-        index = -1;
+        draft = null!;
         if (!CanEditCurrentMedia())
         {
             NotifyCannotEdit();
@@ -1676,6 +1669,16 @@ internal sealed class CensorWindow : Form
             NotifyAuthoring("Сначала добавьте интервал.");
             return false;
         }
+        draft = _draft;
+        ClearAuthoringNotification();
+        return true;
+    }
+
+    private bool TryGetEditableInterval(out int index)
+    {
+        index = -1;
+        if (!TryGetEditableDraft(out _))
+            return false;
         if (SelectedIndex() is not { } selected)
         {
             NotifyAuthoring("Сначала выберите интервал.");
@@ -1921,11 +1924,26 @@ internal sealed class CensorWindow : Form
         NotifyAuthoring(
             HasDetachedDraft() ? GetDetachedDraftActionMessage() : "Сначала откройте фильм.");
 
-    private void NotifyAuthoring(string message) =>
+    private void NotifyAuthoring(string message)
+    {
+        _authoringNotice.Text = message;
+        _authoringNotice.Visible = true;
         AuthoringNotificationRequested?.Invoke(message);
+    }
+
+    private void ClearAuthoringNotification()
+    {
+        _authoringNotice.Text = "";
+        _authoringNotice.Visible = false;
+    }
 
     private void Warn(string message)
     {
+        if (WarningSink is { } warningSink)
+        {
+            warningSink(message);
+            return;
+        }
         MessageBox.Show(
             this,
             message,

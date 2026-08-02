@@ -393,13 +393,24 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     var draftState = (Label)window.GetType().GetField(
         "_draftState",
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+    var authoringNotice = (Label)window.GetType().GetField(
+        "_authoringNotice",
+        BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+    var warningSinkProperty = window.GetType().GetProperty("WarningSink")!;
+    warningSinkProperty.SetValue(
+        window,
+        (Action<string>)(message => throw new InvalidOperationException(
+            $"Unexpected modal authoring warning: {message}")));
     try
     {
         var detachedState = draftState.Text;
         handleCommand.Invoke(window, ["set-start", 1_000L]);
         window.Hide();
         handleCommand.Invoke(window, ["previous", null]);
-        if (window.Visible || draftState.Text != detachedState || !notifications.SequenceEqual(
+        if (draftState.Text != detachedState ||
+            authoringNotice.Text !=
+                "Сначала сохраните изменения, используйте их для открытого фильма или удалите." ||
+            !notifications.SequenceEqual(
                 [
                     "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
                     "Сначала сохраните изменения, используйте их для открытого фильма или удалите.",
@@ -418,6 +429,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         handleCommand.Invoke(window, ["set-start", 1_000L]);
         handleCommand.Invoke(window, ["previous", null]);
         if (draftState.Text != emptyDraftState ||
+            authoringNotice.Text != "Сначала добавьте интервал." ||
             !notifications.SequenceEqual(
                 [
                     "Сначала добавьте интервал.",
@@ -439,7 +451,8 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         window.GetType().GetMethod(
             "DuplicateSelected",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, null);
-        if (!notifications.SequenceEqual(["Сначала выберите интервал."]))
+        if (authoringNotice.Text != "Сначала выберите интервал." ||
+            !notifications.SequenceEqual(["Сначала выберите интервал."]))
         {
             throw new InvalidOperationException(
                 "Row actions did not explain that no interval is selected.");
@@ -448,6 +461,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     finally
     {
         notificationEvent.RemoveEventHandler(window, notificationHandler);
+        warningSinkProperty.SetValue(window, null);
     }
 }
 

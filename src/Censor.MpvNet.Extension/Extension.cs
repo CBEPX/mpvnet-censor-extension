@@ -2235,7 +2235,8 @@ public sealed class Extension : IExtension, IDisposable
                             QueueSafely(() => SaveDraft(snapshot, mode));
                         window.SeekRequested += milliseconds =>
                             QueueSafely(() => SeekTo(milliseconds));
-                        window.AuthoringNotificationRequested += QueueShow;
+                        window.AuthoringNotificationRequested += message =>
+                            QueueSafely(() => Show(message));
                         window.DiagnosticsRequested += includeSchedule =>
                             QueueSafely(() => ExportDiagnostics(includeSchedule));
                         window.SettingsRepairRequested += () => QueueSafely(RepairSettings);
