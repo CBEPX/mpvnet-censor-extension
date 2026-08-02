@@ -396,18 +396,14 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     var authoringNotice = (Label)window.GetType().GetField(
         "_authoringNotice",
         BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
-    var warningSinkProperty = window.GetType().GetProperty("WarningSink")!;
-    warningSinkProperty.SetValue(
-        window,
-        (Action<string>)(message => throw new InvalidOperationException(
-            $"Unexpected modal authoring warning: {message}")));
     try
     {
         var detachedState = draftState.Text;
         handleCommand.Invoke(window, ["set-start", 1_000L]);
         window.Hide();
         handleCommand.Invoke(window, ["previous", null]);
-        if (draftState.Text != detachedState ||
+        if (window.Visible ||
+            draftState.Text != detachedState ||
             authoringNotice.Text !=
                 "Сначала сохраните изменения, используйте их для открытого фильма или удалите." ||
             !notifications.SequenceEqual(
@@ -418,6 +414,27 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         {
             throw new InvalidOperationException(
                 "Hidden authoring commands did not publish detached-draft OSD feedback.");
+        }
+
+        window.GetType().GetMethod("UpdateState")!.Invoke(
+            window,
+            [
+                @"C:\Video\Other.mkv",
+                3L,
+                null,
+                null,
+                "LOADING",
+                6_000L,
+                null,
+                null,
+                diagnostics,
+                false,
+            ]);
+        if (authoringNotice.Text !=
+            "Сначала сохраните изменения, используйте их для открытого фильма или удалите.")
+        {
+            throw new InvalidOperationException(
+                "A background status update erased detached-draft feedback.");
         }
 
         window.Show();
@@ -461,7 +478,6 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
     finally
     {
         notificationEvent.RemoveEventHandler(window, notificationHandler);
-        warningSinkProperty.SetValue(window, null);
     }
 }
 

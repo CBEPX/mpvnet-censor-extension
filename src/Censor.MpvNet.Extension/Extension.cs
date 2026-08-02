@@ -2235,8 +2235,7 @@ public sealed class Extension : IExtension, IDisposable
                             QueueSafely(() => SaveDraft(snapshot, mode));
                         window.SeekRequested += milliseconds =>
                             QueueSafely(() => SeekTo(milliseconds));
-                        window.AuthoringNotificationRequested += message =>
-                            QueueSafely(() => Show(message));
+                        window.AuthoringNotificationRequested += QueueShow;
                         window.DiagnosticsRequested += includeSchedule =>
                             QueueSafely(() => ExportDiagnostics(includeSchedule));
                         window.SettingsRepairRequested += () => QueueSafely(RepairSettings);
@@ -2756,7 +2755,14 @@ public sealed class Extension : IExtension, IDisposable
         ThreadPool.QueueUserWorkItem(static state =>
         {
             var (extension, text) = ((Extension, string))state!;
-            extension.Show(text);
+            try
+            {
+                extension.Show(text);
+            }
+            catch (Exception exception)
+            {
+                Terminal.WriteError(exception, LogModule);
+            }
         }, (this, message));
 
     private void CheckFilters(object? _)

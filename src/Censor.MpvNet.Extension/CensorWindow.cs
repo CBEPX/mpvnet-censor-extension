@@ -253,9 +253,6 @@ internal sealed class CensorWindow : Form
     public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
-    // Loader-smoke seam: fail instead of blocking CI on an unexpected modal.
-    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
-    public Action<string>? WarningSink { get; set; }
 
     public void UpdateState(
         string? mediaPath,
@@ -1156,7 +1153,8 @@ internal sealed class CensorWindow : Form
     private void RenderDraft(int? selectedIndex = null)
     {
         CommitCurrentCellEdit();
-        ClearAuthoringNotification();
+        if (!HasDetachedDraft())
+            ClearAuthoringNotification();
         _emptyState.Text = HasDetachedDraft()
             ? GetDetachedDraftActionMessage()
             : !HasCurrentMedia()
@@ -1939,11 +1937,6 @@ internal sealed class CensorWindow : Form
 
     private void Warn(string message)
     {
-        if (WarningSink is { } warningSink)
-        {
-            warningSink(message);
-            return;
-        }
         MessageBox.Show(
             this,
             message,
