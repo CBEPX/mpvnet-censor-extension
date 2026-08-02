@@ -350,7 +350,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             false,
         ]);
     var detachedHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
-        label.Text == "Сначала сохраните или удалите несохранённые изменения.");
+        label.Text.Contains("Сейчас фильм не открыт.", StringComparison.Ordinal));
     if (detachedHint?.Visible != true || addButton.Enabled)
     {
         throw new InvalidOperationException(
@@ -372,8 +372,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             false,
         ]);
     var transferableHint = Descendants(window).OfType<Label>().SingleOrDefault(label =>
-        label.Text ==
-            "Сначала сохраните изменения, используйте их для открытого фильма или удалите.");
+        label.Text.Contains("Сейчас открыт «Other».", StringComparison.Ordinal));
     var transferButton = Descendants(window).OfType<Button>().SingleOrDefault(button =>
         button.Text.StartsWith("Использовать для «", StringComparison.Ordinal));
     if (transferableHint?.Visible != true ||
