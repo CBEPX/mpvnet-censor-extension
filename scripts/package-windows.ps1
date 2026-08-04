@@ -145,6 +145,7 @@ function Add-SpdxFile {
             }
         )
         licenseConcluded = "NOASSERTION"
+        licenseInfoInFiles = @("NOASSERTION")
         copyrightText = "NOASSERTION"
     }
 }
@@ -269,6 +270,7 @@ $Sbom = [ordered]@{
             packageVerificationCode = [ordered]@{
                 packageVerificationCodeValue = $VerificationCode
             }
+            licenseInfoFromFiles = @("NOASSERTION")
             licenseConcluded = "GPL-2.0-only"
             licenseDeclared = "GPL-2.0-only"
             copyrightText = "NOASSERTION"

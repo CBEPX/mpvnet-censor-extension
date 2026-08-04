@@ -396,6 +396,23 @@ public sealed class ScheduleDraftTests
         Assert.Equal("old", File.ReadAllText(path));
     }
 
+    [Fact]
+    public void WriterRejectsNonRoundTrippableDocumentWithoutChangingExistingFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "schedule.censor.txt");
+        File.WriteAllText(path, "old");
+        var document = new ScheduleDocument(
+            new ScheduleMetadata(OffsetMs: 10),
+            [],
+            ["# offset-ms: 20"]);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            AtomicScheduleWriter.Write(path, document));
+
+        Assert.Equal("old", File.ReadAllText(path));
+    }
+
     private static ScheduleDocument Document(params CensorInterval[] intervals) =>
         new(new(), intervals, []);
 }

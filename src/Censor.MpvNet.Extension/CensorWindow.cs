@@ -391,6 +391,8 @@ internal sealed class CensorWindow : Form
         ScheduleDocument savedDocument,
         string? lastScheduleDirectory)
     {
+        // Extension already persisted this directory; keep the picker synchronized
+        // even when a newer edit prevents this saved snapshot from marking it clean.
         _settings = _settings with { LastScheduleDirectory = lastScheduleDirectory };
         var wasDetached = HasDetachedDraft();
         if (_draft?.MarkSaved(savedDocument) != true)
@@ -1032,6 +1034,7 @@ internal sealed class CensorWindow : Form
         var diagnostics = _draft.Validate(
             _settings.Limits.MaxIntervals,
             _settings.Limits.MaxTextFileBytes);
+        RenderDraftSummary(diagnostics);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
             NotifyAuthoring("Исправьте ошибки в интервалах перед применением или сохранением.");
@@ -1186,7 +1189,8 @@ internal sealed class CensorWindow : Form
 
             var draftDiagnostics = _draft.Validate(
                 _settings.Limits.MaxIntervals,
-                _settings.Limits.MaxTextFileBytes);
+                _settings.Limits.MaxTextFileBytes,
+                checkSerializedSize: false);
             var errorRows = draftDiagnostics
                 .Where(item => item.Line > 0)
                 .Select(item => item.Line - 1)

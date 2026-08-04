@@ -524,6 +524,27 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             throw new InvalidOperationException(
                 "Row actions did not explain that no interval is selected.");
         }
+
+        var staleSaveAccepted = (bool)window.GetType().GetMethod("MarkSaved")!.Invoke(
+            window,
+            [
+                @"C:\Video\Other.censor.txt",
+                "saved-hash",
+                replacementDocument,
+                @"C:\Video",
+            ])!;
+        var windowSettings = window.GetType().GetField(
+            "_settings",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        if (staleSaveAccepted ||
+            !(bool)draftField.GetValue(window)!.GetType().GetProperty("IsDirty")!
+                .GetValue(draftField.GetValue(window)!)! ||
+            (string?)windowSettings.GetType().GetProperty("LastScheduleDirectory")!
+                .GetValue(windowSettings) != @"C:\Video")
+        {
+            throw new InvalidOperationException(
+                "A stale saved snapshot changed the draft or lost the persisted picker directory.");
+        }
     }
     finally
     {

@@ -1,5 +1,23 @@
 # Progress
 
+## 2026-08-04
+
+- Пользователь подтвердил физическую Windows-проверку exact head `d5456e0`;
+  PR #1 переведён в ready, CI и merge state были зелёными.
+- Полный Claude Code review через Opus 5/xhigh не нашёл блокирующего runtime
+  дефекта и оставил пять замечаний по стоимости редактора, записи и упаковке.
+- Проверка кода и официального SPDX 2.3 подтвердила три практических изменения;
+  SPDX-required и `MarkSaved` findings классифицированы как ложные без изменения
+  безопасной семантики.
+- Начата финальная remediation-волна: lightweight render validation,
+  single-serialization writer, явные SBOM-поля, self-contained source archive
+  и узкие регрессионные проверки.
+- Реализация завершена минимальным diff: full validation остаётся на
+  Apply/Save, writer проверяет один сериализованный текст, stale `MarkSaved`
+  contract закреплён loader-smoke, source archive и SBOM verifier усилены.
+- Локальные gates: `160/160` Core-тестов, Release build без предупреждений и
+  ошибок, `dotnet format --verify-no-changes` и `git diff --check` — PASS.
+
 ## 2026-08-01
 
 - Шестнадцатый полный Opus 5 review дал verdict `solid, ship-able`; packaging и
@@ -340,8 +358,7 @@
 
 ## Следующий шаг
 
-Отправить исправления шестнадцатого Opus-review и дождаться двух Windows CI.
-Затем повторять полный review Claude Opus 5 через `cc` и исправления до чистого
-verdict. После зелёного verdict физически проверить точный SHA DLL на Windows.
-PR остаётся draft; полный portable/installer не публикуется до закрытия issue
-#4.
+Завершить локальные gates финальной remediation-волны, выполнить delta-review
+Claude Opus 5, exact-head Windows CI и squash merge PR #1. Физический smoke не
+повторять без расширения diff за пределы validation/writer/package metadata.
+Полный portable/installer не публикуется до закрытия issue #4.

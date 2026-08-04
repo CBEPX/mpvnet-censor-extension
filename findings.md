@@ -374,6 +374,23 @@
   одного сравнения в секунду; граница перехода после измеренного роста уточнена
   в `ponytail`-комментарии.
 
+## Post-acceptance Claude Opus 5 review
+
+- Блокирующих correctness-дефектов не найдено. Подтверждены лишний полный
+  round-trip при перерисовке, повторная сериализация в writer и отсутствие
+  `.gitattributes` в project-source archive.
+- UI остаётся рассчитан на обычные 10–20 сцен: VirtualMode и оптимизация под
+  защитный предел 10 000 строк не добавляются. Полная проверка размера и
+  round-trip переносится на границу Apply/Save.
+- Замечание о SPDX оказалось основано на старом контракте: в SPDX 2.3
+  `licenseInfoFromFiles` и `licenseInfoInFiles` необязательны, а отсутствие
+  означает `NOASSERTION`. Поля выводятся явно только для совместимости.
+- Раннее обновление `LastScheduleDirectory` в `MarkSaved` намеренно: Extension
+  уже записал файл и настройки, а false означает только stale UI snapshot.
+  Перенос присваивания после guard оставил бы picker со старым каталогом.
+- Большой вынос ticket/orchestration state machine не входит в closeout PR и
+  уже отслеживается post-P0 issue #5.
+
 ## Граница доказательств
 
 - Физический Windows smoke на `440269a` доказал extension API, filter timeline,

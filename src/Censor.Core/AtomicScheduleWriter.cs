@@ -13,7 +13,11 @@ public static class AtomicScheduleWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(document);
 
-        var validation = ScheduleDraft.Validate(document, maxIntervals, maxTextFileBytes);
+        var validation = ScheduleDraft.Validate(
+            document,
+            maxIntervals,
+            maxTextFileBytes,
+            checkSerializedSize: false);
         if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
             throw new InvalidOperationException("Файл интервалов не записан: исправьте ошибки.");
 
@@ -21,11 +25,25 @@ public static class AtomicScheduleWriter
             throw new ArgumentException("Путь к расписанию должен включать каталог.", nameof(path));
         if (!Directory.Exists(directory))
             throw new DirectoryNotFoundException(directory);
-        var text = ScheduleText.Serialize(document);
+        string text;
+        byte[] bytes;
+        try
+        {
+            text = ScheduleText.Serialize(document);
+            bytes = Encoding.UTF8.GetBytes(text);
+        }
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
+        {
+            throw new InvalidOperationException(
+                "Файл интервалов не записан: исправьте ошибки.",
+                exception);
+        }
+        if (bytes.Length > maxTextFileBytes)
+            throw new InvalidOperationException(
+                $"Файл интервалов не записан: размер превышает {maxTextFileBytes} байт.");
         if (!ScheduleText.Parse(text, maxTextFileBytes, maxIntervals).IsSuccess)
             throw new InvalidOperationException(
                 "Расписание не записано: после сохранения оно не проходит повторный разбор.");
-        var bytes = Encoding.UTF8.GetBytes(text);
         AtomicFile.Write(
             path,
             bytes,

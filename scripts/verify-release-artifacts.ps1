@@ -83,7 +83,7 @@ finally {
 $SourceArchive = [IO.Compression.ZipFile]::OpenRead($ProjectSource.FullName)
 try {
     $SourceNames = @($SourceArchive.Entries.FullName.Replace("\", "/"))
-    foreach ($RequiredSource in @("CensorPlayer.sln", "LICENSE")) {
+    foreach ($RequiredSource in @(".gitattributes", "CensorPlayer.sln", "LICENSE")) {
         if ($SourceNames -notcontains $RequiredSource) {
             throw "Project source archive is missing $RequiredSource."
         }
@@ -101,6 +101,19 @@ if ($Sbom.spdxVersion -ne "SPDX-2.3" -or
     $Sbom.packages.name -notcontains "mpv" -or
     $Sbom.packages.name -notcontains "FFmpeg") {
     throw "SPDX SBOM is invalid or empty."
+}
+$PrimaryPackage = $Sbom.packages |
+    Where-Object SPDXID -eq "SPDXRef-Package-CensorPlayer" |
+    Select-Object -First 1
+if ($null -eq $PrimaryPackage -or
+    $PrimaryPackage.filesAnalyzed -ne $true -or
+    @($PrimaryPackage.licenseInfoFromFiles) -notcontains "NOASSERTION") {
+    throw "SPDX primary package analysis metadata is incomplete."
+}
+foreach ($File in $Sbom.files) {
+    if (@($File.licenseInfoInFiles) -notcontains "NOASSERTION") {
+        throw "SPDX file license metadata is incomplete: $($File.fileName)"
+    }
 }
 
 $PayloadArchive = [IO.Compression.ZipFile]::OpenRead($Portable.FullName)
