@@ -548,6 +548,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         var validationWarnings = Descendants(window).OfType<ListBox>().Single();
         if (valid ||
             authoringNotice.Text != ExpectedSizeNotice ||
+            authoringNotice.Visible != true ||
             !validationWarnings.Items.Cast<object>().Any(item => item is string text &&
                 text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)) ||
             !notifications.SequenceEqual([ExpectedSizeNotice]))
@@ -578,6 +579,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
         if (valid ||
             authoringNotice.Text != ExpectedSizeNotice ||
+            authoringNotice.Visible != true ||
             !validationWarnings.Items.Cast<object>().Any(item => item is string text &&
                 text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)) ||
             notifications.Count != 0)
@@ -610,10 +612,43 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             "Исправьте ошибки в интервалах перед применением или сохранением.";
         if (valid ||
             authoringNotice.Text != ExpectedRowNotice ||
+            authoringNotice.Visible != true ||
             !notifications.SequenceEqual([ExpectedRowNotice]))
         {
             throw new InvalidOperationException(
                 "A row-level validation failure did not publish actionable feedback.");
+        }
+        notifications.Clear();
+        window.GetType().GetMethod(
+            "RenderDraftRow",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [0]);
+        if (authoringNotice.Text != ExpectedRowNotice ||
+            authoringNotice.Visible != true ||
+            notifications.Count != 0)
+        {
+            throw new InvalidOperationException(
+                "A row render erased row-level validation feedback.");
+        }
+        window.GetType().GetMethod("UpdateState")!.Invoke(
+            window,
+            [
+                @"C:\Video\Third.mkv",
+                4L,
+                null,
+                null,
+                "READY",
+                6_000L,
+                null,
+                null,
+                diagnostics,
+                false,
+            ]);
+        if (authoringNotice.Text != ExpectedRowNotice ||
+            authoringNotice.Visible != true ||
+            notifications.Count != 0)
+        {
+            throw new InvalidOperationException(
+                "A detached-state refresh replaced validation feedback.");
         }
         updateDraft.Invoke(activeDraft, [0, 1_000L, 2_000L, null]);
         window.GetType().GetMethod(

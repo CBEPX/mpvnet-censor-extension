@@ -44,7 +44,7 @@ public static class AtomicScheduleWriter
             var parseError = reparsed.Diagnostics.FirstOrDefault(item =>
                 item.Severity == DiagnosticSeverity.Error);
             throw new InvalidOperationException(
-                "Файл интервалов не записан: " +
+                "Файл интервалов не записан: повторный разбор — " +
                 (parseError?.Message ?? "Документ не создан."));
         }
         AtomicFile.Write(

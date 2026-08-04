@@ -49,6 +49,10 @@
   row/full render, меняется вместе с ошибкой и исчезает после исправления.
   Loader-smoke проверяет document-level и row-level ветки; лишние SPDX и writer
   условия удалены. Локальные `162/162`, build, format и diff-check зелёные.
+- Фокусный review `ac091f0..3f98860` снова не нашёл blocking defects. Закрыт
+  последний test gap: row-level notice проверяется до и после исправления,
+  остаётся видимым при detached runtime refresh и не повторяет OSD. В writer
+  возвращён явный marker внутреннего round-trip failure.
 
 ## 2026-08-01
 

@@ -1161,9 +1161,10 @@ internal sealed class CensorWindow : Form
     {
         CommitCurrentCellEdit();
         // Visible is false with a hidden parent form; text records the pending notice.
-        if (HasDetachedDraft() && _authoringNotice.Text.Length > 0)
+        if (HasDetachedDraft() &&
+            _authoringNotice.Text.Length > 0 &&
+            !_authoringNoticeFromValidation)
         {
-            _authoringNoticeFromValidation = false;
             _authoringNotice.Text = GetDetachedDraftActionMessage();
         }
         else if (!_authoringNoticeFromValidation || _draft is null)
