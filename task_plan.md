@@ -1,6 +1,10 @@
-# План разработки Censor Extension v1.3.1
+# План разработки Censor Extension v1.3.2
 
-**Статус:** Core и session host реализованы на `codex/implement-censor-p0`; Windows CI и runtime Phase 0 в работе.
+**Статус:** выполняется финальная remediation-волна после exact-head Windows
+приёмки и полного Claude Opus 5 review. После точечных исправлений требуются
+локальные gates, delta-review, exact-head Windows CI и squash merge. Полный
+portable/installer по-прежнему нельзя публиковать до закрытия
+source-provenance gate.
 **Цель P0:** Windows-extension для зафиксированной stock-версии mpv.net, который применяет полноэкранный blur по session-scoped расписанию без базы данных.
 
 ## Зафиксированные решения
@@ -17,7 +21,14 @@
 - Допустимый `offset-ms`: от `-86_400_000` до `+86_400_000` включительно, вычисления выполняются в checked `Int64`.
 - Неизвестные `# key: value` и комментарии сохраняются дословно и в исходном относительном порядке; duplicate известного ключа является ошибкой.
 - Watchdog использует `earlyIntervalGuardMs` как единственный порог «следующий интервал близко».
-- Начальные blur presets: `Strong = sigma 30 / steps 2`, `Maximum = sigma 50 / steps 3`; итоговые значения фиксируются после GPU-проверки.
+- Blur presets: `Moderate = sigma 30 / steps 2`, default
+  `Balanced = sigma 40 / steps 2`, `Maximum = sigma 50 / steps 3`.
+- Синтетический 4K30 с software decode остаётся известным ограничением
+  плавности из issue #3, но не блокирует P0, пока каждый показанный кадр
+  проходит через censor filter.
+- P0 выпускается только для Windows x64 под `GPL-2.0-only`; RC не подписан
+  Authenticode. Installer работает без прав администратора и сохраняет
+  пользовательские данные при обычном удалении.
 
 ## Этапы
 
@@ -25,7 +36,7 @@
 
 - Создать solution, pinned .NET SDK/dependencies, warnings-as-errors и locked restore.
 - Перенести ТЗ в `docs/TZ.md`, ADR в `docs/adr/ADR-003-session-scoped-schedules-no-database.md`, пример в `tests/fixtures/example.censor.txt`.
-- Выпустить нормативную TZ v1.3.1 и внести в неё все принятые Fable-поправки, чтобы план и ТЗ не были двумя источниками истины.
+- Выпустить нормативную TZ v1.3.2 и внести в неё все принятые review-поправки, чтобы план и ТЗ не были двумя источниками истины.
 - Явно перечислить в ADR automatic sidecars `.censor.txt`, `.censor.srt`, `.censor.vtt`.
 - Убрать неразрешимые ссылки на ADR-002/TZ v1.2, если исходники не добавляются в историю.
 - Добавить минимальные `README.md`, `AGENTS.md`, `CLAUDE.md`, CI build/test skeleton и `deps.lock.json`; включить `csharp` в Serena после создания solution.
@@ -48,7 +59,8 @@
 - Разобрать UTF-8 `*.censor.txt`, metadata, dot/comma timestamps, notes и неизвестную необязательную metadata с line/column diagnostics.
 - Добавить минимальные SRT/WebVTT import/export adapters: cue → blur interval, cue text → note.
 - Реализовать validation, lead-in/out, offset, clamp к нулю, sort, overlap/`merge_gap_ms` merge и canonical UTF-8 без BOM serializer.
-- Ограничить файл 2 MiB и 10 000 исходных интервалов; сохранять atomically через temp + replace с backup.
+- Ограничить файл 2 MiB и 10 000 исходных интервалов как защитным пределом;
+  типичный фильм содержит 10–20 сцен. Сохранять atomically через temp + replace с backup.
 - Использовать xUnit и FsCheck.Xunit; отдельный fuzz dependency не добавлять до измеримой необходимости.
 
 **Выход:** round-trip fixtures и deterministic unit/property/fuzz checks проходят; повреждённый input не меняет активную модель и не портит существующий файл.
@@ -56,7 +68,7 @@
 ### 3. Filter compiler
 
 - Преобразовать только нормализованные числовые интервалы в `gte(t,start)*lt(t,end)`.
-- Генерировать стабильные labels `@censor_blur_NNN`, chunks до 500 интервалов и не более 50 filters.
+- Генерировать стабильные labels `@censor_blur_NNN` и chunks до 500 интервалов.
 - Централизовать mpv/FFmpeg escaping; schedule text никогда не попадает в command expression или shell.
 - Возвращать `FilterPlan` как данные для typed/native mpv commands, без выполнения внутри Core.
 
@@ -64,7 +76,8 @@
 
 ### 4. Media session integration
 
-- Реализовать `MediaSessionCoordinator` с монотонным ID и `CancellationTokenSource` на сессию.
+- Реализовать `MediaSessionCoordinator` с монотонным ID и
+  `CancellationTokenSource` на сессию.
 - На `StartFile` инвалидировать старую session, отменять операции и удалять прежние `@censor_*`; на `EndFile` очищать schedule/UI.
 - Реализовать manual load, reload и exact sidecar lookup с приоритетом TXT → SRT → VTT; при нескольких sidecars показывать выбор.
 - Проверять `media-duration-ms`: mismatch блокирует auto-load и требует явного подтверждения при manual load.
@@ -97,10 +110,370 @@
 
 - Сначала собрать portable ZIP с isolated `portable_config`, pinned runtime, licenses/notices, checksums и SBOM.
 - Затем добавить Windows installer, install/update/rollback test и сохранение предыдущего release artifact.
-- В GitHub Actions выполнять locked restore, Release build, tests, package, installer, checksums, SBOM и artifacts.
-- На self-hosted Windows runner пройти Intel/NVIDIA/AMD, 1080p30/60, 4K30, software decoding, full-film soak и OBS Window Capture.
+- В GitHub Actions выполнять locked restore, Release build, tests, package,
+  installer, checksums и SBOM. До закрытия source-provenance gate загружать
+  только DLL расширения и исходный код самого проекта.
+- На Windows пройти Intel/NVIDIA/AMD, 1080p30/60, software decoding и
+  full-film soak. Реальные 4K-фильмы и OBS проверяются отдельно в issue #3.
 
 **Выход:** выполнены все 15 acceptance criteria ТЗ; нет `BLOCKER/HIGH`, есть Windows evidence для mpv interaction и rollback artifact.
+
+### 8. Post-review fixes и аудиокомпрессия
+
+- Закрыть installer update, stale settings, disabled-watchdog, draft-limit,
+  atomic-write, recovery, UTC-log, hotkey timestamp и truthful-status findings
+  итогового Fable-review без изменения `MediaSessionCoordinator`.
+- Добавить глобальную аудиокомпрессию с default `off` и пресетами Film,
+  Anime, Night и Adaptive через единственную метку
+  `@censor_audio_compression`; пользовательский `af` не менять.
+- Применять аудиопресет сразу, подтверждать через readback `af` и показывать
+  русский OSD только после успешного применения; при ошибке откатывать
+  прежний пресет.
+- Доказать точные графы на закреплённом Windows runtime, усилить installer
+  update/uninstall smoke и повторить полный Claude Opus 5 review через `cc`.
+
+**Выход:** локальные проверки и точный Windows CI зелёные, Claude Opus 5 не
+оставил actionable findings, пользователю передан один итоговый DLL для
+физического теста.
+
+### 9. Исправления после Claude Opus 5 review
+
+- Санитизировать каждую JSONL-запись журнала при экспорте диагностики: пути
+  защищать HMAC-SHA-256 с локальным ключом установки, повреждённые строки не
+  копировать дословно.
+- При недоступном каталоге логов загружать расширение с отключённым журналом;
+  завершение работы не должно ждать занятый filter gate дольше пяти секунд.
+- Удалять recovery-файл после возврата черновика в сохранённое состояние,
+  возвращать отклонённые настройки в форму и ограничить очередь действий окна.
+- Заморозить снимки `ScheduleDraft`, переиспользовать validation result и при
+  редактировании одной границы обновлять только затронутую строку таблицы.
+- Свести durable temp/flush/replace в `AtomicFile`, убрать пустой `T(...)`,
+  повторяющийся event dispatch и отдельный `ScheduleOptionsResolver`.
+- Закрепить рекурсивное включение Core sources, retry загрузок и независимый от
+  текущего каталога путь аудиосмока.
+
+**Выход:** privacy/robustness findings закрыты регрессионными тестами, оба
+Windows CI зелёные, повторный `cc review` на `claude-opus-5` не оставляет
+actionable findings.
+
+### 10. Исправления после повторного Claude Opus 5 review
+
+- Канонизировать регистронезависимый ID аудиопресета при загрузке настроек и
+  закрепить этот контракт Core-тестом до создания WinForms-окна.
+- Сериализовать сохранение настроек отдельной блокировкой: immutable snapshot
+  брать под `_stateLock`, а durable write выполнять после его освобождения.
+- Выполнять normalize/compile черновика до записи расписания, чтобы ошибка
+  подготовки filter plan не оставляла на диске неподтверждённый файл.
+- Сохранять читаемый текст ошибок в диагностическом ZIP, хешируя только
+  абсолютные пути; невалидные JSONL-строки по-прежнему заменять маркером.
+- Исправить чтение `MPV_FORMAT_FLAG`, ложный `watchdog-recovered`, имя после
+  импорта `.censor.srt/.vtt` и асимметрию redo; удалить ложную команду
+  `censor-diagnostics` из примера.
+- Удалить лишний Extension writer wrapper и generic `Dispatch` overloads,
+  объединить test helper и зафиксировать порядок блокировок. Validation cache
+  и zero-copy `Freeze` сохранить как защиту от чрезмерного входного файла,
+  не считая защитный предел целевой нагрузкой UI.
+- Нормализовать source paths и убрать debug directory из compile reference,
+  чтобы одинаковый source commit и SDK давали один проверяемый SHA независимо
+  от каталога и платформы; чистый mpv.net checkout остаётся обязательным.
+
+**Выход:** второй набор findings закрыт минимальными регрессионными проверками,
+два Windows CI зелёные, следующий `cc review` на `claude-opus-5` не оставляет
+actionable findings.
+
+### 11. Исправления после третьего Claude Opus 5 review
+
+- Разрешить destructive installer smoke только в GitHub Actions, отказаться
+  работать поверх существующей установки и всегда передавать тестовый `/DIR`.
+- Проверять CI-only guard отдельным исполняемым шагом до настоящего smoke.
+- Не удалять отсутствующий аудиофильтр; перед remove/add читать `af` и сохранять
+  обязательный readback после изменения.
+- Ограничить ожидание OSD на filter gate до 250 мс: потеря уведомления не должна
+  задерживать media lifecycle.
+- Обновлять runtime warnings без лишней перерисовки таблицы, передавать окну
+  корневой каталог данных напрямую и синхронизировать dispose operation token.
+- Удалить устаревшую команду из README и пояснить намеренную single-DLL
+  компиляцию Core. Node.js оставить: он читает единый `deps.lock.json`, а его
+  замена только перенесёт build dependency в другой инструмент.
+
+**Выход:** destructive smoke имеет исполняемый safety gate, локальные
+build/tests зелёные, оба Windows CI подтверждают installer/runtime, итоговый
+`cc review` на `claude-opus-5` не оставляет actionable findings.
+
+### 12. Исправления после четвёртого Claude Opus 5 review
+
+- При смене blur пересобирать и сохранять загруженное, но ещё не применённое
+  расписание. Пока оно ожидает применения, не запускать конкурирующий reapply
+  прежнего active schedule.
+- Развести identity последнего runtime document и интервалы, с которыми
+  синхронизирован draft. Повторный `WARNING` должен обновлять только сообщения,
+  не перестраивая dirty grid.
+- Считать неизвестной metadata только ключ вида `[a-z][a-z0-9-]*`; остальные
+  строки с двоеточием сохранять как обычные комментарии без предупреждения.
+- Публиковать immutable `_settings` и `_blurSettings` через `volatile`, не читать
+  disposed operation token после stop и убрать дешёвые неоднозначности UI.
+
+**Выход:** staged schedule и dirty draft сохраняются при смене настроек и
+повторных watchdog events, parser regression закреплена тестом, оба Windows CI
+зелёные, итоговый `cc review` на `claude-opus-5` не оставляет findings перед
+merge.
+
+### 13. Исправления после пятого Claude Opus 5 review
+
+- Считать SRT/WebVTT явным lossy-export: предупреждать о потере metadata,
+  сохранять только копию и не очищать dirty/recovery state.
+- Сохранять неизвестную будущую версию `settings.json` и запрещать её
+  перезапись текущей схемой.
+- Разрешать merge только соседних строк; применять пользовательские лимиты к
+  импорту субтитров и сохранять parse diagnostics в active schedule.
+- Синхронизировать watchdog counters через `Interlocked`, не читать disposed
+  token при позднем `FileLoaded` и компилировать pending blur plan вне lock.
+- Всегда показывать окно перед picker, не считать одиночный `/` в дроби путём,
+  убрать validation cache и читать аудиопресеты через .NET 10 helper.
+
+**Выход:** регрессии data-loss, schema, merge, limits и redaction закреплены
+тестами, оба Windows CI зелёные, полный `cc review` на `claude-opus-5` не
+оставляет actionable findings.
+
+### 14. Исправления после шестого Claude Opus 5 review
+
+- Выполнять все UI actions через общий exception boundary, включая очередь,
+  `BeginInvoke` и rollback аудиопресета.
+- Закрепить единый контракт расширений: сохранённый файл обязан открываться;
+  sidecar, picker, drag-and-drop, import и export используют один helper.
+- Не объединять интервалы с временным разрывом. Вынести решение о сохранении
+  dirty draft в чистую функцию и покрыть все ветки Core-тестами.
+- Хранить blur внутри скомпилированного `FilterPlan`, безопасно откатываться на
+  `off` при неизвестном audio preset и экспортировать только собственные логи.
+- Явно обрабатывать ошибку Node.js/lock file, валидировать документ без
+  throwaway draft и пояснить, почему compile-reference не имеет общего SHA для
+  macOS и Windows.
+
+**Выход:** локальные проверки и два Windows CI зелёные, повторный полный
+`cc review` на `claude-opus-5` не оставляет actionable findings.
+
+### 15. Исправления после седьмого Claude Opus 5 review
+
+- Для пустого плана снимать прежнюю цепочку фильтров тем же teardown, который
+  используется явным отключением расписания.
+- Маскировать любой абсолютный путь до записи локального лога и не поглощать
+  следующий за путём код ошибки или номер строки.
+- Сравнивать metadata duration с уже сохранённой длительностью media session,
+  не выполнять второе чтение mpv property.
+- Не переписывать settings без изменения каталога и не запоминать каталог до
+  проверки открытого фильма.
+- Обновлять подпись dirty/saved при reconciliation, убрать no-op `MarkSaved`,
+  мёртвый лимит фильтров и повторяющееся условие нормализации.
+- Предупреждать перед ручным импортом SRT/VTT и закрепить точный порядок
+  канонических sidecar-файлов тестом.
+
+**Выход:** регрессии очистки, redaction и sidecar покрыты минимальными
+проверками, оба Windows CI зелёные, следующий полный `cc review` на
+`claude-opus-5` не оставляет замечаний.
+
+### 16. Исправления после восьмого Claude Opus 5 review
+
+- Приостанавливать layout на время полной перерисовки таблицы и защищать
+  программное обновление offset от `ValueChanged`.
+- Прерывать filter swap, если mpv не подтвердил состояние паузы; снимать
+  watchdog warning после фактического возвращения labels.
+- Дать пользователю явный подтверждаемый repair-flow для future-schema с
+  сохранением `settings.json.pre-repair`, без автоматического понижения формата.
+- Проверять воспроизводимый `libmpvnet.dll` общим SHA-256 на macOS arm64 и
+  Windows x64; читать lock file существующим .NET SDK вместо отдельного Node.js.
+- Держать дневной лог открытым, не сериализовать schedule без consent и
+  скрывать/очищать аварийные temp-файлы атомарной записи.
+
+**Выход:** локальные тесты и оба Windows CI подтверждают новую UI/runtime/build
+логику, Windows SHA добавлен в lock file, полный `cc review` на
+`claude-opus-5` не оставляет замечаний.
+
+### 17. Исправления после девятого Claude Opus 5 review
+
+- Считать 10–20 интервалов обычной нагрузкой редактора; не добавлять виртуальный
+  режим таблицы ради защитного лимита 10 000 строк и убрать такую проверку из Phase 0.
+- Сохранять пресет размытия только после подтверждённого применения к рабочему
+  графу; при ошибке
+  синхронно возвращать runtime settings и ComboBox к предыдущему значению.
+- Брать один снимок настроек на загрузку расписания, ограничивать отрицательный
+  seek нулём и разрешить редактору повторно разобрать показанное им отрицательное
+  время.
+- Передавать `MPV_FORMAT_FLAG` как нативный 32-битный `int`, пояснить намеренный
+  ручной импорт обычных субтитров и исправить корневой artifacts path guard.
+- Добавить CI-проверку с настоящим закреплённым mpv.net для применения, паузы,
+  восстановления watchdog, Disable и сохранения чужого `vf`.
+
+**Выход:** 81 Core-тест, Release build, оба Windows CI и повторный полный
+`cc review` на `claude-opus-5` проходят без actionable findings.
+
+### 18. Исправления после десятого Claude Opus 5 review
+
+- Применять `logging.level` как настоящий минимальный уровень JSONL-журнала и
+  отмечать ошибочные события уровнем `error`.
+- Не терять OSD при краткой конкуренции за общий filter gate: выполнить одну
+  ограниченную отложенную попытку без второго lock-домена mpv.
+- При ручном `censor-load` автоматически открывать окно для подтверждения
+  несовпадения длительности и отменять ожидание вместе с media session.
+- Выполнять защищённый installer-smoke до фактического mpv.net runtime-smoke:
+  Windows Known Folder не подменяется одной переменной окружения, а runtime
+  закономерно создаёт LocalData расширения.
+- Закрыть оставшиеся мелкие контракты: безопасный `off`-пресет, русские кавычки
+  при обезличивании путей, описание `.bak` и явный комментарий dual-compile.
+
+**Выход:** 82 Core-теста, Release build, runtime и installer smoke в обоих
+Windows CI, затем полный `cc review` на `claude-opus-5` без actionable findings.
+
+### 19. Исправления после одиннадцатого Claude Opus 5 review
+
+- В runtime-smoke доверять успешной команде удаления и ожидать только
+  восстановленный label, не пытаться поймать краткий промежуточный кадр `vf`.
+- После фактической записи всегда сообщать об успехе, но не связывать старый
+  черновик с уже изменившимся runtime-состоянием.
+- Не создавать интервал от нулевой отметки, если текущая позиция временно
+  недоступна; показать понятное предупреждение.
+- Отправлять аварийный OSD из UI callback в очередь и одинаково объяснять
+  repair future-schema настроек.
+- На границе диагностического ZIP скрывать сообщения parser diagnostics без
+  согласия на включение расписания.
+- Согласовать минимальный размер сохранённого окна с WinForms и убрать мёртвый
+  параметр PowerShell smoke; скрытый atomic temp сохранить как защиту от
+  видимого crash-residue.
+
+**Выход:** локальные gates, оба Windows CI и новый полный Opus-review проходят
+без actionable findings.
+
+### 20. Исправления после двенадцатого Claude Opus 5 review
+
+- Вынести чистое решение save/runtime reconciliation в существующий Core helper
+  и покрыть stale, detached, pending, active и empty-plan ветви.
+- Для не-UTF-8 расписаний показывать конкретное исправимое сообщение, сохраняя
+  строгий UTF-8 контракт формата.
+- Перед явным repair future-schema сохранять точную отдельную копию
+  `settings.json.pre-repair`; обычный rolling `.bak` больше не является
+  обещанным архивом исходного формата.
+- Не заявлять остановку watchdog, если чтение `vf` продолжает повторяться.
+- Сохранить простую полную перерисовку grid и строковый `vf` readback для
+  реальной нагрузки 10–20 сцен; оставить `ponytail`-границу перехода к
+  VirtualMode/native scanning только после измеренного роста.
+- Закрыть малые round-trip замечания: variable-hour draft timestamp, обычный
+  комментарий `note:`, immutable normalizer result и обновление обоих ComboBox
+  после repair/rollback настроек.
+
+**Выход:** 84 Core-теста, оба Windows CI и следующий полный Opus-review без
+практических findings в согласованной P0-нагрузке.
+
+### 21. Исправления после тринадцатого Claude Opus 5 review
+
+- После изменения запаса до/после или порога объединения прямо сообщать, что
+  открытое расписание нужно перезагрузить.
+- При неудачном применении объяснять безопасную паузу и действие
+  «Цензура → Выключить размытие».
+- Защищать псевдонимы путей HMAC-SHA-256 с локальным ключом установки и не
+  принимать URL за локальный путь.
+- Читать регистр имён полей пользовательского JSON без лишней строгости и
+  явно связать размер filter chunk с входным пределом расписания.
+- В runtime-smoke ждать опубликованную готовность extension перед `loadfile`,
+  а не фиксированную паузу запуска.
+
+**Выход:** Core-тесты, Release build, оба Windows CI и повторный полный
+Opus-review проходят без практических замечаний.
+
+### 22. Исправления после четырнадцатого Claude Opus 5 review
+
+- Собирать pinned compile reference с `PathMap`, без debug directory и с
+  `ContinuousIntegrationBuild`; проверять один SHA на macOS и Windows.
+- Защитить shutdown callback общим exception boundary.
+- Принимать в SRT/WebVTT обе десятичные запятые и точки и доли секунды длиной
+  от одной до трёх цифр, сохраняя fail-closed отказ всего некорректного файла.
+- Для staged schedule явно просить нажать «Применить» после смены blur preset;
+  валидировать черновик до normalize/compile во всех путях сохранения.
+
+**Выход:** две сборки из разных каталогов дают одинаковый SHA, 88 Core-тестов,
+оба Windows CI и следующий полный Opus-review проходят.
+
+### 23. Исправления после пятнадцатого Claude Opus 5 review
+
+- Подтверждать не только labels, а точное содержимое всех blur-фильтров и
+  отсутствие лишних или дублированных `@censor_blur_*`.
+- Сравнивать с каноническим mpv readback `lavfi=graph=%N%GRAPH`, вычисляя
+  length по UTF-8 и не разбирая внутренний FFmpeg graph.
+- Подтверждать точный аудиограф выбранного пресета, а не общий label
+  компрессора.
+- При очистке удалять все обнаруженные labels расширения, сохраняя чужие
+  пользовательские filters.
+- В runtime-smoke подменять ожидаемый blur filter графом с тем же label и
+  добавлять stale chunk; ждать восстановления параметров `40/2` и удаления
+  хвоста.
+- Не терять runtime diagnostics при пустом черновике и явно показывать источник
+  несвязанного черновика.
+- Включить подтверждение паузы в recovery cleanup и не считать штатную гонку
+  watchdog с shutdown ошибкой.
+
+**Выход:** 91 Core-тест, Release build, оба Windows CI и следующий полный
+Opus-review проходят без actionable findings.
+
+### 24. Исправления после шестнадцатого Claude Opus 5 review
+
+- Указать mpv.net `7.1.2.0` как единственную проверенную версию ручной
+  установки и описать fail-closed действие при несовместимости readback.
+- Ограничить ожидание duration-mismatch dialog тем же 30-секундным timeout, что
+  используется для выбора sidecar.
+- Убрать бесконечный optimistic retry при смене blur preset; для обычного
+  короткого плана выполнить одну компиляцию под state lock.
+- Вынести и покрыть тестами чистые границы: `censor-*` message parsing,
+  TXT/SRT/WebVTT dispatch и privacy-safe exception text.
+- Централизовать минимум окна и предел timestamp; писать в JSONL количество
+  событий, вытесненных bounded-буфером.
+- Не добавлять precompute/virtualization без измеренной необходимости.
+
+**Выход:** 111 Core-тестов, Release build, оба Windows CI и следующий полный
+Opus-review проходят без actionable findings.
+
+### 25. Прямое создание интервалов и простой интерфейс
+
+- Сделать `Цензура → Интервалы…` основным входом: открытый фильм сразу получает
+  пустой документ в памяти с названием и известной длительностью; входной файл
+  не требуется.
+- Оставить три вкладки: `Интервалы`, `Настройки`, `Диагностика`. Убрать пустующее
+  поле вкладки текущего фильма, вынести краткую сводку над таблицей, а пути и
+  filtergraph оставить в диагностике.
+- Постоянно показывать `Добавить вручную`, удаление, undo/redo, переход к
+  началу, явное применение и сохранение. Новая строка сразу открывает
+  редактирование начала и создаётся даже при временно недоступной позиции;
+  `ЧЧ:ММ:СС` нормализуется в `ЧЧ:ММ:СС.000`.
+  F7/F8 и остальные редкие операции, смещения, импорт, Save As и экспорт
+  поместить под сворачиваемое `Дополнительно`.
+- Сохранять принадлежность документа media session. Несохранённый документ A
+  при переходе к B не применять: предложить сохранить для A, перенести на B
+  либо удалить, не останавливая активный sidecar B.
+- Первое сохранение предлагать как `<film>.censor.txt`, затем хранить путь и
+  хеш в pending state. Основной Save принимает только `.censor.txt`; SRT/VTT —
+  отдельный lossy-export без очистки признака несохранённых изменений.
+- Сохранить существующий формат, atomic write, `.bak`, проверку внешних
+  изменений, recovery, старые script-message и горячие клавиши.
+- Обновить Core-тесты пути и save reconciliation, Windows runtime smoke и
+  физический чек-лист; после зелёного exact-head CI выполнить полный
+  `cc review` на `claude-opus-5` и устранить все практические замечания.
+
+**Выход:** пользователь создаёт, применяет и сохраняет 10–20 сцен без
+предварительного файла; интерфейс не показывает редкие инструменты до запроса,
+а документ другого фильма невозможно применить случайно.
+
+### 26. Закрытие post-acceptance Opus review и merge
+
+- Сохранить полную live-проверку при перерисовке для обычных 10–20 сцен;
+  защитный предел 10 000 строк не превращать в целевую UI-нагрузку.
+- В `AtomicScheduleWriter` сериализовать документ один раз, проверить размер и
+  повторно разобрать именно записываемый текст до атомарной замены.
+- Сохранить намеренное обновление каталога после фактической записи даже при
+  stale draft snapshot и закрепить этот контракт loader-smoke.
+- Включить `.gitattributes` в source archive. Явно выводить допустимые SPDX 2.3
+  значения `NOASSERTION`, не объявляя их отсутствие ошибкой стандарта.
+- После локальных gates выполнить Opus 5/xhigh review только delta от
+  `d5456e0`, exact-head Windows CI и squash merge без переписывания ветки.
+
+**Выход:** подтверждённые review findings закрыты минимальным diff, ложные
+замечания задокументированы, PR слит одним squash-коммитом, main CI зелёный.
 
 ## Обязательные проверки и review gates
 
@@ -108,7 +481,7 @@
 - Compiler: `[start,end)` boundaries, locale decimal separator, chunks/labels, escaping и non-zero-start timeline.
 - Lifecycle: seek/pause/speed/chapter, early interval guard, filter loss и весь cancellation/race matrix.
 - Data safety: temp/replace/backup failures, отмена dialog и exception isolation.
-- Для parser, compiler и media lifecycle запускать adversarial Claude Code Fable review через `cc`.
+- Для parser, compiler и media lifecycle запускать полный Claude Opus 5 review через `cc`.
 - Merge запрещён при `BLOCKER/HIGH`, stale-session риске либо отсутствии требуемого Windows runtime evidence.
 
 ## Вне P0
@@ -123,3 +496,11 @@
 |---|---|---|
 | Serena C# LSP reports `.NET runtime version 10.0 not found` | Installed SDK 10.0.302 locally, exposed it as `/opt/homebrew/bin/dotnet`, reactivated upstream project | Restart Codex/MCP so Serena inherits the new PATH; do not bypass semantic tooling |
 | `mpvnet.dll` absent from portable release ZIP | Tried to extract a compile-time assembly after verifying the portable archive SHA-256 | Build only pinned upstream `MpvNet.csproj` and reference its `libmpvnet.dll` with `Private=false` |
+| `CS8752` in new draft-limit test | Used target-typed `new()` as the sole argument of a `params` call | Named `CensorInterval` explicitly; production code was unaffected |
+| PowerShell parser rejected `15_000` in Windows audio smoke | Used a C#-style digit separator in a PowerShell numeric literal | Replaced it with `15000`; packaging and pinned Inno had already passed |
+| `mpvnet.com` audio smoke timed out on `film-balanced` | Infinite `anullsrc` left mpv.net in idle state after the requested length | Made the lavfi source finite and set `idle=no`, `keep-open=no`; timeout now preserves console output |
+| PR audio smoke passed Film then timed out on Anime while push-run passed all presets | mpv.net defaults to `process-instance=single`, so consecutive smoke processes could race through single-instance forwarding | Added the documented `--process-instance=multi` option to isolate every preset run |
+| Push audio smoke still timed out nondeterministically after process isolation | The WinForms EOF path depends on ordering of separate `end-file` and `playlist-pos` events | Switched the pinned mpv.net smoke to its built-in headless `--o=` event loop and supplied a complete two-second adaptive-analysis window |
+| Local loader smoke requires `Microsoft.WindowsDesktop.App` | macOS can compile the Windows target but cannot execute its WinForms host | Keep loader execution as a required `windows-latest` CI gate; local Release build still verifies compilation |
+| `compileReferenceSha256` passed on macOS but failed Windows CI `30669608246` | Build embedded host/path-specific debug data | Added `PathMap`, `DebugType=none`, and `ContinuousIntegrationBuild`; independent directories now produce one pinned hash |
+| Exact filter check rejected Windows runtime in `30682415070` | mpv canonicalizes `lavfi=[GRAPH]` as length-quoted `lavfi=graph=%N%GRAPH` | Captured the native string once in diagnostic CI, removed the diagnostic, and now derives the canonical UTF-8 form deterministically |

@@ -1,0 +1,84 @@
+name: Windows package validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version without the v prefix
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    env:
+      RELEASE_VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.302
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore pinned mpv.net reference
+        run: bash scripts/restore-mpvnet.sh
+
+      - name: Restore, build, and test
+        shell: pwsh
+        run: |
+          dotnet restore CensorPlayer.sln --locked-mode
+          dotnet build CensorPlayer.sln --configuration Release --no-restore `
+            -p:Version=$env:RELEASE_VERSION `
+            -p:InformationalVersion=$env:RELEASE_VERSION
+          dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
+
+      - name: Verify stock extension loader contract
+        run: >-
+          dotnet run
+          --project tests/Censor.LoaderSmoke/Censor.LoaderSmoke.csproj
+          --configuration Release
+          --no-build
+          --no-restore
+          --
+          src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
+
+      - name: Build and verify release
+        shell: pwsh
+        run: |
+          ./scripts/package-windows.ps1 `
+            -Version $env:RELEASE_VERSION `
+            -Commit $env:GITHUB_SHA `
+            -RunId $env:GITHUB_RUN_ID
+          ./scripts/smoke-audio-filters.ps1 `
+            -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "CensorPlayer")) {
+            throw "Audio filter smoke unexpectedly loaded the extension and created user data."
+          }
+          ./scripts/verify-release-artifacts.ps1 `
+            -ArtifactDirectory artifacts/windows/release
+          ./scripts/smoke-installer.ps1 `
+            -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
+          # Keep runtime smoke after installer smoke: it owns a temporary CensorPlayer data root.
+          ./scripts/smoke-extension-runtime.ps1 `
+            -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName `
+            -VerifyAudioWatchdog
+
+      - name: Upload extension build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: CensorExtension-${{ inputs.version }}-windows-x64
+          if-no-files-found: error
+          path: |
+            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
+            artifacts/windows/release/CensorPlayer-*-project-source.zip
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+            examples/input.conf
+          retention-days: 90

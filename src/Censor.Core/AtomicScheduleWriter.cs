@@ -4,58 +4,54 @@ namespace Censor.Core;
 
 public static class AtomicScheduleWriter
 {
-    private static readonly UTF8Encoding Utf8WithoutBom = new(false);
-
-    public static void Write(string path, ScheduleDocument document)
+    public static byte[] Write(
+        string path,
+        ScheduleDocument document,
+        int maxIntervals = ScheduleText.MaxIntervals,
+        int maxTextFileBytes = ScheduleText.MaxTextFileBytes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(path);
         ArgumentNullException.ThrowIfNull(document);
 
-        var fullPath = Path.GetFullPath(path);
-        var directory = Path.GetDirectoryName(fullPath) ??
-            throw new ArgumentException("Schedule path must include a directory.", nameof(path));
+        var validation = ScheduleDraft.Validate(
+            document,
+            maxIntervals,
+            maxTextFileBytes,
+            checkSerializedSize: false);
+        if (validation.Any(item => item.Severity == DiagnosticSeverity.Error))
+            throw new InvalidOperationException("Файл интервалов не записан: исправьте ошибки.");
+
+        var directory = Path.GetDirectoryName(Path.GetFullPath(path)) ??
+            throw new ArgumentException("Путь к расписанию должен включать каталог.", nameof(path));
         if (!Directory.Exists(directory))
             throw new DirectoryNotFoundException(directory);
-
-        var tempPath = Path.Combine(directory, $".{Path.GetFileName(fullPath)}.{Guid.NewGuid():N}.tmp");
-        var backupPath = fullPath + ".bak";
-
+        string text;
+        byte[] bytes;
         try
         {
-            var text = ScheduleText.Serialize(document);
-            if (!ScheduleText.Parse(text).IsSuccess)
-                throw new InvalidOperationException("Refusing to write a schedule that cannot be parsed back.");
-
-            var bytes = Utf8WithoutBom.GetBytes(text);
-            using (var stream = new FileStream(
-                tempPath,
-                FileMode.CreateNew,
-                FileAccess.Write,
-                FileShare.None,
-                bufferSize: 4096,
-                FileOptions.WriteThrough))
-            {
-                stream.Write(bytes);
-                stream.Flush(flushToDisk: true);
-            }
-
-            if (File.Exists(fullPath))
-                File.Replace(tempPath, fullPath, backupPath);
-            else
-                File.Move(tempPath, fullPath);
+            text = ScheduleText.Serialize(document);
+            bytes = Encoding.UTF8.GetBytes(text);
         }
-        catch
+        catch (Exception exception) when (exception is ArgumentException or OverflowException)
         {
-            try
-            {
-                File.Delete(tempPath);
-            }
-            catch
-            {
-                // Preserve the original write failure.
-            }
-
-            throw;
+            throw new InvalidOperationException(
+                $"Файл интервалов не записан: {exception.Message}",
+                exception);
         }
+        var reparsed = ScheduleText.Parse(text, maxTextFileBytes, maxIntervals);
+        if (!reparsed.IsSuccess)
+        {
+            var parseError = reparsed.Diagnostics.FirstOrDefault(item =>
+                item.Severity == DiagnosticSeverity.Error);
+            throw new InvalidOperationException(
+                "Файл интервалов не записан: повторный разбор — " +
+                (parseError?.Message ?? "Документ не создан."));
+        }
+        AtomicFile.Write(
+            path,
+            bytes,
+            Path.GetFullPath(path) + ".bak",
+            createDirectory: false);
+        return bytes;
     }
 }

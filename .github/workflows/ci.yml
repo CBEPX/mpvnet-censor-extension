@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -10,11 +12,11 @@ permissions:
 jobs:
   windows:
     runs-on: windows-latest
-    timeout-minutes: 20
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
         with:
           dotnet-version: 10.0.302
           cache: true
@@ -22,6 +24,38 @@ jobs:
 
       - name: Restore pinned mpv.net reference
         run: bash scripts/restore-mpvnet.sh
+
+      - name: Verify restore rejects an untracked source file
+        shell: bash
+        run: |
+          touch .deps/mpvnet-source/untracked-restore-probe
+          if bash scripts/restore-mpvnet.sh 2>restore-error.log; then
+            exit 1
+          fi
+          grep -F \
+            "mpv.net source checkout contains tracked or untracked modifications" \
+            restore-error.log
+          rm .deps/mpvnet-source/untracked-restore-probe
+
+      - name: Verify restore refreshes a stale clean checkout
+        shell: bash
+        run: |
+          git -C .deps/mpvnet-source \
+            -c user.name=CI \
+            -c user.email=ci@example.invalid \
+            commit --allow-empty --no-gpg-sign -m "stale checkout test"
+          bash scripts/restore-mpvnet.sh
+
+      - name: Verify restore reports lock reader failures
+        shell: bash
+        run: |
+          if DOTNET_CMD=false bash scripts/restore-mpvnet.sh \
+            2>restore-error.log; then
+            exit 1
+          fi
+          grep -F \
+            "Unable to read mpv.net values from deps.lock.json" \
+            restore-error.log
 
       - name: Restore
         run: dotnet restore CensorPlayer.sln --locked-mode
@@ -32,12 +66,77 @@ jobs:
       - name: Test
         run: dotnet test CensorPlayer.sln --configuration Release --no-build --no-restore
 
-      - name: Upload extension
-        uses: actions/upload-artifact@v4
+      - name: Verify stock extension loader contract
+        run: >-
+          dotnet run
+          --project tests/Censor.LoaderSmoke/Censor.LoaderSmoke.csproj
+          --configuration Release
+          --no-build
+          --no-restore
+          --
+          src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
+
+      - name: Build portable, installer, project source, checksums, and SBOM
+        shell: pwsh
+        run: >-
+          ./scripts/package-windows.ps1
+          -Commit $env:GITHUB_SHA
+          -RunId $env:GITHUB_RUN_ID
+
+      - name: Verify audio filters on pinned mpv.net
+        shell: pwsh
+        run: |
+          ./scripts/smoke-audio-filters.ps1 `
+            -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+          if (Test-Path (Join-Path $env:LOCALAPPDATA "CensorPlayer")) {
+            throw "Audio filter smoke unexpectedly loaded the extension and created user data."
+          }
+
+      - name: Verify release artifacts
+        shell: pwsh
+        run: ./scripts/verify-release-artifacts.ps1 -ArtifactDirectory artifacts/windows/release
+
+      - name: Verify installer smoke local safety guard
+        shell: pwsh
+        run: |
+          $env:GITHUB_ACTIONS = ""
+          $blocked = $false
+          try {
+            ./scripts/smoke-installer.ps1 -InstallerPath "not-used.exe"
+          }
+          catch {
+            if ($_.Exception.Message -notlike "Installer smoke is CI-only*") {
+              throw
+            }
+            $blocked = $true
+          }
+          if (-not $blocked) {
+            throw "Installer smoke accepted local execution."
+          }
+
+      - name: Smoke installer
+        shell: pwsh
+        run: >-
+          ./scripts/smoke-installer.ps1
+          -InstallerPath (Get-ChildItem artifacts/windows/release/CensorPlayer-Setup-*-x64.exe).FullName
+
+      - name: Smoke extension runtime on pinned mpv.net
+        shell: pwsh
+        # Keep this after installer smoke: it owns a temporary CensorPlayer data root.
+        run: >-
+          ./scripts/smoke-extension-runtime.ps1
+          -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
+          -VerifyAudioWatchdog
+
+      - name: Upload extension build evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: CensorExtension-windows
+          name: CensorExtension-windows-x64
           if-no-files-found: error
           path: |
             src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
-            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.deps.json
-            src/Censor.MpvNet.Extension/bin/Release/Censor.Core.dll
+            artifacts/windows/release/CensorPlayer-*-project-source.zip
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+            examples/input.conf
+          retention-days: 30

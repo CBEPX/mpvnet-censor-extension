@@ -11,10 +11,18 @@ public enum SubtitleFormat
 
 public static class SubtitleScheduleText
 {
-    public static ParseResult Import(string text, SubtitleFormat format)
+    public static ParseResult Import(
+        string text,
+        SubtitleFormat format,
+        int maxTextFileBytes = ScheduleText.MaxTextFileBytes,
+        int maxIntervals = ScheduleText.MaxIntervals)
     {
         ArgumentNullException.ThrowIfNull(text);
-        if (Encoding.UTF8.GetByteCount(text) > ScheduleText.MaxTextFileBytes)
+        if (maxTextFileBytes is < 1 or > ScheduleText.MaxTextFileBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
+        if (maxIntervals is < 1 or > ScheduleText.MaxIntervals)
+            throw new ArgumentOutOfRangeException(nameof(maxIntervals));
+        if (Encoding.UTF8.GetByteCount(text) > maxTextFileBytes)
         {
             return new(null,
             [
@@ -22,7 +30,7 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     1,
                     1,
-                    $"Subtitle exceeds the {ScheduleText.MaxTextFileBytes}-byte limit."),
+                    $"Файл субтитров превышает ограничение в {maxTextFileBytes} байт."),
             ]);
         }
 
@@ -34,7 +42,7 @@ public static class SubtitleScheduleText
         if (format == SubtitleFormat.WebVtt)
         {
             if (lines.Length == 0 || !lines[0].StartsWith("WEBVTT", StringComparison.Ordinal))
-                return Error(1, "WEBVTT header is missing.");
+                return Error(1, "В файле нет заголовка WEBVTT.");
 
             index = 1;
             while (index < lines.Length && lines[index].Length > 0)
@@ -63,17 +71,17 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     blockStart + 1,
                     1,
-                    "Cue timing line is missing."));
+                    "В блоке субтитров нет строки с таймкодами."));
                 continue;
             }
 
-            if (!TryParseTiming(block[timingIndex], format, out var startMs, out var endMs))
+            if (!TryParseTiming(block[timingIndex], out var startMs, out var endMs))
             {
                 diagnostics.Add(new(
                     DiagnosticSeverity.Error,
                     blockStart + timingIndex + 1,
                     1,
-                    "Cue timing is invalid."));
+                    "Некорректные таймкоды блока субтитров."));
                 continue;
             }
 
@@ -83,29 +91,35 @@ public static class SubtitleScheduleText
                     DiagnosticSeverity.Error,
                     blockStart + timingIndex + 1,
                     1,
-                    "Cue start must be earlier than end."));
+                    "Начало блока субтитров должно быть раньше конца."));
                 continue;
             }
 
-            if (intervals.Count >= ScheduleText.MaxIntervals)
+            if (intervals.Count >= maxIntervals)
             {
                 diagnostics.Add(new(
                     DiagnosticSeverity.Error,
                     blockStart + 1,
                     1,
-                    $"Subtitle exceeds the {ScheduleText.MaxIntervals}-interval limit."));
+                    $"В файле субтитров больше {maxIntervals} интервалов."));
                 break;
             }
 
-            var note = string.Join('\n', block.Skip(timingIndex + 1)).Trim();
+            var note = string.Join(' ', block.Skip(timingIndex + 1)).Trim();
             intervals.Add(new(startMs, endMs, note.Length == 0 ? null : note));
         }
 
-        return diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error)
-            ? new(null, diagnostics)
-            : new(
-                new ScheduleDocument(new ScheduleMetadata(), intervals, []),
-                diagnostics);
+        if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+            return new(null, diagnostics);
+
+        diagnostics.Add(new(
+            DiagnosticSeverity.Warning,
+            1,
+            1,
+            "Поле media-duration-ms отсутствует в формате субтитров: соответствие фильму проверить нельзя."));
+        return new(
+            new ScheduleDocument(new ScheduleMetadata(), intervals, []),
+            diagnostics);
     }
 
     public static string Export(ScheduleDocument document, SubtitleFormat format)
@@ -120,7 +134,9 @@ public static class SubtitleScheduleText
         {
             var interval = document.Intervals[index];
             if (interval.StartMs < 0 || interval.StartMs >= interval.EndMs)
-                throw new ArgumentException("Intervals must satisfy 0 <= start < end.", nameof(document));
+                throw new ArgumentException(
+                    "Интервалы должны удовлетворять условию 0 <= начало < конец.",
+                    nameof(document));
 
             if (format == SubtitleFormat.Srt)
                 builder.Append(index + 1).Append('\n');
@@ -160,7 +176,6 @@ public static class SubtitleScheduleText
 
     private static bool TryParseTiming(
         string line,
-        SubtitleFormat format,
         out long startMs,
         out long endMs)
     {
@@ -174,15 +189,12 @@ public static class SubtitleScheduleText
         var endAndSettings = line[(separator + 3)..].Trim();
         var settings = endAndSettings.IndexOfAny([' ', '\t']);
         var end = settings >= 0 ? endAndSettings[..settings] : endAndSettings;
-        var decimalSeparator = format == SubtitleFormat.Srt ? ',' : '.';
-
-        return TryParseTimestamp(start, decimalSeparator, out startMs) &&
-            TryParseTimestamp(end, decimalSeparator, out endMs);
+        return TryParseTimestamp(start, out startMs) &&
+            TryParseTimestamp(end, out endMs);
     }
 
     private static bool TryParseTimestamp(
         string value,
-        char decimalSeparator,
         out long milliseconds)
     {
         milliseconds = 0;
@@ -192,7 +204,8 @@ public static class SubtitleScheduleText
 
         var hourText = parts.Length == 3 ? parts[0] : "0";
         var minuteText = parts[^2];
-        var secondParts = parts[^1].Split(decimalSeparator);
+        var secondParts = parts[^1].Split(['.', ',']);
+        var fractionLength = secondParts.Length == 2 ? secondParts[1].Length : 0;
         if (secondParts.Length != 2 ||
             !int.TryParse(hourText, NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
             !int.TryParse(minuteText, NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
@@ -201,7 +214,7 @@ public static class SubtitleScheduleText
             hours > 99 ||
             minutes > 59 ||
             seconds > 59 ||
-            secondParts[1].Length != 3)
+            fractionLength is < 1 or > 3)
         {
             return false;
         }
@@ -210,7 +223,7 @@ public static class SubtitleScheduleText
             ((long)hours * 3_600_000) +
             ((long)minutes * 60_000) +
             ((long)seconds * 1_000) +
-            millis;
+            millis * (fractionLength switch { 1 => 100, 2 => 10, _ => 1 });
         return true;
     }
 

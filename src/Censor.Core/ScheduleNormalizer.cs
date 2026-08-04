@@ -22,7 +22,9 @@ public static class ScheduleNormalizer
         foreach (var interval in intervals)
         {
             if (interval.StartMs < 0 || interval.StartMs >= interval.EndMs)
-                throw new ArgumentException("Intervals must satisfy 0 <= start < end.", nameof(intervals));
+                throw new ArgumentException(
+                    "Интервалы должны удовлетворять условию 0 <= начало < конец.",
+                    nameof(intervals));
 
             var start = checked(interval.StartMs - options.LeadInMs + options.OffsetMs);
             var end = checked(interval.EndMs + options.LeadOutMs + options.OffsetMs);
@@ -39,15 +41,13 @@ public static class ScheduleNormalizer
         });
 
         if (adjusted.Count < 2)
-            return adjusted;
+            return adjusted.ToArray();
 
         var merged = new List<NormalizedInterval>(adjusted.Count);
         var current = adjusted[0];
         foreach (var next in adjusted.Skip(1))
         {
-            var overlapsOrIsClose =
-                next.StartMs <= current.EndMs ||
-                next.StartMs - current.EndMs <= options.MergeGapMs;
+            var overlapsOrIsClose = next.StartMs - current.EndMs <= options.MergeGapMs;
             if (overlapsOrIsClose)
             {
                 current = current with { EndMs = Math.Max(current.EndMs, next.EndMs) };
@@ -59,7 +59,7 @@ public static class ScheduleNormalizer
         }
 
         merged.Add(current);
-        return merged;
+        return merged.ToArray();
     }
 
     private static void Validate(NormalizationOptions options)
@@ -69,6 +69,8 @@ public static class ScheduleNormalizer
         ArgumentOutOfRangeException.ThrowIfNegative(options.MergeGapMs);
 
         if (options.OffsetMs is < -ScheduleText.MaxOffsetMs or > ScheduleText.MaxOffsetMs)
-            throw new ArgumentOutOfRangeException(nameof(options), "Offset is outside the supported range.");
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                "Смещение выходит за допустимый диапазон.");
     }
 }

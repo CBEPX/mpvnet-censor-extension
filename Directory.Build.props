@@ -1,6 +1,9 @@
 <Project>
   <PropertyGroup>
     <Product>CensorPlayer</Product>
+    <Version>1.3.2-rc.1</Version>
+    <PackageLicenseExpression>GPL-2.0-only</PackageLicenseExpression>
+    <RepositoryUrl>https://github.com/CBEPX/mpvnet-censor-extension</RepositoryUrl>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>

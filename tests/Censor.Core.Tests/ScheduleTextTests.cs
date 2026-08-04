@@ -7,6 +7,36 @@ namespace Censor.Core.Tests;
 
 public sealed class ScheduleTextTests
 {
+    [Theory]
+    [InlineData("00:00:01.250", 1_250)]
+    [InlineData("00:00:01", 1_000)]
+    [InlineData("1:02:03.000", 3_723_000)]
+    [InlineData("1:02:03", 3_723_000)]
+    [InlineData("-00:00:01.250", -1_250)]
+    [InlineData("-00:00:01", -1_000)]
+    [InlineData("100:00:00.000", 360_000_000)]
+    public void ParsesTimestampsAcceptedByTheEditor(string text, long expected)
+    {
+        Assert.True(ScheduleText.TryParseDraftTimestamp(text, out var actual));
+        Assert.Equal(expected, actual);
+        if (text.Length != 12 || expected < 0 || expected >= 360_000_000)
+            Assert.False(ScheduleText.TryParseTimestamp(text, out _));
+    }
+
+    [Theory]
+    [InlineData("00:00")]
+    [InlineData("0:00:00.")]
+    [InlineData("0:00:00x000")]
+    [InlineData("00:60:00")]
+    [InlineData("00:00:60")]
+    [InlineData(":00:00")]
+    [InlineData("00:00:0100")]
+    public void RejectsMalformedEditorTimestamps(string text)
+    {
+        Assert.False(ScheduleText.TryParseDraftTimestamp(text, out var actual));
+        Assert.Equal(0, actual);
+    }
+
     [Fact]
     public void ParsesCanonicalFixture()
     {
@@ -41,6 +71,9 @@ public sealed class ScheduleTextTests
         Assert.Equal(-250, reloaded.Document!.Metadata.OffsetMs);
         Assert.Equal(new CensorInterval(1_000, 2_000, "sample"), reloaded.Document.Intervals.Single());
         Assert.Equal(["# future-key: keep me", "# a comment"], reloaded.Document.PreservedHeaderLines);
+        Assert.Contains(
+            parsed.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("future-key", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -57,6 +90,15 @@ public sealed class ScheduleTextTests
     }
 
     [Fact]
+    public void ParseRejectsInvalidSafetyLimits()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ScheduleText.Parse("", maxTextFileBytes: 0));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            ScheduleText.Parse("", maxIntervals: 0));
+    }
+
+    [Fact]
     public void RejectsDuplicateKnownMetadata()
     {
         const string text = """
@@ -68,7 +110,74 @@ public sealed class ScheduleTextTests
         var result = ScheduleText.Parse(text);
 
         Assert.False(result.IsSuccess);
-        Assert.Contains(result.Diagnostics, diagnostic => diagnostic.Message.Contains("duplicated", StringComparison.Ordinal));
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("несколько раз", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WarnsAboutWrongCaseInKnownMetadataWithoutApplyingIt()
+    {
+        const string text = """
+            # media-duration-ms: 2000
+            # Offset-ms: 500
+            00:00:01.000 --> 00:00:02.000
+            """;
+
+        var result = ScheduleText.Parse(text);
+
+        Assert.True(result.IsSuccess);
+        Assert.Null(result.Document!.Metadata.OffsetMs);
+        Assert.Contains("# Offset-ms: 500", result.Document.PreservedHeaderLines);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic =>
+                diagnostic.Message.Contains("неверный регистр", StringComparison.Ordinal) &&
+                diagnostic.Message.Contains("offset-ms", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void InvalidMediaDurationIsNotAlsoReportedAsMissing()
+    {
+        var result = ScheduleText.Parse("# media-duration-ms: abc");
+
+        Assert.False(result.IsSuccess);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("положительным целым числом", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("не задано", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void BareNoteSeparatorProducesNoNote()
+    {
+        var parsed = ScheduleText.Parse("00:00:01.000 --> 00:00:02.000 |   ");
+
+        Assert.True(parsed.IsSuccess);
+        Assert.Null(parsed.Document!.Intervals.Single().Note);
+    }
+
+    [Fact]
+    public void PreservesCommentWithColonWithoutMetadataWarning()
+    {
+        const string text = """
+            # media-duration-ms: 2000
+            # см. https://example.com
+            # note: handwritten comment
+            00:00:01.000 --> 00:00:02.000
+            """;
+
+        var result = ScheduleText.Parse(text);
+
+        Assert.True(result.IsSuccess);
+        Assert.Equal(
+            ["# см. https://example.com", "# note: handwritten comment"],
+            result.Document!.PreservedHeaderLines);
+        Assert.DoesNotContain(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("Неизвестное необязательное поле metadata", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -84,10 +193,11 @@ public sealed class ScheduleTextTests
                 [new CensorInterval(1_000, 2_000)],
                 []);
 
-            AtomicScheduleWriter.Write(path, document);
+            var writtenBytes = AtomicScheduleWriter.Write(path, document);
 
             Assert.Equal("old", File.ReadAllText(path + ".bak"));
             var bytes = File.ReadAllBytes(path);
+            Assert.Equal(writtenBytes, bytes);
             Assert.False(bytes.AsSpan().StartsWith(Encoding.UTF8.Preamble));
             Assert.True(ScheduleText.Parse(Encoding.UTF8.GetString(bytes)).IsSuccess);
         }
@@ -119,6 +229,27 @@ public sealed class ScheduleTextTests
     public void RejectsMultilineTitle(string title)
     {
         var document = new ScheduleDocument(new ScheduleMetadata(Title: title), [], []);
+
+        Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
+    }
+
+    [Theory]
+    [InlineData(" Film")]
+    [InlineData("Film ")]
+    public void RejectsTitleWhitespaceThatParserWouldDiscard(string title)
+    {
+        var document = new ScheduleDocument(new ScheduleMetadata(Title: title), [], []);
+
+        Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
+    }
+
+    [Fact]
+    public void RejectsMultilineIntervalNote()
+    {
+        var document = new ScheduleDocument(
+            new(),
+            [new(1_000, 2_000, "line one\nline two")],
+            []);
 
         Assert.Throws<ArgumentException>(() => ScheduleText.Serialize(document));
     }
@@ -169,18 +300,21 @@ public sealed class ScheduleTextTests
         var start = startValue.Get % 359_000_000;
         var length = (lengthValue.Get % 999_999) + 1L;
         var end = Math.Min(start + length, 359_999_999);
+        var normalizedNote = string.IsNullOrWhiteSpace(note)
+            ? null
+            : note.Replace("\r\n", " ", StringComparison.Ordinal)
+                .Replace('\r', ' ')
+                .Replace('\n', ' ')
+                .Trim();
         var document = new ScheduleDocument(
             new ScheduleMetadata(Title: "Фильм"),
-            [new CensorInterval(start, end, note)],
+            [new CensorInterval(start, end, normalizedNote)],
             ["# future-key: keep"]);
 
         var parsed = ScheduleText.Parse(ScheduleText.Serialize(document));
-        var expectedNote = string.IsNullOrWhiteSpace(note)
-            ? null
-            : note.Replace('\r', ' ').Replace('\n', ' ').Trim();
 
         return parsed.IsSuccess &&
-            parsed.Document!.Intervals.Single() == new CensorInterval(start, end, expectedNote) &&
+            parsed.Document!.Intervals.Single() == new CensorInterval(start, end, normalizedNote) &&
             parsed.Document.PreservedHeaderLines.SequenceEqual(["# future-key: keep"]);
     }
 }

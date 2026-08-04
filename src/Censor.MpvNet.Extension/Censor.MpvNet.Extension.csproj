@@ -6,9 +6,19 @@
     <AssemblyName>CensorExtension</AssemblyName>
     <RootNamespace>Censor.MpvNet.Extension</RootNamespace>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <GenerateDependencyFile>false</GenerateDependencyFile>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Censor.Core\Censor.Core.csproj" />
+    <!--
+      Single-DLL packaging intentionally compiles Core sources again under the
+      WinForms target. Keep Core type names independent of WinForms implicit
+      types such as Timer, Label, Screen, and Padding; CI builds both the
+      standalone Core project and this linked copy to catch those collisions.
+    -->
+    <Compile
+      Include="..\Censor.Core\**\*.cs"
+      Exclude="..\Censor.Core\bin\**\*;..\Censor.Core\obj\**\*"
+      Link="Core\%(RecursiveDir)%(Filename)%(Extension)" />
     <Reference Include="libmpvnet">
       <HintPath>..\..\.deps\mpvnet\libmpvnet.dll</HintPath>
       <Private>false</Private>

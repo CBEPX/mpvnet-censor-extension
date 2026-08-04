@@ -23,10 +23,13 @@ public sealed class SubtitleScheduleTextTests
         Assert.True(result.IsSuccess);
         Assert.Equal(
             [
-                new CensorInterval(1_250, 2_500, "first\nsecond"),
+                new CensorInterval(1_250, 2_500, "first second"),
                 new CensorInterval(4_000, 5_000, "another"),
             ],
             result.Document!.Intervals);
+        Assert.Contains(result.Diagnostics, item =>
+            item.Severity == DiagnosticSeverity.Warning &&
+            item.Message.Contains("media-duration-ms", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -48,6 +51,36 @@ public sealed class SubtitleScheduleTextTests
 
         Assert.True(result.IsSuccess);
         Assert.Equal(new CensorInterval(1_250, 2_500, "blur this"), result.Document!.Intervals.Single());
+    }
+
+    [Fact]
+    public void ImportsCommonDecimalSeparatorsAndShortFractions()
+    {
+        var srt = SubtitleScheduleText.Import(
+            "1\n00:00:01.25 --> 00:00:02,5\nblur\n",
+            SubtitleFormat.Srt);
+        var webVtt = SubtitleScheduleText.Import(
+            "WEBVTT\n\n00:01,2 --> 00:02.50\nblur\n",
+            SubtitleFormat.WebVtt);
+
+        Assert.True(srt.IsSuccess);
+        Assert.True(webVtt.IsSuccess);
+        Assert.Equal(new CensorInterval(1_250, 2_500, "blur"), srt.Document!.Intervals.Single());
+        Assert.Equal(new CensorInterval(1_200, 2_500, "blur"), webVtt.Document!.Intervals.Single());
+    }
+
+    [Fact]
+    public void RejectsWholeImportWhenAnyCueIsInvalid()
+    {
+        const string text = "1\n00:00:01,000 --> 00:00:02,000\nvalid\n\n2\nbroken --> cue\ninvalid\n";
+
+        var result = SubtitleScheduleText.Import(text, SubtitleFormat.Srt);
+
+        Assert.False(result.IsSuccess);
+        Assert.Null(result.Document);
+        Assert.Contains(result.Diagnostics, item => item.Line == 6);
+        Assert.DoesNotContain(result.Diagnostics, item =>
+            item.Message.Contains("media-duration-ms", StringComparison.Ordinal));
     }
 
     [Theory]
@@ -75,5 +108,35 @@ public sealed class SubtitleScheduleTextTests
             SubtitleFormat.WebVtt);
 
         Assert.False(result.IsSuccess);
+    }
+
+    [Fact]
+    public void ImportHonorsConfiguredByteAndIntervalLimits()
+    {
+        const string text = """
+            1
+            00:00:01,000 --> 00:00:02,000
+            one
+
+            2
+            00:00:03,000 --> 00:00:04,000
+            two
+            """;
+
+        var tooMany = SubtitleScheduleText.Import(
+            text,
+            SubtitleFormat.Srt,
+            maxIntervals: 1);
+        var tooLarge = SubtitleScheduleText.Import(
+            text,
+            SubtitleFormat.Srt,
+            maxTextFileBytes: 10);
+
+        Assert.False(tooMany.IsSuccess);
+        Assert.Contains(tooMany.Diagnostics, item =>
+            item.Message.Contains("больше 1 интервалов", StringComparison.Ordinal));
+        Assert.False(tooLarge.IsSuccess);
+        Assert.Contains(tooLarge.Diagnostics, item =>
+            item.Message.Contains("10 байт", StringComparison.Ordinal));
     }
 }

@@ -8,6 +8,10 @@ public static class ScheduleText
     public const int MaxTextFileBytes = 2 * 1024 * 1024;
     public const int MaxIntervals = 10_000;
     public const long MaxOffsetMs = 86_400_000;
+    public const long MaxTimestampMs = 359_999_999;
+
+    internal static string SizeLimitMessage(int maxTextFileBytes) =>
+        $"Расписание превышает ограничение в {maxTextFileBytes} байт.";
 
     private static readonly HashSet<string> KnownMetadataKeys =
     [
@@ -25,15 +29,20 @@ public static class ScheduleText
         int maxIntervals = MaxIntervals)
     {
         ArgumentNullException.ThrowIfNull(text);
+        if (maxTextFileBytes is < 1 or > MaxTextFileBytes)
+            throw new ArgumentOutOfRangeException(nameof(maxTextFileBytes));
+        if (maxIntervals is < 1 or > MaxIntervals)
+            throw new ArgumentOutOfRangeException(nameof(maxIntervals));
 
         var diagnostics = new List<ParseDiagnostic>();
+        // The file-size limit covers the original UTF-8 bytes, including a BOM.
         if (Encoding.UTF8.GetByteCount(text) > maxTextFileBytes)
         {
             diagnostics.Add(new(
                 DiagnosticSeverity.Error,
                 1,
                 1,
-                $"Schedule exceeds the {maxTextFileBytes}-byte limit."));
+                SizeLimitMessage(maxTextFileBytes)));
             return new(null, diagnostics);
         }
 
@@ -78,6 +87,24 @@ public static class ScheduleText
                 if (!KnownMetadataKeys.Contains(key))
                 {
                     preservedHeaderLines.Add(rawLine);
+                    var canonicalKey = KnownMetadataKeys.FirstOrDefault(candidate =>
+                        candidate.Equals(key, StringComparison.OrdinalIgnoreCase));
+                    if (canonicalKey is not null)
+                    {
+                        diagnostics.Add(new(
+                            DiagnosticSeverity.Warning,
+                            lineNumber,
+                            1,
+                            $"В названии поля «{key}» неверный регистр. Строка сохранена без изменений; используйте «{canonicalKey}»."));
+                    }
+                    else if (LooksLikeMetadataKey(key))
+                    {
+                        diagnostics.Add(new(
+                            DiagnosticSeverity.Warning,
+                            lineNumber,
+                            1,
+                            $"Неизвестное необязательное поле metadata «{key}» сохранено без изменений."));
+                    }
                     continue;
                 }
 
@@ -87,7 +114,7 @@ public static class ScheduleText
                         DiagnosticSeverity.Error,
                         lineNumber,
                         1,
-                        $"Metadata key '{key}' is duplicated."));
+                        $"Поле metadata «{key}» указано несколько раз."));
                     continue;
                 }
 
@@ -101,7 +128,7 @@ public static class ScheduleText
                                 DiagnosticSeverity.Error,
                                 lineNumber,
                                 colon + 3,
-                                "Only censor-timeline schema 1 is supported."));
+                                "Поддерживается только schema 1 формата censor-timeline."));
                         }
                         break;
                     case "title":
@@ -130,20 +157,20 @@ public static class ScheduleText
                     DiagnosticSeverity.Error,
                     lineNumber,
                     1,
-                    $"Schedule exceeds the {maxIntervals}-interval limit."));
+                    $"В расписании больше {maxIntervals} интервалов."));
                 break;
             }
 
             ParseInterval(line, lineNumber, intervals, diagnostics);
         }
 
-        if (mediaDurationMs is null)
+        if (mediaDurationMs is null && !seenMetadata.Contains("media-duration-ms"))
         {
             diagnostics.Add(new(
                 DiagnosticSeverity.Warning,
                 1,
                 1,
-                "media-duration-ms is absent; media matching cannot be verified."));
+                "Поле media-duration-ms не задано: соответствие фильму проверить нельзя."));
         }
 
         if (diagnostics.Any(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error))
@@ -161,13 +188,37 @@ public static class ScheduleText
             diagnostics);
     }
 
+    private static bool LooksLikeMetadataKey(string key)
+    {
+        if (key.Length == 0 || key[0] is < 'a' or > 'z')
+            return false;
+
+        foreach (var character in key.AsSpan(1))
+        {
+            if ((character >= 'a' && character <= 'z') ||
+                (character >= '0' && character <= '9') ||
+                character == '-')
+            {
+                continue;
+            }
+            return false;
+        }
+        return key.Contains('-');
+    }
+
     public static string Serialize(ScheduleDocument document)
     {
         ArgumentNullException.ThrowIfNull(document);
         if (document.Metadata.Title?.Contains('\r') == true ||
             document.Metadata.Title?.Contains('\n') == true)
         {
-            throw new ArgumentException("Title must fit on one line.", nameof(document));
+            throw new ArgumentException("Заголовок должен помещаться в одну строку.", nameof(document));
+        }
+        if (document.Metadata.Title is { } title && title != title.Trim())
+        {
+            throw new ArgumentException(
+                "Заголовок не должен начинаться или заканчиваться пробелом.",
+                nameof(document));
         }
 
         var builder = new StringBuilder();
@@ -183,7 +234,9 @@ public static class ScheduleText
         foreach (var line in document.PreservedHeaderLines)
         {
             if (!line.TrimStart().StartsWith('#') || line.Contains('\r') || line.Contains('\n'))
-                throw new ArgumentException("Preserved header lines must be single-line comments.", nameof(document));
+                throw new ArgumentException(
+                    "Сохранённые строки заголовка должны быть однострочными комментариями.",
+                    nameof(document));
             builder.Append(line).Append('\n');
         }
 
@@ -192,6 +245,13 @@ public static class ScheduleText
 
         foreach (var interval in document.Intervals)
         {
+            if (interval.Note?.Contains('\r') == true ||
+                interval.Note?.Contains('\n') == true)
+            {
+                throw new ArgumentException(
+                    "Заметка к интервалу должна помещаться в одну строку.",
+                    nameof(document));
+            }
             builder.Append(FormatTimestamp(interval.StartMs))
                 .Append(" --> ")
                 .Append(FormatTimestamp(interval.EndMs));
@@ -199,7 +259,7 @@ public static class ScheduleText
             if (!string.IsNullOrWhiteSpace(interval.Note))
             {
                 builder.Append(" | ")
-                    .Append(interval.Note.Replace('\r', ' ').Replace('\n', ' '));
+                    .Append(interval.Note);
             }
 
             builder.Append('\n');
@@ -208,7 +268,7 @@ public static class ScheduleText
         return builder.ToString();
     }
 
-    internal static bool TryParseTimestamp(ReadOnlySpan<char> value, out long milliseconds)
+    public static bool TryParseTimestamp(ReadOnlySpan<char> value, out long milliseconds)
     {
         milliseconds = 0;
         if (value.Length != 12 ||
@@ -233,11 +293,57 @@ public static class ScheduleText
         return true;
     }
 
+    public static bool TryParseDraftTimestamp(
+        ReadOnlySpan<char> value,
+        out long milliseconds)
+    {
+        milliseconds = 0;
+        var negative = value.Length > 0 && value[0] == '-';
+        if (negative)
+            value = value[1..];
+        var firstColon = value.IndexOf(':');
+        var tailLength = value.Length - firstColon;
+        if (firstColon < 1 || tailLength is not (6 or 10))
+            return false;
+        var tail = value[firstColon..];
+        if (tail[3] != ':' ||
+            !long.TryParse(value[..firstColon], NumberStyles.None, CultureInfo.InvariantCulture, out var hours) ||
+            !int.TryParse(tail.Slice(1, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var minutes) ||
+            !int.TryParse(tail.Slice(4, 2), NumberStyles.None, CultureInfo.InvariantCulture, out var seconds) ||
+            minutes > 59 || seconds > 59)
+        {
+            return false;
+        }
+        var millis = 0;
+        if (tailLength == 10 &&
+            (tail[6] is not ('.' or ',') ||
+             !int.TryParse(tail.Slice(7, 3), NumberStyles.None, CultureInfo.InvariantCulture, out millis)))
+        {
+            return false;
+        }
+
+        try
+        {
+            milliseconds = checked(
+                ((hours * 60 + minutes) * 60 + seconds) * 1_000 + millis);
+            if (negative)
+                milliseconds = checked(-milliseconds);
+            return true;
+        }
+        catch (OverflowException)
+        {
+            milliseconds = 0;
+            return false;
+        }
+    }
+
     internal static string FormatTimestamp(long milliseconds)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(milliseconds);
-        if (milliseconds >= 360_000_000)
-            throw new ArgumentOutOfRangeException(nameof(milliseconds), "Timestamps cannot exceed 99:59:59.999.");
+        if (milliseconds > MaxTimestampMs)
+            throw new ArgumentOutOfRangeException(
+                nameof(milliseconds),
+                "Время не может быть позже 99:59:59.999.");
 
         var hours = milliseconds / 3_600_000;
         var minutes = (milliseconds / 60_000) % 60;
@@ -259,7 +365,7 @@ public static class ScheduleText
                 DiagnosticSeverity.Error,
                 lineNumber,
                 1,
-                "Interval separator '-->' is missing."));
+                "В строке интервала нет разделителя '-->'."));
             return;
         }
 
@@ -267,7 +373,8 @@ public static class ScheduleText
         var remainder = line[(separator + 3)..].Trim();
         var noteSeparator = remainder.IndexOf('|');
         var endText = noteSeparator >= 0 ? remainder[..noteSeparator].Trim() : remainder;
-        var note = noteSeparator >= 0 ? remainder[(noteSeparator + 1)..].Trim() : null;
+        var noteText = noteSeparator >= 0 ? remainder[(noteSeparator + 1)..].Trim() : null;
+        var note = string.IsNullOrWhiteSpace(noteText) ? null : noteText;
 
         if (!TryParseTimestamp(startText, out var startMs))
         {
@@ -275,7 +382,7 @@ public static class ScheduleText
                 DiagnosticSeverity.Error,
                 lineNumber,
                 1,
-                $"Invalid start timestamp '{startText}'."));
+                $"Некорректное время начала «{startText}»."));
             return;
         }
 
@@ -285,7 +392,7 @@ public static class ScheduleText
                 DiagnosticSeverity.Error,
                 lineNumber,
                 separator + 4,
-                $"Invalid end timestamp '{endText}'."));
+                $"Некорректное время окончания «{endText}»."));
             return;
         }
 
@@ -295,7 +402,7 @@ public static class ScheduleText
                 DiagnosticSeverity.Error,
                 lineNumber,
                 1,
-                "Interval start must be earlier than end."));
+                "Начало интервала должно быть раньше конца."));
             return;
         }
 
@@ -316,7 +423,7 @@ public static class ScheduleText
             DiagnosticSeverity.Error,
             line,
             column,
-            $"Metadata '{key}' must be a positive integer."));
+            $"Поле metadata «{key}» должно быть положительным целым числом."));
         return null;
     }
 
@@ -334,7 +441,7 @@ public static class ScheduleText
             DiagnosticSeverity.Error,
             line,
             column,
-            $"Metadata '{key}' must be a non-negative integer."));
+            $"Поле metadata «{key}» должно быть неотрицательным целым числом."));
         return null;
     }
 
@@ -354,7 +461,7 @@ public static class ScheduleText
             DiagnosticSeverity.Error,
             line,
             column,
-            $"offset-ms must be between {-MaxOffsetMs} and {MaxOffsetMs}."));
+            $"Значение offset-ms должно быть от {-MaxOffsetMs} до {MaxOffsetMs}."));
         return null;
     }
 
