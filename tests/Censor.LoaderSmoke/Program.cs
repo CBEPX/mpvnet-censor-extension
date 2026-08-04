@@ -567,12 +567,20 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
                 "A row render left stale document-level validation feedback.");
         }
         window.GetType().GetMethod("SetSettings")!.Invoke(window, [constrainedSettings]);
+        valid = (bool)window.GetType().GetMethod(
+            "TryGetValidDraft",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(
+                window,
+                validationArguments)!;
+        notifications.Clear();
         window.GetType().GetMethod(
             "RenderDraft",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
-        if (!validationWarnings.Items.Cast<object>().Any(item => item is string text &&
+        if (valid ||
+            authoringNotice.Text != ExpectedSizeNotice ||
+            !validationWarnings.Items.Cast<object>().Any(item => item is string text &&
                 text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)) ||
-            !notifications.SequenceEqual([ExpectedSizeNotice]))
+            notifications.Count != 0)
         {
             throw new InvalidOperationException(
                 "A full render erased the document-level validation message.");
@@ -587,6 +595,34 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         {
             throw new InvalidOperationException(
                 "A settings change left stale document-level validation feedback.");
+        }
+
+        var activeDraft = draftField.GetValue(window)!;
+        var updateDraft = activeDraft.GetType().GetMethod("Update")!;
+        updateDraft.Invoke(activeDraft, [0, 1_000L, 1_000L, null]);
+        notifications.Clear();
+        valid = (bool)window.GetType().GetMethod(
+            "TryGetValidDraft",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(
+                window,
+                validationArguments)!;
+        const string ExpectedRowNotice =
+            "Исправьте ошибки в интервалах перед применением или сохранением.";
+        if (valid ||
+            authoringNotice.Text != ExpectedRowNotice ||
+            !notifications.SequenceEqual([ExpectedRowNotice]))
+        {
+            throw new InvalidOperationException(
+                "A row-level validation failure did not publish actionable feedback.");
+        }
+        updateDraft.Invoke(activeDraft, [0, 1_000L, 2_000L, null]);
+        window.GetType().GetMethod(
+            "RenderDraftRow",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [0]);
+        if (authoringNotice.Text.Length != 0)
+        {
+            throw new InvalidOperationException(
+                "A corrected row left stale validation feedback.");
         }
 
         var staleSaveAccepted = (bool)window.GetType().GetMethod("MarkSaved")!.Invoke(

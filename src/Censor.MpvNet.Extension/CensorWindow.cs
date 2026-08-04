@@ -25,6 +25,8 @@ internal sealed class CensorWindow : Form
         "Сначала сохраните или удалите несохранённые изменения.";
     private const string TransferableDraftActionMessage =
         "Сначала сохраните изменения, используйте их для открытого фильма или удалите.";
+    private const string InvalidDraftActionMessage =
+        "Исправьте ошибки в интервалах перед применением или сохранением.";
 
     // Draft reconciliation uses reference identity to recognize unchanged empty state.
     private static readonly IReadOnlyList<CensorInterval> EmptyIntervals =
@@ -141,6 +143,7 @@ internal sealed class CensorWindow : Form
     private FlowLayoutPanel _detachedActions = null!;
     private FlowLayoutPanel _primaryActions = null!;
     private bool _allowClose;
+    private bool _authoringNoticeFromValidation;
     private bool _rendering;
     private long? _pendingStartMs;
     private string? _mediaPath;
@@ -1039,7 +1042,8 @@ internal sealed class CensorWindow : Form
         {
             NotifyAuthoring(diagnostics.FirstOrDefault(item =>
                 item.Severity == DiagnosticSeverity.Error && item.Line == 0)?.Message ??
-                "Исправьте ошибки в интервалах перед применением или сохранением.");
+                InvalidDraftActionMessage,
+                validation: true);
             return false;
         }
         snapshot = new(
@@ -1158,8 +1162,11 @@ internal sealed class CensorWindow : Form
         CommitCurrentCellEdit();
         // Visible is false with a hidden parent form; text records the pending notice.
         if (HasDetachedDraft() && _authoringNotice.Text.Length > 0)
+        {
+            _authoringNoticeFromValidation = false;
             _authoringNotice.Text = GetDetachedDraftActionMessage();
-        else
+        }
+        else if (!_authoringNoticeFromValidation || _draft is null)
             ClearAuthoringNotification();
         _emptyState.Text = HasDetachedDraft()
             ? GetDetachedDraftActionMessage()
@@ -1289,18 +1296,19 @@ internal sealed class CensorWindow : Form
 
     private void RenderDraftSummary(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
-        var staleDocumentNotice = _draftDiagnostics.Any(item =>
-            item.Severity == DiagnosticSeverity.Error &&
-            item.Line == 0 &&
-            item.Message == _authoringNotice.Text) &&
-            !diagnostics.Any(item =>
-                item.Severity == DiagnosticSeverity.Error &&
-                item.Line == 0 &&
-                item.Message == _authoringNotice.Text);
         _draftDiagnostics = diagnostics;
         RenderWarnings(diagnostics);
-        if (staleDocumentNotice)
-            ClearAuthoringNotification();
+        if (_authoringNoticeFromValidation)
+        {
+            var documentError = diagnostics.FirstOrDefault(item =>
+                item.Severity == DiagnosticSeverity.Error && item.Line == 0);
+            if (documentError is not null)
+                _authoringNotice.Text = documentError.Message;
+            else if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
+                _authoringNotice.Text = InvalidDraftActionMessage;
+            else
+                ClearAuthoringNotification();
+        }
         var wasRendering = _rendering;
         _rendering = true;
         try
@@ -1938,8 +1946,9 @@ internal sealed class CensorWindow : Form
         NotifyAuthoring(
             HasDetachedDraft() ? GetDetachedDraftActionMessage() : "Сначала откройте фильм.");
 
-    private void NotifyAuthoring(string message)
+    private void NotifyAuthoring(string message, bool validation = false)
     {
+        _authoringNoticeFromValidation = validation;
         _authoringNotice.Text = message;
         _authoringNotice.Visible = true;
         AuthoringNotificationRequested?.Invoke(message);
@@ -1947,6 +1956,7 @@ internal sealed class CensorWindow : Form
 
     private void ClearAuthoringNotification()
     {
+        _authoringNoticeFromValidation = false;
         _authoringNotice.Text = "";
         _authoringNotice.Visible = false;
     }

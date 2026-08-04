@@ -41,9 +41,14 @@
   принимает любое непустое license value, UTF-8 test различает байты и символы,
   а текст size-limit имеет один источник истины.
 - Контрольный pass нашёл PowerShell-ловушку `@($null).Count == 1` и stale notice
-  после исправления строки. Verifier теперь отдельно отвергает null/пустые
-  license-поля, row render очищает устаревшее сообщение, а writer использует
+  после исправления строки. Verifier фильтрует null/пустые license-поля до
+  подсчёта, row render очищает устаревшее сообщение, а writer использует
   один parse-back для size/round-trip и одинаково сохраняет detail ошибок.
+- Последний Opus-pass дал verdict без blocking correctness/data-loss defects.
+  Minor UI-hygiene закрыта одним provenance-флагом: validation notice переживает
+  row/full render, меняется вместе с ошибкой и исчезает после исправления.
+  Loader-smoke проверяет document-level и row-level ветки; лишние SPDX и writer
+  условия удалены. Локальные `162/162`, build, format и diff-check зелёные.
 
 ## 2026-08-01
 
