@@ -17,6 +17,12 @@
   contract закреплён loader-smoke, source archive и SBOM verifier усилены.
 - Локальные gates: `160/160` Core-тестов, Release build без предупреждений и
   ошибок, `dotnet format --verify-no-changes` и `git diff --check` — PASS.
+- Delta-review Claude Opus 5/xhigh для `d5456e0..508ab7b` дал verdict
+  `ship it` без correctness-дефектов. Два полезных minor замечания закрываются
+  тестами size/serialization writer branches и удалением тавтологичного assert;
+  size-specific exception остаётся подробностью журнала.
+- После minor test cleanup повторно проходят `162/162` Core-теста, Release
+  build без warnings/errors, format verify и diff-check.
 
 ## 2026-08-01
 

@@ -413,6 +413,39 @@ public sealed class ScheduleDraftTests
         Assert.Equal("old", File.ReadAllText(path));
     }
 
+    [Fact]
+    public void WriterReportsConfiguredUtf8SizeWithoutChangingExistingFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "schedule.censor.txt");
+        File.WriteAllText(path, "old");
+        var document = Document(new CensorInterval(0, 1_000, new string('я', 100)));
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            AtomicScheduleWriter.Write(path, document, maxTextFileBytes: 100));
+
+        Assert.Contains("100 байт", exception.Message, StringComparison.Ordinal);
+        Assert.Equal("old", File.ReadAllText(path));
+    }
+
+    [Fact]
+    public void WriterWrapsSerializationFailureWithoutChangingExistingFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "schedule.censor.txt");
+        File.WriteAllText(path, "old");
+        var document = new ScheduleDocument(
+            new ScheduleMetadata(Title: "line one\nline two"),
+            [],
+            []);
+
+        var exception = Assert.Throws<InvalidOperationException>(() =>
+            AtomicScheduleWriter.Write(path, document));
+
+        Assert.IsType<ArgumentException>(exception.InnerException);
+        Assert.Equal("old", File.ReadAllText(path));
+    }
+
     private static ScheduleDocument Document(params CensorInterval[] intervals) =>
         new(new(), intervals, []);
 }

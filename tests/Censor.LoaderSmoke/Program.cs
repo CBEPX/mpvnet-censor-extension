@@ -537,8 +537,6 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             "_settings",
             BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
         if (staleSaveAccepted ||
-            !(bool)draftField.GetValue(window)!.GetType().GetProperty("IsDirty")!
-                .GetValue(draftField.GetValue(window)!)! ||
             (string?)windowSettings.GetType().GetProperty("LastScheduleDirectory")!
                 .GetValue(windowSettings) != @"C:\Video")
         {
