@@ -395,6 +395,9 @@
   сцен cache удалён, а полная проверка выполняется на row/full render.
 - Round-trip writer test теперь доказывает точную ветку и её parse detail, а
   Windows loader-smoke закрепляет row/full render document-level ошибки.
+- SPDX verifier проверяет null и непустое содержимое полей отдельно: обёртка
+  `@($null)` не используется как проверка наличия. Исправленный row/full smoke
+  также доказывает исчезновение stale document-level notice после валидации.
 
 ## Граница доказательств
 

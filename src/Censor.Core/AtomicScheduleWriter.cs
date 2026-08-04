@@ -35,11 +35,9 @@ public static class AtomicScheduleWriter
         catch (Exception exception) when (exception is ArgumentException or OverflowException)
         {
             throw new InvalidOperationException(
-                "Файл интервалов не записан: исправьте ошибки.",
+                $"Файл интервалов не записан: {exception.Message}",
                 exception);
         }
-        if (bytes.Length > maxTextFileBytes)
-            throw new InvalidOperationException(ScheduleText.SizeLimitMessage(maxTextFileBytes));
         var reparsed = ScheduleText.Parse(text, maxTextFileBytes, maxIntervals);
         if (!reparsed.IsSuccess)
         {

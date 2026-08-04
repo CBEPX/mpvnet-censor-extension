@@ -1273,6 +1273,7 @@ internal sealed class CensorWindow : Form
             var diagnostics = _draft.Validate(
                 _settings.Limits.MaxIntervals,
                 _settings.Limits.MaxTextFileBytes);
+            // ponytail: Full validation is intentional for normal 10–20-scene drafts.
             PopulateIntervalRow(
                 _intervals.Rows[index],
                 index,
@@ -1288,8 +1289,18 @@ internal sealed class CensorWindow : Form
 
     private void RenderDraftSummary(IReadOnlyList<ParseDiagnostic> diagnostics)
     {
+        var staleDocumentNotice = _draftDiagnostics.Any(item =>
+            item.Severity == DiagnosticSeverity.Error &&
+            item.Line == 0 &&
+            item.Message == _authoringNotice.Text) &&
+            !diagnostics.Any(item =>
+                item.Severity == DiagnosticSeverity.Error &&
+                item.Line == 0 &&
+                item.Message == _authoringNotice.Text);
         _draftDiagnostics = diagnostics;
         RenderWarnings(diagnostics);
+        if (staleDocumentNotice)
+            ClearAuthoringNotification();
         var wasRendering = _rendering;
         _rendering = true;
         try

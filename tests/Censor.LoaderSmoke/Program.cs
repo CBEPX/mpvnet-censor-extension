@@ -555,6 +555,18 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             throw new InvalidOperationException(
                 "A deferred row render erased the document-level validation message.");
         }
+        window.GetType().GetMethod("SetSettings")!.Invoke(window, [originalSettings]);
+        window.GetType().GetMethod(
+            "RenderDraftRow",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [0]);
+        if (authoringNotice.Text.Length != 0 ||
+            validationWarnings.Items.Cast<object>().Any(item => item is string text &&
+                text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "A row render left stale document-level validation feedback.");
+        }
+        window.GetType().GetMethod("SetSettings")!.Invoke(window, [constrainedSettings]);
         window.GetType().GetMethod(
             "RenderDraft",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);

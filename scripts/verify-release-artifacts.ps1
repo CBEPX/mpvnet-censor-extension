@@ -107,11 +107,13 @@ $PrimaryPackage = $Sbom.packages |
     Select-Object -First 1
 if ($null -eq $PrimaryPackage -or
     $PrimaryPackage.filesAnalyzed -ne $true -or
-    @($PrimaryPackage.licenseInfoFromFiles).Count -lt 1) {
+    -not $PrimaryPackage.licenseInfoFromFiles -or
+    @($PrimaryPackage.licenseInfoFromFiles | Where-Object { $_ }).Count -lt 1) {
     throw "SPDX primary package analysis metadata is incomplete."
 }
 foreach ($File in $Sbom.files) {
-    if (@($File.licenseInfoInFiles).Count -lt 1) {
+    if (-not $File.licenseInfoInFiles -or
+        @($File.licenseInfoInFiles | Where-Object { $_ }).Count -lt 1) {
         throw "SPDX file license metadata is incomplete: $($File.fileName)"
     }
 }

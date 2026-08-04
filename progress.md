@@ -40,6 +40,10 @@
   Cache удалён; row/full render снова выполняют полную проверку. SPDX verifier
   принимает любое непустое license value, UTF-8 test различает байты и символы,
   а текст size-limit имеет один источник истины.
+- Контрольный pass нашёл PowerShell-ловушку `@($null).Count == 1` и stale notice
+  после исправления строки. Verifier теперь отдельно отвергает null/пустые
+  license-поля, row render очищает устаревшее сообщение, а writer использует
+  один parse-back для size/round-trip и одинаково сохраняет detail ошибок.
 
 ## 2026-08-01
 

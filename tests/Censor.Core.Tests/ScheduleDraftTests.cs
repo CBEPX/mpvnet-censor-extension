@@ -444,6 +444,10 @@ public sealed class ScheduleDraftTests
         var exception = Assert.Throws<InvalidOperationException>(() =>
             AtomicScheduleWriter.Write(path, document));
 
+        Assert.Contains(
+            "Заголовок должен помещаться в одну строку",
+            exception.Message,
+            StringComparison.Ordinal);
         Assert.IsType<ArgumentException>(exception.InnerException);
         Assert.Equal("old", File.ReadAllText(path));
     }
