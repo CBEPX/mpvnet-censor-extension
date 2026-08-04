@@ -390,6 +390,12 @@
   Перенос присваивания после guard оставил бы picker со старым каталогом.
 - Большой вынос ticket/orchestration state machine не входит в closeout PR и
   уже отслеживается post-P0 issue #5.
+- Повторный delta-review признал изменения ship-able, но показал, что
+  document-level ошибка могла исчезнуть из списка после queued row render.
+  Специфичный текст перенесён в уже существующий durable authoring notice;
+  тяжёлая валидация на каждом рендере не возвращается.
+- Round-trip writer test теперь доказывает точную ветку и её parse detail, а
+  Windows loader-smoke закрепляет сохранение сообщения после row render.
 
 ## Граница доказательств
 

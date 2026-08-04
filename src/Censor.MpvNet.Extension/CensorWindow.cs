@@ -1037,7 +1037,9 @@ internal sealed class CensorWindow : Form
         RenderDraftSummary(diagnostics);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
-            NotifyAuthoring("Исправьте ошибки в интервалах перед применением или сохранением.");
+            NotifyAuthoring(diagnostics.FirstOrDefault(item =>
+                item.Severity == DiagnosticSeverity.Error && item.Line == 0)?.Message ??
+                "Исправьте ошибки в интервалах перед применением или сохранением.");
             return false;
         }
         snapshot = new(

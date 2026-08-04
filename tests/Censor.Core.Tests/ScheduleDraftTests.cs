@@ -407,9 +407,11 @@ public sealed class ScheduleDraftTests
             [],
             ["# offset-ms: 20"]);
 
-        Assert.Throws<InvalidOperationException>(() =>
+        var exception = Assert.Throws<InvalidOperationException>(() =>
             AtomicScheduleWriter.Write(path, document));
 
+        Assert.Contains("повторный разбор", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("указано несколько раз", exception.Message, StringComparison.Ordinal);
         Assert.Equal("old", File.ReadAllText(path));
     }
 

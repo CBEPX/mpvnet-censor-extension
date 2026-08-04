@@ -41,9 +41,15 @@ public static class AtomicScheduleWriter
         if (bytes.Length > maxTextFileBytes)
             throw new InvalidOperationException(
                 $"Файл интервалов не записан: размер превышает {maxTextFileBytes} байт.");
-        if (!ScheduleText.Parse(text, maxTextFileBytes, maxIntervals).IsSuccess)
+        var reparsed = ScheduleText.Parse(text, maxTextFileBytes, maxIntervals);
+        if (!reparsed.IsSuccess)
+        {
+            var parseError = reparsed.Diagnostics.First(item =>
+                item.Severity == DiagnosticSeverity.Error);
             throw new InvalidOperationException(
-                "Расписание не записано: после сохранения оно не проходит повторный разбор.");
+                "Расписание не записано: после сохранения оно не проходит повторный разбор. " +
+                parseError.Message);
+        }
         AtomicFile.Write(
             path,
             bytes,

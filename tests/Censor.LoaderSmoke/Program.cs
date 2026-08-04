@@ -525,6 +525,34 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
                 "Row actions did not explain that no interval is selected.");
         }
 
+        var settingsField = window.GetType().GetField(
+            "_settings",
+            BindingFlags.Instance | BindingFlags.NonPublic)!;
+        var originalSettings = settingsField.GetValue(window)!;
+        var constrainedSettings = JsonSerializer.Deserialize(
+            """{"limits":{"maxTextFileBytes":1}}""",
+            originalSettings.GetType())!;
+        window.GetType().GetMethod("SetSettings")!.Invoke(window, [constrainedSettings]);
+        notifications.Clear();
+        var validationArguments = new object?[] { null };
+        var valid = (bool)window.GetType().GetMethod(
+            "TryGetValidDraft",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(
+                window,
+                validationArguments)!;
+        window.GetType().GetMethod(
+            "RenderDraftRow",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [0]);
+        const string ExpectedSizeNotice = "Расписание превышает ограничение в 1 байт.";
+        if (valid ||
+            authoringNotice.Text != ExpectedSizeNotice ||
+            !notifications.SequenceEqual([ExpectedSizeNotice]))
+        {
+            throw new InvalidOperationException(
+                "A deferred row render erased the document-level validation message.");
+        }
+        window.GetType().GetMethod("SetSettings")!.Invoke(window, [originalSettings]);
+
         var staleSaveAccepted = (bool)window.GetType().GetMethod("MarkSaved")!.Invoke(
             window,
             [
@@ -533,9 +561,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
                 replacementDocument,
                 @"C:\Video",
             ])!;
-        var windowSettings = window.GetType().GetField(
-            "_settings",
-            BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(window)!;
+        var windowSettings = settingsField.GetValue(window)!;
         if (staleSaveAccepted ||
             (string?)windowSettings.GetType().GetProperty("LastScheduleDirectory")!
                 .GetValue(windowSettings) != @"C:\Video")

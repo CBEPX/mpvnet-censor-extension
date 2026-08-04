@@ -23,6 +23,13 @@
   size-specific exception остаётся подробностью журнала.
 - После minor test cleanup повторно проходят `162/162` Core-теста, Release
   build без warnings/errors, format verify и diff-check.
+- Повторный Opus 5/xhigh review всего `d5456e0..ba1fa80` подтвердил отсутствие
+  correctness/data-loss дефектов и нашёл одну редкую UI-гонку: отложенный
+  рендер мог скрыть document-level ошибку размера.
+- Ошибка теперь остаётся в устойчивом сообщении редактора; writer сохраняет
+  подробность неудачного повторного разбора, а Core и Windows loader-smoke
+  проверяют обе ветки. Локально снова зелёные `162/162`, Release build,
+  format verify и diff-check.
 
 ## 2026-08-01
 
