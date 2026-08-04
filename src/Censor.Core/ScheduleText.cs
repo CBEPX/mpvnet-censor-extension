@@ -10,6 +10,9 @@ public static class ScheduleText
     public const long MaxOffsetMs = 86_400_000;
     public const long MaxTimestampMs = 359_999_999;
 
+    internal static string SizeLimitMessage(int maxTextFileBytes) =>
+        $"Расписание превышает ограничение в {maxTextFileBytes} байт.";
+
     private static readonly HashSet<string> KnownMetadataKeys =
     [
         "censor-timeline",
@@ -39,7 +42,7 @@ public static class ScheduleText
                 DiagnosticSeverity.Error,
                 1,
                 1,
-                $"Расписание превышает ограничение в {maxTextFileBytes} байт."));
+                SizeLimitMessage(maxTextFileBytes)));
             return new(null, diagnostics);
         }
 

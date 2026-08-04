@@ -108,7 +108,7 @@ public sealed class ScheduleDraft
                         DiagnosticSeverity.Error,
                         0,
                         1,
-                        $"Расписание превышает ограничение в {maxTextFileBytes} байт."));
+                        ScheduleText.SizeLimitMessage(maxTextFileBytes)));
                 }
                 else if (!diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
                 {

@@ -39,16 +39,15 @@ public static class AtomicScheduleWriter
                 exception);
         }
         if (bytes.Length > maxTextFileBytes)
-            throw new InvalidOperationException(
-                $"Файл интервалов не записан: размер превышает {maxTextFileBytes} байт.");
+            throw new InvalidOperationException(ScheduleText.SizeLimitMessage(maxTextFileBytes));
         var reparsed = ScheduleText.Parse(text, maxTextFileBytes, maxIntervals);
         if (!reparsed.IsSuccess)
         {
-            var parseError = reparsed.Diagnostics.First(item =>
+            var parseError = reparsed.Diagnostics.FirstOrDefault(item =>
                 item.Severity == DiagnosticSeverity.Error);
             throw new InvalidOperationException(
                 "Расписание не записано: после сохранения оно не проходит повторный разбор. " +
-                parseError.Message);
+                (parseError?.Message ?? "Документ не создан."));
         }
         AtomicFile.Write(
             path,

@@ -424,9 +424,9 @@ public sealed class ScheduleDraftTests
         var document = Document(new CensorInterval(0, 1_000, new string('я', 100)));
 
         var exception = Assert.Throws<InvalidOperationException>(() =>
-            AtomicScheduleWriter.Write(path, document, maxTextFileBytes: 100));
+            AtomicScheduleWriter.Write(path, document, maxTextFileBytes: 200));
 
-        Assert.Contains("100 байт", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("200 байт", exception.Message, StringComparison.Ordinal);
         Assert.Equal("old", File.ReadAllText(path));
     }
 

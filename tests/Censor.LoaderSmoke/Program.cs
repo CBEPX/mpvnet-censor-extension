@@ -558,8 +558,7 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         window.GetType().GetMethod(
             "RenderDraft",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
-        if (authoringNotice.Text != ExpectedSizeNotice ||
-            !validationWarnings.Items.Cast<object>().Any(item => item is string text &&
+        if (!validationWarnings.Items.Cast<object>().Any(item => item is string text &&
                 text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)) ||
             !notifications.SequenceEqual([ExpectedSizeNotice]))
         {

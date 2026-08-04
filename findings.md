@@ -390,12 +390,11 @@
   Перенос присваивания после guard оставил бы picker со старым каталогом.
 - Большой вынос ticket/orchestration state machine не входит в closeout PR и
   уже отслеживается post-P0 issue #5.
-- Повторные delta-review показали, что document-level ошибка могла исчезнуть
-  после queued row или full render. Она привязана к immutable revision
-  черновика и сохраняется в durable notice и списке предупреждений; тяжёлая
-  валидация на каждом рендере не возвращается.
+- Попытка разделить дешёвую render-валидацию и полную Apply/Save-проверку
+  ухудшила live-feedback и потребовала cache состояния. Для реальных 10–20
+  сцен cache удалён, а полная проверка выполняется на row/full render.
 - Round-trip writer test теперь доказывает точную ветку и её parse detail, а
-  Windows loader-smoke закрепляет row/full render и сброс после смены настроек.
+  Windows loader-smoke закрепляет row/full render document-level ошибки.
 
 ## Граница доказательств
 
