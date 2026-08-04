@@ -531,7 +531,8 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
         var originalSettings = settingsField.GetValue(window)!;
         var constrainedSettings = JsonSerializer.Deserialize(
             """{"limits":{"maxTextFileBytes":1}}""",
-            originalSettings.GetType())!;
+            originalSettings.GetType(),
+            new JsonSerializerOptions { PropertyNameCaseInsensitive = true })!;
         window.GetType().GetMethod("SetSettings")!.Invoke(window, [constrainedSettings]);
         notifications.Clear();
         var validationArguments = new object?[] { null };
@@ -544,14 +545,38 @@ static void VerifyEditorWorkflow(Assembly assembly, Form window)
             "RenderDraftRow",
             BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [0]);
         const string ExpectedSizeNotice = "Расписание превышает ограничение в 1 байт.";
+        var validationWarnings = Descendants(window).OfType<ListBox>().Single();
         if (valid ||
             authoringNotice.Text != ExpectedSizeNotice ||
+            !validationWarnings.Items.Cast<object>().Any(item => item is string text &&
+                text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)) ||
             !notifications.SequenceEqual([ExpectedSizeNotice]))
         {
             throw new InvalidOperationException(
                 "A deferred row render erased the document-level validation message.");
         }
+        window.GetType().GetMethod(
+            "RenderDraft",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
+        if (authoringNotice.Text != ExpectedSizeNotice ||
+            !validationWarnings.Items.Cast<object>().Any(item => item is string text &&
+                text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)) ||
+            !notifications.SequenceEqual([ExpectedSizeNotice]))
+        {
+            throw new InvalidOperationException(
+                "A full render erased the document-level validation message.");
+        }
         window.GetType().GetMethod("SetSettings")!.Invoke(window, [originalSettings]);
+        window.GetType().GetMethod(
+            "RenderDraft",
+            BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(window, [null]);
+        if (authoringNotice.Text.Length != 0 ||
+            validationWarnings.Items.Cast<object>().Any(item => item is string text &&
+                text.Contains(ExpectedSizeNotice, StringComparison.Ordinal)))
+        {
+            throw new InvalidOperationException(
+                "A settings change left stale document-level validation feedback.");
+        }
 
         var staleSaveAccepted = (bool)window.GetType().GetMethod("MarkSaved")!.Invoke(
             window,

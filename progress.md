@@ -30,6 +30,11 @@
   подробность неудачного повторного разбора, а Core и Windows loader-smoke
   проверяют обе ветки. Локально снова зелёные `162/162`, Release build,
   format verify и diff-check.
+- Следующий Opus-pass поймал до CI case-sensitive JSON fixture и потерю той же
+  диагностики при полном рендере. Fixture использует явные JSON options, а
+  document-level ошибки привязаны к immutable revision черновика, сохраняются
+  в notice и списке предупреждений и сбрасываются после изменения документа
+  или настроек. Локальные gates снова зелёные.
 
 ## 2026-08-01
 

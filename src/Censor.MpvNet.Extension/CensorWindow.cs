@@ -127,6 +127,8 @@ internal sealed class CensorWindow : Form
     private ScheduleDraft? _draft;
     private IReadOnlyList<CensorInterval>? _runtimeIntervals;
     private IReadOnlyList<ParseDiagnostic> _draftDiagnostics = [];
+    private ScheduleDocument? _documentValidationSource;
+    private ParseDiagnostic[] _documentValidationDiagnostics = [];
     private IReadOnlyList<ParseDiagnostic> _runtimeDiagnostics = [];
     private Button _addButton = null!;
     private Button _advancedToggleButton = null!;
@@ -458,6 +460,8 @@ internal sealed class CensorWindow : Form
     {
         ArgumentNullException.ThrowIfNull(settings);
         _settings = settings;
+        _documentValidationSource = null;
+        _documentValidationDiagnostics = [];
         SetBlurPreset(settings.Blur);
         SetAudioCompressionPreset(settings.AudioCompressionPreset);
         PopulateSettings(_settings);
@@ -1034,6 +1038,10 @@ internal sealed class CensorWindow : Form
         var diagnostics = _draft.Validate(
             _settings.Limits.MaxIntervals,
             _settings.Limits.MaxTextFileBytes);
+        _documentValidationSource = _draft.Document;
+        _documentValidationDiagnostics = diagnostics
+            .Where(item => item.Severity == DiagnosticSeverity.Error && item.Line == 0)
+            .ToArray();
         RenderDraftSummary(diagnostics);
         if (diagnostics.Any(item => item.Severity == DiagnosticSeverity.Error))
         {
@@ -1159,7 +1167,7 @@ internal sealed class CensorWindow : Form
         // Visible is false with a hidden parent form; text records the pending notice.
         if (HasDetachedDraft() && _authoringNotice.Text.Length > 0)
             _authoringNotice.Text = GetDetachedDraftActionMessage();
-        else
+        else if (!HasCurrentDocumentValidationNotice())
             ClearAuthoringNotification();
         _emptyState.Text = HasDetachedDraft()
             ? GetDetachedDraftActionMessage()
@@ -1189,10 +1197,11 @@ internal sealed class CensorWindow : Form
                 return;
             }
 
-            var draftDiagnostics = _draft.Validate(
-                _settings.Limits.MaxIntervals,
-                _settings.Limits.MaxTextFileBytes,
-                checkSerializedSize: false);
+            var draftDiagnostics = PreserveDocumentValidationDiagnostics(
+                _draft.Validate(
+                    _settings.Limits.MaxIntervals,
+                    _settings.Limits.MaxTextFileBytes,
+                    checkSerializedSize: false));
             var errorRows = draftDiagnostics
                 .Where(item => item.Line > 0)
                 .Select(item => item.Line - 1)
@@ -1271,10 +1280,11 @@ internal sealed class CensorWindow : Form
         _rendering = true;
         try
         {
-            var diagnostics = _draft.Validate(
-                _settings.Limits.MaxIntervals,
-                _settings.Limits.MaxTextFileBytes,
-                checkSerializedSize: false);
+            var diagnostics = PreserveDocumentValidationDiagnostics(
+                _draft.Validate(
+                    _settings.Limits.MaxIntervals,
+                    _settings.Limits.MaxTextFileBytes,
+                    checkSerializedSize: false));
             PopulateIntervalRow(
                 _intervals.Rows[index],
                 index,
@@ -1313,6 +1323,23 @@ internal sealed class CensorWindow : Form
         UpdateDetachedState();
         UpdateActionStates();
     }
+
+    private IReadOnlyList<ParseDiagnostic> PreserveDocumentValidationDiagnostics(
+        IReadOnlyList<ParseDiagnostic> diagnostics)
+    {
+        if (_draft is null ||
+            !ReferenceEquals(_documentValidationSource, _draft.Document) ||
+            _documentValidationDiagnostics.Length == 0)
+        {
+            return diagnostics;
+        }
+        return diagnostics.Concat(_documentValidationDiagnostics).Distinct().ToArray();
+    }
+
+    private bool HasCurrentDocumentValidationNotice() =>
+        _draft is not null &&
+        ReferenceEquals(_documentValidationSource, _draft.Document) &&
+        _documentValidationDiagnostics.Any(item => item.Message == _authoringNotice.Text);
 
     private bool HasDetachedDraft() =>
         _draft is not null &&
