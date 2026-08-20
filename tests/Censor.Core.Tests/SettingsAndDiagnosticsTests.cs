@@ -99,6 +99,126 @@ public sealed class SettingsAndDiagnosticsTests
     }
 
     [Fact]
+    public void OnlineAndVideoSettingsRoundTripAndRejectUnsafeValues()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "settings.json");
+        var settings = new ExtensionSettings
+        {
+            OnlineSource = OnlineSourceModes.AggregatorId,
+            AggregatorBaseUrl = "https://timings.example.test/base/",
+            VideoOutputMode = VideoOutputModes.HdrId,
+        };
+
+        ExtensionSettingsStore.Save(path, settings);
+        var loaded = ExtensionSettingsStore.Load(path);
+
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal(OnlineSourceModes.AggregatorId, loaded.Settings.OnlineSource);
+        Assert.Equal("https://timings.example.test/base", loaded.Settings.AggregatorBaseUrl);
+        Assert.Equal(VideoOutputModes.HdrId, loaded.Settings.VideoOutputMode);
+
+        File.WriteAllText(
+            path,
+            """{"schema":1,"onlineSource":"future","aggregatorBaseUrl":"http://example.test","videoOutputMode":"dolby"}""");
+        var invalid = ExtensionSettingsStore.Load(path);
+
+        Assert.Contains(invalid.Warnings, item => item.Contains("onlineSource", StringComparison.Ordinal));
+        Assert.DoesNotContain(invalid.Warnings, item => item.Contains("aggregatorBaseUrl", StringComparison.Ordinal));
+        Assert.Contains(invalid.Warnings, item => item.Contains("videoOutputMode", StringComparison.Ordinal));
+        Assert.Equal(OnlineSourceModes.DirectRteId, invalid.Settings.OnlineSource);
+        Assert.Equal("http://example.test", invalid.Settings.AggregatorBaseUrl);
+        Assert.Equal(VideoOutputModes.AutoId, invalid.Settings.VideoOutputMode);
+    }
+
+    [Fact]
+    public void DirectSourceDoesNotRejectAnUnusedAggregatorUrl()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "settings.json");
+        var settings = new ExtensionSettings
+        {
+            OnlineSource = OnlineSourceModes.DirectRteId,
+            AggregatorBaseUrl = "not a url",
+        };
+
+        Assert.DoesNotContain(
+            ExtensionSettingsStore.Validate(settings),
+            warning => warning.Contains("aggregatorBaseUrl", StringComparison.Ordinal));
+        ExtensionSettingsStore.Save(path, settings);
+
+        var loaded = ExtensionSettingsStore.Load(path);
+
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal("not a url", loaded.Settings.AggregatorBaseUrl);
+    }
+
+    [Fact]
+    public void DirectSourceCapsAnUnusedAggregatorUrlFromAHandEditedFile()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "settings.json");
+        var oversized = new string('x', OnlineSourceModes.MaxBaseUrlLength - 1) +
+            "😀" + new string('y', 1_000);
+        File.WriteAllText(
+            path,
+            $$"""{"schema":1,"onlineSource":"direct-rte","aggregatorBaseUrl":"{{oversized}}"}""");
+
+        var loaded = ExtensionSettingsStore.Load(path);
+
+        Assert.Empty(loaded.Warnings);
+        Assert.Equal(OnlineSourceModes.MaxBaseUrlLength - 1, loaded.Settings.AggregatorBaseUrl!.Length);
+        Assert.False(char.IsSurrogate(loaded.Settings.AggregatorBaseUrl[^1]));
+    }
+
+    [Fact]
+    public void InvalidAggregatorUrlDoesNotSilentlySwitchTheSelectedSource()
+    {
+        using var directory = new TemporaryDirectory();
+        var path = Path.Combine(directory.Path, "settings.json");
+        File.WriteAllText(
+            path,
+            """{"schema":1,"onlineSource":"aggregator","aggregatorBaseUrl":"http://example.test"}""");
+
+        var loaded = ExtensionSettingsStore.Load(path);
+
+        Assert.Contains(
+            loaded.Warnings,
+            warning => warning.Contains("aggregatorBaseUrl", StringComparison.Ordinal));
+        Assert.Equal(OnlineSourceModes.AggregatorId, loaded.Settings.OnlineSource);
+        Assert.Null(loaded.Settings.AggregatorBaseUrl);
+    }
+
+    [Fact]
+    public void InvalidSelectedAggregatorUrlProducesOneActionableWarning()
+    {
+        var warnings = ExtensionSettingsStore.Validate(new ExtensionSettings
+        {
+            OnlineSource = OnlineSourceModes.AggregatorId,
+            AggregatorBaseUrl = "http://example.test",
+        });
+
+        Assert.Single(
+            warnings,
+            warning => warning.Contains("aggregatorBaseUrl", StringComparison.Ordinal));
+    }
+
+    [Theory]
+    [InlineData("http://localhost:8080")]
+    [InlineData("http://127.0.0.1:8080/api")]
+    [InlineData("http://[::1]:8080")]
+    public void AggregatorAllowsHttpOnlyForLoopback(string url)
+    {
+        var warnings = ExtensionSettingsStore.Validate(new ExtensionSettings
+        {
+            OnlineSource = OnlineSourceModes.AggregatorId,
+            AggregatorBaseUrl = url,
+        });
+
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
     public void SettingsAcceptsPropertyNamesWithDifferentCasing()
     {
         using var directory = new TemporaryDirectory();

@@ -65,4 +65,17 @@ public sealed class MediaSessionCoordinatorTests
         Assert.True(callbackRan);
         Assert.Throws<ObjectDisposedException>(() => gate.BeginOperation());
     }
+
+    [Fact]
+    public void CancelCurrentSessionStopsWorkWithoutChangingItsIdentity()
+    {
+        using var gate = new MediaSessionCoordinator();
+        var ticket = gate.BeginMediaSession();
+        var token = gate.SessionToken;
+
+        gate.CancelCurrentSession();
+
+        Assert.True(token.IsCancellationRequested);
+        Assert.True(gate.IsCurrentMediaSession(ticket));
+    }
 }

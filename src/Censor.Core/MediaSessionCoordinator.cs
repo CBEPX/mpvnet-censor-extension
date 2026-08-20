@@ -54,6 +54,17 @@ public sealed class MediaSessionCoordinator : IDisposable
         }
     }
 
+    public void CancelCurrentSession()
+    {
+        CancellationTokenSource cancellation;
+        lock (_lock)
+        {
+            ThrowIfDisposed();
+            cancellation = _sessionCancellation;
+        }
+        cancellation.Cancel();
+    }
+
     public OperationTicket Snapshot()
     {
         lock (_lock)

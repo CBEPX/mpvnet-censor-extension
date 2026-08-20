@@ -8,4 +8,7 @@ internal sealed record SettingsFormValues(
     long LeadOutMs,
     long MergeGapMs,
     long DurationToleranceMs,
-    long EarlyIntervalGuardMs);
+    long EarlyIntervalGuardMs,
+    string OnlineSource,
+    string? AggregatorBaseUrl,
+    string VideoOutputMode);

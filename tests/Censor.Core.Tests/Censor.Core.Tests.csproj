@@ -18,5 +18,6 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="..\fixtures\example.censor.txt" Link="fixtures\example.censor.txt" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\fixtures\rte-*.json" Link="fixtures\%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

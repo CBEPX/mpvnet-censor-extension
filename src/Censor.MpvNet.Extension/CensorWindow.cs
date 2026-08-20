@@ -92,6 +92,29 @@ internal sealed class CensorWindow : Form
         DropDownStyle = ComboBoxStyle.DropDownList,
         Width = 230,
     };
+    private readonly ComboBox _onlineSource = new()
+    {
+        AccessibleName = "Онлайн-источник",
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 230,
+    };
+    private readonly TextBox _aggregatorBaseUrl = new()
+    {
+        AccessibleName = "Адрес агрегатора",
+        MaxLength = OnlineSourceModes.MaxBaseUrlLength,
+        Width = 360,
+    };
+    private readonly ComboBox _videoOutputMode = new()
+    {
+        AccessibleName = "Режим вывода видео",
+        DropDownStyle = ComboBoxStyle.DropDownList,
+        Width = 230,
+    };
+    private readonly CheckBox _softwareDecodeCompatibility = new()
+    {
+        AutoSize = true,
+        Text = "Совместимость Dolby Vision (программное декодирование до смены фильма)",
+    };
     private readonly CheckBox _autoSidecar = new()
     {
         AutoSize = true,
@@ -136,6 +159,7 @@ internal sealed class CensorWindow : Form
     private Button _deleteButton = null!;
     private Button _markEndButton = null!;
     private Button _markStartButton = null!;
+    private Button _onlineButton = null!;
     private Button _saveButton = null!;
     private Button _saveDetachedButton = null!;
     private Button _useForCurrentButton = null!;
@@ -210,6 +234,28 @@ internal sealed class CensorWindow : Form
             _settings = _settings with { AudioCompressionPreset = preset.Id };
             AudioCompressionPresetSelected?.Invoke(preset.Id);
         };
+        _onlineSource.Items.AddRange(
+        [
+            "timings.rte (напрямую)",
+            "Свой агрегатор",
+        ]);
+        _onlineSource.SelectedIndexChanged += (_, _) =>
+            _aggregatorBaseUrl.Enabled = _onlineSource.SelectedIndex == 1;
+        _videoOutputMode.Items.AddRange(
+        [
+            "Авто",
+            "SDR (Rec. 709)",
+            "HDR (PQ / BT.2020)",
+        ]);
+        _softwareDecodeCompatibility.CheckedChanged += (_, _) =>
+        {
+            if (!_rendering)
+            {
+                _softwareDecodeCompatibility.Enabled = false;
+                SoftwareDecodeCompatibilitySelected?.Invoke(
+                    _softwareDecodeCompatibility.Checked);
+            }
+        };
         PopulateSettings(settings);
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
@@ -248,6 +294,7 @@ internal sealed class CensorWindow : Form
     public event Action? DisableRequested;
     public event Action<BlurSettings>? BlurPresetSelected;
     public event Action<string>? AudioCompressionPresetSelected;
+    public event Action<bool>? SoftwareDecodeCompatibilitySelected;
     public event Action<SettingsFormValues>? SettingsChanged;
     public event Action<long>? SeekRequested;
     public event Action<bool>? DiagnosticsRequested;
@@ -256,6 +303,14 @@ internal sealed class CensorWindow : Form
     public event Action<string>? AuthoringNotificationRequested;
     [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
     public Func<long?>? CurrentTimeRequested { get; set; }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<string, CancellationToken, Task<IReadOnlyList<MovieSearchResult>>>?
+        OnlineSearchRequested
+    { get; set; }
+    [DesignerSerializationVisibility(DesignerSerializationVisibility.Hidden)]
+    public Func<string, CancellationToken, Task<TimingPackage>>?
+        OnlineTimingsRequested
+    { get; set; }
     // Loader-smoke seam: fail on an unexpected warning or confirmation dialog.
     // Keep a property: no assignment here, and CS0649-on-fields is an error.
     // The smoke assigns it by name via reflection.
@@ -464,6 +519,20 @@ internal sealed class CensorWindow : Form
         SetBlurPreset(settings.Blur);
         SetAudioCompressionPreset(settings.AudioCompressionPreset);
         PopulateSettings(_settings);
+    }
+
+    public void SetSoftwareDecodeCompatibility(bool enabled)
+    {
+        _rendering = true;
+        try
+        {
+            _softwareDecodeCompatibility.Checked = enabled;
+        }
+        finally
+        {
+            _rendering = false;
+            _softwareDecodeCompatibility.Enabled = true;
+        }
     }
 
     public void HandleAuthoringCommand(string command, long? capturedTimeMs = null)
@@ -680,7 +749,17 @@ internal sealed class CensorWindow : Form
     public void Shutdown()
     {
         _allowClose = true;
+        CloseOwnedForms(this);
         Close();
+    }
+
+    private static void CloseOwnedForms(Form owner)
+    {
+        foreach (var ownedForm in owner.OwnedForms)
+        {
+            CloseOwnedForms(ownedForm);
+            ownedForm.Close();
+        }
     }
 
     protected override void OnFormClosing(FormClosingEventArgs e)
@@ -710,6 +789,7 @@ internal sealed class CensorWindow : Form
     private TableLayoutPanel BuildIntervalsTab()
     {
         _addButton = Button("Добавить вручную", AddInterval);
+        _onlineButton = Button("Найти онлайн…", OpenOnlineTimings);
         _markStartButton = Button("Отметить начало (F7)", () =>
             HandleAuthoringCommand("mark-start"));
         _markEndButton = Button("Отметить конец (F8)", () =>
@@ -719,6 +799,7 @@ internal sealed class CensorWindow : Form
         _saveButton = Button("Сохранить файл", () => SaveDraft(AuthoringSaveMode.Save));
         _primaryActions = Flow(
             _addButton,
+            _onlineButton,
             _deleteButton,
             Button("Отменить", Undo),
             Button("Повторить", Redo),
@@ -843,11 +924,15 @@ internal sealed class CensorWindow : Form
         };
         AddRow(layout, 0, "Размытие:", _blurPreset);
         AddRow(layout, 1, "Компрессия звука:", _audioCompressionPreset);
-        layout.Controls.Add(_autoSidecar, 1, 2);
-        layout.Controls.Add(_watchdog, 1, 3);
-        layout.Controls.Add(advancedToggle, 1, 4);
-        layout.Controls.Add(advanced, 1, 5);
-        layout.Controls.Add(Button("Сохранить настройки", SaveSettings), 1, 6);
+        AddRow(layout, 2, "Онлайн-источник:", _onlineSource);
+        AddRow(layout, 3, "Адрес агрегатора:", _aggregatorBaseUrl);
+        AddRow(layout, 4, "Видео:", _videoOutputMode);
+        layout.Controls.Add(_softwareDecodeCompatibility, 1, 5);
+        layout.Controls.Add(_autoSidecar, 1, 6);
+        layout.Controls.Add(_watchdog, 1, 7);
+        layout.Controls.Add(advancedToggle, 1, 8);
+        layout.Controls.Add(advanced, 1, 9);
+        layout.Controls.Add(Button("Сохранить настройки", SaveSettings), 1, 10);
         return layout;
     }
 
@@ -881,6 +966,88 @@ internal sealed class CensorWindow : Form
         Changed(selectedIndex: _draft.Document.Intervals.Count - 1);
         _intervals.Focus();
         _intervals.BeginEdit(selectAll: true);
+    }
+
+    private void OpenOnlineTimings()
+    {
+        if (!CanEditCurrentMedia())
+        {
+            NotifyCannotEdit();
+            return;
+        }
+        if (_mediaDurationMs is not > 0)
+        {
+            NotifyAuthoring("Дождитесь, пока плеер определит длительность фильма.");
+            return;
+        }
+        if (OnlineSearchRequested is null || OnlineTimingsRequested is null)
+        {
+            NotifyAuthoring("Онлайн-поиск пока недоступен.");
+            return;
+        }
+
+        CommitCurrentCellEdit();
+        var requestedMediaPath = _mediaPath!;
+        var requestedMediaSessionId = _mediaSessionId;
+        var requestedDurationMs = _mediaDurationMs.Value;
+        var requestedTitle = GetMediaTitle(requestedMediaPath);
+        if (string.Equals(
+                requestedTitle,
+                requestedMediaPath.Trim(),
+                StringComparison.Ordinal))
+        {
+            requestedTitle = null;
+        }
+        using var dialog = new OnlineTimingsDialog(
+            requestedTitle ?? "",
+            requestedDurationMs,
+            OnlineSearchRequested,
+            OnlineTimingsRequested);
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        if (!CanEditCurrentMedia() ||
+            !DraftReconciliation.BelongsToCurrentSession(
+                requestedMediaPath,
+                requestedMediaSessionId,
+                _mediaPath,
+                _mediaSessionId) ||
+            _mediaDurationMs is not > 0)
+        {
+            NotifyAuthoring("Фильм изменился. Откройте онлайн-тайминги ещё раз.");
+            return;
+        }
+        var currentDurationMs = _mediaDurationMs.Value;
+
+        if (dialog.PointToMark?.StartMs is { } point)
+        {
+            SeekRequested?.Invoke(point);
+            HandleAuthoringCommand("mark-start", point);
+            return;
+        }
+        if (dialog.SelectedIntervals.Count == 0 || !EnsureDraft())
+            return;
+
+        TimingImportResult result;
+        try
+        {
+            result = TimingDraftImporter.Import(
+                _draft!,
+                dialog.SelectedIntervals,
+                dialog.Source,
+                currentDurationMs,
+                _settings.Limits.MaxIntervals);
+        }
+        catch (ArgumentException exception)
+        {
+            NotifyAuthoring(exception.Message);
+            return;
+        }
+        if (result.AddedCount > 0)
+            Changed(selectedIndex: _draft!.Document.Intervals.Count - 1);
+        NotifyAuthoring(
+            $"Добавлено интервалов: {result.AddedCount}; " +
+            $"дубликатов: {result.DuplicateCount}; пропущено: {result.RejectedCount}.");
     }
 
     private void DeleteSelected()
@@ -1389,7 +1556,14 @@ internal sealed class CensorWindow : Form
             (long)_leadOut.Value,
             (long)_mergeGap.Value,
             (long)_durationTolerance.Value,
-            (long)_earlyGuard.Value));
+            (long)_earlyGuard.Value,
+            _onlineSource.SelectedIndex == 1
+                ? OnlineSourceModes.AggregatorId
+                : OnlineSourceModes.DirectRteId,
+            string.IsNullOrWhiteSpace(_aggregatorBaseUrl.Text)
+                ? null
+                : _aggregatorBaseUrl.Text.Trim(),
+            VideoModeAt(_videoOutputMode.SelectedIndex)));
     }
 
     private void RepairSettings()
@@ -1423,6 +1597,12 @@ internal sealed class CensorWindow : Form
             _mergeGap.Value = settings.MergeGapMs;
             _durationTolerance.Value = settings.DurationToleranceMs;
             _earlyGuard.Value = settings.EarlyIntervalGuardMs;
+            _onlineSource.SelectedIndex = settings.OnlineSource.Equals(
+                OnlineSourceModes.AggregatorId,
+                StringComparison.OrdinalIgnoreCase) ? 1 : 0;
+            _aggregatorBaseUrl.Text = settings.AggregatorBaseUrl ?? "";
+            _aggregatorBaseUrl.Enabled = _onlineSource.SelectedIndex == 1;
+            _videoOutputMode.SelectedIndex = VideoModeIndex(settings.VideoOutputMode);
         }
         finally
         {
@@ -1668,6 +1848,9 @@ internal sealed class CensorWindow : Form
         _markStartButton.Enabled = canEditCurrent;
         _markEndButton.Enabled = canEditCurrent && _pendingStartMs.HasValue;
         _addButton.Enabled = canEditCurrent;
+        _onlineButton.Enabled = canEditCurrent &&
+            OnlineSearchRequested is not null &&
+            OnlineTimingsRequested is not null;
         _deleteButton.Enabled = canEditCurrent && SelectedIndex().HasValue;
         _applyButton.Enabled = canEditCurrent && _draft is not null;
         _saveButton.Enabled = canEditCurrent && _draft is not null;
@@ -1858,6 +2041,21 @@ internal sealed class CensorWindow : Form
         button.Click += (_, _) => action();
         return button;
     }
+
+    private static int VideoModeIndex(string mode) =>
+        VideoOutputModes.Normalize(mode) switch
+        {
+            VideoOutputModes.SdrId => 1,
+            VideoOutputModes.HdrId => 2,
+            _ => 0,
+        };
+
+    private static string VideoModeAt(int index) => index switch
+    {
+        1 => VideoOutputModes.SdrId,
+        2 => VideoOutputModes.HdrId,
+        _ => VideoOutputModes.AutoId,
+    };
 
     private static FlowLayoutPanel Flow(params Control[] controls)
     {

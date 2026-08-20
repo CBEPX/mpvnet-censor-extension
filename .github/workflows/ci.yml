@@ -10,6 +10,65 @@ permissions:
   contents: read
 
 jobs:
+  timings-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          dotnet-version: 10.0.302
+          cache: true
+          cache-dependency-path: '**/packages.lock.json'
+
+      - name: Restore API and core tests
+        run: |
+          dotnet restore src/Censor.Timings.Api/Censor.Timings.Api.csproj --locked-mode
+          dotnet restore tests/Censor.Core.Tests/Censor.Core.Tests.csproj --locked-mode
+
+      - name: Build and test API core
+        run: |
+          dotnet build src/Censor.Timings.Api/Censor.Timings.Api.csproj --configuration Release --no-restore
+          dotnet test tests/Censor.Core.Tests/Censor.Core.Tests.csproj --configuration Release --no-restore
+          bash scripts/smoke-timings-api.sh
+
+      - name: Build and smoke container
+        shell: bash
+        run: |
+          docker build \
+            --file src/Censor.Timings.Api/Dockerfile \
+            --tag censorplayer-timings:ci \
+            .
+          test -n "$(docker image inspect --format '{{.Config.User}}' censorplayer-timings:ci)"
+          container_started=false
+          cleanup() {
+            status=$?
+            if [[ "$container_started" == true ]]; then
+              if (( status != 0 )); then
+                docker logs censorplayer-timings-ci || true
+              fi
+              docker rm --force censorplayer-timings-ci >/dev/null 2>&1 || true
+            fi
+            exit "$status"
+          }
+          trap cleanup EXIT
+          docker run --detach --name censorplayer-timings-ci \
+            --memory 256m \
+            --publish 127.0.0.1:18080:8080 \
+            censorplayer-timings:ci
+          container_started=true
+          for _ in {1..40}; do
+            if health=$(curl --fail --silent http://127.0.0.1:18080/healthz); then
+              if [[ "$health" == *'"status":"ok"'* ]]; then
+                break
+              fi
+            fi
+            sleep 0.25
+          done
+          health=$(curl --fail --silent http://127.0.0.1:18080/healthz)
+          [[ "$health" == *'"status":"ok"'* ]]
+
   windows:
     runs-on: windows-latest
     timeout-minutes: 45
@@ -128,15 +187,10 @@ jobs:
           -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
           -VerifyAudioWatchdog
 
-      - name: Upload extension build evidence
+      - name: Upload Windows test package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: CensorExtension-windows-x64
+          name: CensorPlayer-windows-x64
           if-no-files-found: error
-          path: |
-            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
-            artifacts/windows/release/CensorPlayer-*-project-source.zip
-            LICENSE
-            THIRD_PARTY_NOTICES.md
-            examples/input.conf
+          path: artifacts/windows/release/*
           retention-days: 30
