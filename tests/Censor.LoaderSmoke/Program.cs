@@ -98,6 +98,7 @@ static void RunUiContractSmoke(Assembly assembly)
             ReadOnlySpan<string> requiredButtons =
             [
                 "Добавить вручную",
+                "Найти онлайн…",
                 "Отметить начало (F7)",
                 "Отметить конец (F8)",
                 "Применить интервалы",
@@ -125,6 +126,17 @@ static void RunUiContractSmoke(Assembly assembly)
                     checkbox.Text == "Автоматически восстанавливать размытие и компрессию звука"))
             {
                 throw new InvalidOperationException("The watchdog setting does not describe both protected filters.");
+            }
+            if (!Descendants(window).OfType<Label>().Any(label =>
+                    label.Text == "Онлайн-источник:"))
+            {
+                throw new InvalidOperationException("The online source selector is missing from settings.");
+            }
+            if (!Descendants(window).OfType<Label>().Any(label => label.Text == "Видео:") ||
+                !Descendants(window).OfType<CheckBox>().Any(checkbox =>
+                    checkbox.Text == "Совместимость Dolby Vision (программное декодирование до смены фильма)"))
+            {
+                throw new InvalidOperationException("The SDR/HDR and Dolby Vision controls are missing.");
             }
 
             VerifyEditorWorkflow(assembly, window);

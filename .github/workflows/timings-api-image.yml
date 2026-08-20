@@ -1,0 +1,58 @@
+name: Publish timings API image
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - main
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      SOURCE_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+
+      - name: Log in to GHCR
+        shell: bash
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USERNAME: ${{ github.actor }}
+        run: >-
+          printf '%s' "$GHCR_TOKEN" |
+          docker login ghcr.io --username "$GHCR_USERNAME" --password-stdin
+
+      - name: Build and publish
+        shell: bash
+        run: |
+          image=$(printf 'ghcr.io/%s-timings' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          docker buildx create --use --name censorplayer-builder ||
+            docker buildx use censorplayer-builder
+          docker buildx build \
+            --file src/Censor.Timings.Api/Dockerfile \
+            --platform linux/amd64 \
+            --label "org.opencontainers.image.source=https://github.com/$GITHUB_REPOSITORY" \
+            --label "org.opencontainers.image.revision=$SOURCE_SHA" \
+            --provenance=mode=max \
+            --sbom=true \
+            --tag "$image:sha-$SOURCE_SHA" \
+            --push \
+            .
+
+      - name: Log out of GHCR
+        if: always()
+        run: docker logout ghcr.io

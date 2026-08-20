@@ -1,0 +1,28 @@
+{
+  "id_type": "kp",
+  "kp_id": "301",
+  "timings": [
+    {
+      "id": 2031,
+      "username": "Таня Белкова",
+      "timing_text": "00:32:22(вид глотки изнутри, спорно)",
+      "status": "approved",
+      "user_id": 21923,
+      "user_timing_count": 1076,
+      "upvotes": 2,
+      "downvotes": 1,
+      "vote_score": 1
+    },
+    {
+      "id": 2032,
+      "username": "Пользователь",
+      "timing_text": "00:40:00-00:40:05 сцена",
+      "status": "approved",
+      "user_id": 100,
+      "user_timing_count": 2,
+      "upvotes": 1,
+      "downvotes": 0,
+      "vote_score": 1
+    }
+  ]
+}

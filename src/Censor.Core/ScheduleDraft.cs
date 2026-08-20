@@ -148,6 +148,20 @@ public sealed class ScheduleDraft
             Intervals = document.Intervals.Append(new(startMs, endMs, NormalizeSingleLine(note))).ToArray(),
         });
 
+    public void AddRange(IEnumerable<CensorInterval> intervals)
+    {
+        ArgumentNullException.ThrowIfNull(intervals);
+        var additions = intervals
+            .Select(interval => interval with { Note = NormalizeSingleLine(interval.Note) })
+            .ToArray();
+        if (additions.Length == 0)
+            return;
+        Change(document => document with
+        {
+            Intervals = document.Intervals.Concat(additions).ToArray(),
+        });
+    }
+
     public void Update(int index, long startMs, long endMs, string? note)
     {
         EnsureIndex(index);
@@ -412,7 +426,7 @@ public sealed class ScheduleDraft
         left.Intervals.SequenceEqual(right.Intervals) &&
         left.PreservedHeaderLines.SequenceEqual(right.PreservedHeaderLines);
 
-    private static string? NormalizeSingleLine(string? value) =>
+    internal static string? NormalizeSingleLine(string? value) =>
         string.IsNullOrWhiteSpace(value)
             ? null
             : value.Replace("\r\n", " ", StringComparison.Ordinal)

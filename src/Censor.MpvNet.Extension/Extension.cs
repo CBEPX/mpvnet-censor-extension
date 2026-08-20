@@ -26,19 +26,24 @@ public sealed class Extension : IExtension, IDisposable
     private static readonly TimeSpan DialogTimeout = TimeSpan.FromSeconds(30);
     private static readonly TimeSpan OsdGateTimeout = TimeSpan.FromMilliseconds(250);
     private static readonly TimeSpan ShutdownWaitTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan VideoReconfigTimeout = TimeSpan.FromSeconds(3);
 
-    // Nested runtime acquisition order: _filterGate -> _stateLock -> _windowLock.
+    // Nested runtime acquisition order: _videoGate -> _filterGate -> _stateLock -> _windowLock.
     // _settingsWriteLock may wrap _stateLock, but never nests with _filterGate or _windowLock.
     // Session-token cancellation callbacks must never acquire _stateLock.
+    // UI callbacks may take _stateLock, so no holder may block on a window invocation.
     private readonly Lock _stateLock = new();
     private readonly Lock _windowLock = new();
     private readonly Lock _settingsWriteLock = new();
     private readonly Queue<(Action<CensorWindow> Run, Action? Cancel)>
         _pendingWindowActions = new();
     private readonly MediaSessionCoordinator _revisions = new();
+    private readonly SemaphoreSlim _videoGate = new(1, 1);
     private readonly SemaphoreSlim _filterGate = new(1, 1);
     private readonly TaskCompletionSource<bool> _stopped =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly HttpClient _onlineHttp;
+    private readonly OnlineTimingsClient _onlineTimings;
     private readonly System.Threading.Timer _watchdog;
     private readonly ExtensionLog _log;
     private readonly string _localDataRoot;
@@ -64,6 +69,13 @@ public sealed class Extension : IExtension, IDisposable
     private int _recoveryFailures;
     private int _stopping;
     private int _vfReadFailures;
+    private bool _softwareDecodeCompatibility;
+    private string? _softwareDecodeRestoreHwdec;
+    private string? _pendingHwdecRestore;
+    private IReadOnlyDictionary<string, string>? _videoOutputBaseline;
+    private bool _videoOutputChanged;
+    private int _videoOutputWarningShown;
+    private long _videoReconfigRevision;
     private ManualResetEvent? _watchdogShutdownWaitHandle;
 
     public Extension()
@@ -80,6 +92,17 @@ public sealed class Extension : IExtension, IDisposable
             Path.Combine(_localDataRoot, "Logs"),
             _settings.Logging.RetentionDays,
             _settings.Logging.Level);
+        _onlineHttp = new(new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+        })
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+        var version = typeof(OnlineTimingsClient).Assembly.GetName().Version?.ToString(3) ?? "unknown";
+        _onlineHttp.DefaultRequestHeaders.UserAgent.ParseAdd($"CensorPlayer/{version}");
+        _onlineTimings = new(_onlineHttp);
         if (!_log.IsEnabled)
             Terminal.WriteError("Журнал CensorPlayer отключён: не удалось открыть каталог для записи.", LogModule);
         foreach (var warning in loadedSettings.Warnings)
@@ -91,6 +114,7 @@ public sealed class Extension : IExtension, IDisposable
         }
         catch
         {
+            _onlineHttp.Dispose();
             _log.Dispose();
             throw;
         }
@@ -102,6 +126,7 @@ public sealed class Extension : IExtension, IDisposable
             Player.StartFile += OnStartFile;
             Player.FileLoaded += OnFileLoaded;
             Player.EndFile += OnEndFile;
+            Player.VideoReconfig += OnVideoReconfig;
             Player.Shutdown += OnShutdown;
             Player.ClientMessage += OnClientMessage;
             Global.Player.Shutdown += OnShutdown;
@@ -115,6 +140,7 @@ public sealed class Extension : IExtension, IDisposable
         {
             UnsubscribePlayerEvents();
             watchdog?.Dispose();
+            _onlineHttp.Dispose();
             _log.Dispose();
             throw;
         }
@@ -132,6 +158,7 @@ public sealed class Extension : IExtension, IDisposable
         var shutdown = Stopwatch.StartNew();
         StopRuntime(removeFilters: true, RemainingShutdownWait(shutdown));
         CloseWindow(waitForExit: true, RemainingShutdownWait(shutdown));
+        _onlineHttp.Dispose();
         var watchdogStopped = new ManualResetEvent(false);
         if (_watchdog.Dispose(watchdogStopped) &&
             !watchdogStopped.WaitOne(RemainingShutdownWait(shutdown)))
@@ -169,6 +196,7 @@ public sealed class Extension : IExtension, IDisposable
         Player.StartFile -= OnStartFile;
         Player.FileLoaded -= OnFileLoaded;
         Player.EndFile -= OnEndFile;
+        Player.VideoReconfig -= OnVideoReconfig;
         Player.Shutdown -= OnShutdown;
         Player.ClientMessage -= OnClientMessage;
         Global.Player.Shutdown -= OnShutdown;
@@ -212,9 +240,13 @@ public sealed class Extension : IExtension, IDisposable
             var extension = (Extension)state!;
             extension.RunSafely(extension.LoadCurrentSidecar);
             extension.RunSafely(extension.EnsureSavedAudioCompression);
+            extension.RunSafely(extension.EnsureSavedVideoOutput);
         }, this);
 
     private void OnEndFile(mpv_end_file_reason _) => RunSafely(() => BeginSession("IDLE"));
+
+    private void OnVideoReconfig() =>
+        Interlocked.Increment(ref _videoReconfigRevision);
 
     private void OnShutdown() => RunSafely(() =>
     {
@@ -287,6 +319,7 @@ public sealed class Extension : IExtension, IDisposable
 
         OperationTicket ticket;
         CancellationTokenSource previous;
+        string? restoreHwdec;
         lock (_stateLock)
         {
             if (Volatile.Read(ref _stopping) != 0)
@@ -299,14 +332,24 @@ public sealed class Extension : IExtension, IDisposable
             _operationCancellation = new();
             _pendingSchedule = null;
             _scheduleLoadTicket = null;
-            _sessionCleanup = Task.Run(() => RunSafely(() => ClearSession(ticket)));
+            if (_softwareDecodeCompatibility)
+            {
+                _pendingHwdecRestore ??=
+                    _softwareDecodeRestoreHwdec ?? "auto";
+            }
+            restoreHwdec = _pendingHwdecRestore;
+            _softwareDecodeCompatibility = false;
+            _softwareDecodeRestoreHwdec = null;
+            _sessionCleanup = Task.Run(() =>
+                RunSafely(() => ClearSession(ticket, restoreHwdec)));
         }
 
         CancelSupersededOperation(previous);
+        InvokeWindow(window => window.SetSoftwareDecodeCompatibility(false));
         UpdateWindow(status, ticket);
     }
 
-    private void ClearSession(OperationTicket ticket)
+    private void ClearSession(OperationTicket ticket, string? restoreHwdec)
     {
         _filterGate.Wait();
         var currentSession = false;
@@ -330,6 +373,38 @@ public sealed class Extension : IExtension, IDisposable
             Interlocked.Exchange(ref _recoveryFailures, 0);
             Interlocked.Exchange(ref _vfReadFailures, 0);
             ResetAudioWatchdogState();
+            if (restoreHwdec is not null)
+            {
+                try
+                {
+                    SetAndVerifyProperty("hwdec", restoreHwdec);
+                    lock (_stateLock)
+                    {
+                        if (_revisions.IsCurrentMediaSession(ticket) &&
+                            string.Equals(
+                                _pendingHwdecRestore,
+                                restoreHwdec,
+                                StringComparison.Ordinal))
+                        {
+                            _pendingHwdecRestore = null;
+                        }
+                    }
+                }
+                catch (Exception exception)
+                {
+                    Terminal.WriteError(exception, LogModule);
+                    _log.Write(
+                        "hwdec-restore-error",
+                        ticket,
+                        new Dictionary<string, object?>
+                        {
+                            ["error"] = ProtectError(exception),
+                        },
+                        ExtensionLogLevel.Error);
+                    QueueShow(
+                        "Не удалось восстановить декодирование mpv.net. Повторная попытка будет сделана при следующей смене фильма.");
+                }
+            }
         }
         finally
         {
@@ -960,8 +1035,13 @@ public sealed class Extension : IExtension, IDisposable
         ExtensionSettings settings;
         bool watchdogChanged;
         bool normalizationChanged;
+        bool videoModeChanged;
+        bool hasMedia;
         bool hasSchedule;
         IReadOnlyList<string> warnings;
+        var aggregatorBaseUrl = values.AggregatorBaseUrl;
+        if (OnlineSourceModes.TryNormalizeBaseUrl(aggregatorBaseUrl, out var normalizedAggregatorBaseUrl))
+            aggregatorBaseUrl = normalizedAggregatorBaseUrl;
         lock (_stateLock)
         {
             previousSettings = _settings;
@@ -975,6 +1055,9 @@ public sealed class Extension : IExtension, IDisposable
                 MergeGapMs = values.MergeGapMs,
                 DurationToleranceMs = values.DurationToleranceMs,
                 EarlyIntervalGuardMs = values.EarlyIntervalGuardMs,
+                OnlineSource = values.OnlineSource,
+                AggregatorBaseUrl = aggregatorBaseUrl,
+                VideoOutputMode = values.VideoOutputMode,
             };
             watchdogChanged =
                 _settings.WatchdogEnabled != settings.WatchdogEnabled ||
@@ -983,6 +1066,8 @@ public sealed class Extension : IExtension, IDisposable
                 _settings.LeadInMs != settings.LeadInMs ||
                 _settings.LeadOutMs != settings.LeadOutMs ||
                 _settings.MergeGapMs != settings.MergeGapMs;
+            videoModeChanged = _settings.VideoOutputMode != settings.VideoOutputMode;
+            hasMedia = !string.IsNullOrWhiteSpace(_currentMediaPath);
             hasSchedule = _activeSchedule is not null || _pendingSchedule is not null;
             warnings = ExtensionSettingsStore.Validate(settings);
             if (warnings.Count == 0)
@@ -1006,6 +1091,22 @@ public sealed class Extension : IExtension, IDisposable
             return;
         }
 
+        if (videoModeChanged)
+            Interlocked.Exchange(ref _videoOutputWarningShown, 0);
+
+        if (videoModeChanged && hasMedia &&
+            !TryApplyVideoOutputMode(settings.VideoOutputMode, out var videoError))
+        {
+            lock (_stateLock)
+            {
+                if (ReferenceEquals(_settings, settings))
+                    _settings = previousSettings;
+            }
+            InvokeWindow(window => window.SetSettings(previousSettings));
+            Show(videoError);
+            return;
+        }
+
         if (!SaveSettings())
         {
             var reverted = false;
@@ -1018,7 +1119,15 @@ public sealed class Extension : IExtension, IDisposable
                 }
             }
             if (reverted)
+            {
+                if (videoModeChanged && hasMedia &&
+                    !TryApplyVideoOutputMode(previousSettings.VideoOutputMode, out var rollbackError))
+                {
+                    Show("Настройки не сохранены, а прежний режим видео не удалось восстановить. " +
+                        rollbackError);
+                }
                 InvokeWindow(window => window.SetSettings(previousSettings));
+            }
             return;
         }
 
@@ -1033,9 +1142,16 @@ public sealed class Extension : IExtension, IDisposable
             Volatile.Read(ref _stopping) != 0 || Volatile.Read(ref _disposed) != 0)
         {
         }
-        Show(normalizationChanged && hasSchedule
+        var savedMessage = normalizationChanged && hasSchedule
             ? "Настройки сохранены. Запас до и после интервала и порог объединения применятся после перезагрузки файла интервалов."
-            : "Настройки сохранены.");
+            : "Настройки сохранены.";
+        if (videoModeChanged)
+        {
+            savedMessage += hasMedia
+                ? $" Видео: {VideoModeDisplay(settings.VideoOutputMode)}."
+                : $" Видео {VideoModeDisplay(settings.VideoOutputMode)} применится после открытия фильма.";
+        }
+        Show(savedMessage);
     }
 
     private void RepairSettings()
@@ -1378,6 +1494,66 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
+    private Task<IReadOnlyList<MovieSearchResult>> SearchOnlineTimingsAsync(
+        string query,
+        CancellationToken cancellationToken) =>
+        RunOnlineRequestAsync((settings, token) => _onlineTimings.SearchAsync(
+            settings.OnlineSource,
+            settings.AggregatorBaseUrl,
+            query,
+            token), cancellationToken);
+
+    private Task<TimingPackage> LoadOnlineTimingsAsync(
+        string kinopoiskIdOrUrl,
+        CancellationToken cancellationToken) =>
+        RunOnlineRequestAsync((settings, token) => _onlineTimings.GetTimingsAsync(
+            settings.OnlineSource,
+            settings.AggregatorBaseUrl,
+            kinopoiskIdOrUrl,
+            token), cancellationToken);
+
+    private async Task<T> RunOnlineRequestAsync<T>(
+        Func<ExtensionSettings, CancellationToken, Task<T>> request,
+        CancellationToken cancellationToken)
+    {
+        OperationTicket ticket;
+        CancellationToken sessionToken;
+        ExtensionSettings settings;
+        lock (_stateLock)
+        {
+            if (Volatile.Read(ref _stopping) != 0 ||
+                string.IsNullOrWhiteSpace(_currentMediaPath))
+            {
+                throw new MediaSessionChangedException("Фильм больше не открыт.");
+            }
+            ticket = _revisions.Snapshot();
+            sessionToken = _revisions.SessionToken;
+            settings = _settings;
+        }
+
+        using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            sessionToken);
+        T result;
+        try
+        {
+            result = await request(settings, linked.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (
+            sessionToken.IsCancellationRequested &&
+            !cancellationToken.IsCancellationRequested)
+        {
+            throw new MediaSessionChangedException("Открыт другой фильм.", sessionToken);
+        }
+        if (linked.IsCancellationRequested ||
+            Volatile.Read(ref _stopping) != 0 ||
+            !_revisions.IsCurrentMediaSession(ticket))
+        {
+            throw new MediaSessionChangedException("Открыт другой фильм.", linked.Token);
+        }
+        return result;
+    }
+
     private long? GetCurrentTimeMs() => GetCurrentTimeMs(TimeSpan.Zero);
 
     private long? GetCurrentTimeMs(TimeSpan waitTimeout)
@@ -1412,6 +1588,11 @@ public sealed class Extension : IExtension, IDisposable
 
         string videoFilters;
         string audioFilters;
+        string currentVo;
+        string targetPrimaries;
+        string targetTransfer;
+        string hwdec;
+        string hwdecCurrent;
         _filterGate.Wait();
         try
         {
@@ -1419,6 +1600,20 @@ public sealed class Extension : IExtension, IDisposable
                 videoFilters = "";
             if (!TryGetPropertyString("af", out audioFilters))
                 audioFilters = "";
+            if (!TryGetPropertyString("current-vo", out currentVo))
+                currentVo = "";
+            if (!TryGetPropertyString(
+                    "video-target-params/primaries",
+                    out targetPrimaries))
+            {
+                targetPrimaries = "";
+            }
+            if (!TryGetPropertyString("video-target-params/gamma", out targetTransfer))
+                targetTransfer = "";
+            if (!TryGetPropertyString("hwdec", out hwdec))
+                hwdec = "";
+            if (!TryGetPropertyString("hwdec-current", out hwdecCurrent))
+                hwdecCurrent = "";
         }
         finally
         {
@@ -1508,6 +1703,12 @@ public sealed class Extension : IExtension, IDisposable
                 presentExpectedLabels = active?.Plan.Chunks
                     .Where(chunk => ContainsLabel(videoFilters, chunk.Label))
                     .Select(chunk => chunk.Label) ?? [],
+                outputMode = settings.VideoOutputMode,
+                currentVo,
+                targetPrimaries,
+                targetTransfer,
+                hwdec,
+                hwdecCurrent,
             }, jsonOptions),
             JsonSerializer.Serialize(new
             {
@@ -1994,6 +2195,406 @@ public sealed class Extension : IExtension, IDisposable
         }
     }
 
+    private void EnsureSavedVideoOutput()
+    {
+        string mode;
+        lock (_stateLock)
+            mode = _settings.VideoOutputMode;
+        if (TryApplyVideoOutputMode(mode, out var error))
+        {
+            Interlocked.Exchange(ref _videoOutputWarningShown, 0);
+            return;
+        }
+        if (Interlocked.Exchange(ref _videoOutputWarningShown, 1) != 0)
+            return;
+
+        _log.Write(
+            "video-output-restore-error",
+            _revisions.Snapshot(),
+            new Dictionary<string, object?> { ["mode"] = mode },
+            ExtensionLogLevel.Error);
+        Show(error);
+    }
+
+    private bool TryApplyVideoOutputMode(string mode, out string error)
+    {
+        mode = VideoOutputModes.Normalize(mode);
+        error = "";
+        _videoGate.Wait();
+        try
+        {
+            var ticket = _revisions.Snapshot();
+            Dictionary<string, string>? previous = null;
+            try
+            {
+                long deadline;
+                _filterGate.Wait();
+                try
+                {
+                    if (!_revisions.IsCurrentMediaSession(ticket) ||
+                        Volatile.Read(ref _stopping) != 0)
+                    {
+                        return true;
+                    }
+                    if (mode != VideoOutputModes.AutoId && !UsesGpuNext())
+                    {
+                        error = "Для режимов SDR/HDR нужен рендерер gpu-next. Измените vo в конфигурации mpv.net и перезапустите плеер.";
+                        return false;
+                    }
+                    if (mode == VideoOutputModes.AutoId && !_videoOutputChanged)
+                        return true;
+
+                    previous = CaptureCurrentVideoOutput();
+                    var desired = VideoOutputPresets.Resolve(
+                        mode,
+                        _videoOutputBaseline ?? previous);
+                    var changed = desired.Any(item =>
+                        !previous[item.Key].Equals(item.Value, StringComparison.OrdinalIgnoreCase));
+                    if (!changed)
+                    {
+                        if (mode == VideoOutputModes.AutoId)
+                        {
+                            _videoOutputBaseline = null;
+                            _videoOutputChanged = false;
+                        }
+                        return true;
+                    }
+
+                    deadline = VideoDeadline();
+                    foreach (var item in desired)
+                        SetAndVerifyProperty(item.Key, item.Value);
+                }
+                finally
+                {
+                    _filterGate.Release();
+                }
+
+                if (!WaitForVideoTarget(mode, ticket, deadline) &&
+                    _revisions.IsCurrentMediaSession(ticket))
+                {
+                    throw new InvalidOperationException(
+                        "mpv не подтвердил video-target-params/primaries и video-target-params/gamma.");
+                }
+                if (mode == VideoOutputModes.AutoId)
+                {
+                    _videoOutputBaseline = null;
+                    _videoOutputChanged = false;
+                }
+                else
+                {
+                    // target-* are player-wide options. Keep the pre-write baseline
+                    // across a file change so the next FileLoaded cannot capture
+                    // this explicit target as the value that Auto should restore.
+                    _videoOutputBaseline ??= previous;
+                    _videoOutputChanged = true;
+                }
+                return true;
+            }
+            catch (Exception exception)
+            {
+                var rollbackFailed = false;
+                if (previous is not null)
+                {
+                    _filterGate.Wait();
+                    try
+                    {
+                        foreach (var item in previous)
+                            SetAndVerifyProperty(item.Key, item.Value);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        _videoOutputBaseline ??= previous;
+                        _videoOutputChanged = true;
+                        rollbackFailed = true;
+                        Terminal.WriteError(rollbackException, LogModule);
+                    }
+                    finally
+                    {
+                        _filterGate.Release();
+                    }
+                }
+                if (!_revisions.IsCurrentMediaSession(ticket))
+                    return true;
+                Terminal.WriteError(exception, LogModule);
+                error = rollbackFailed
+                    ? $"Не удалось применить режим видео: {exception.Message} " +
+                        "Не все предыдущие параметры восстановлены; выберите «Авто» для повторной попытки."
+                    : $"Не удалось применить режим видео: {exception.Message} " +
+                        "Возвращены предыдущие параметры; подробности — в журнале mpv.net.";
+                return false;
+            }
+        }
+        finally
+        {
+            _videoGate.Release();
+        }
+    }
+
+    private void ChangeSoftwareDecodeCompatibility(bool enabled)
+    {
+        var previous = false;
+        var noChange = false;
+        var noMedia = false;
+        OperationTicket ticket = default;
+        string? previousHwdec = null;
+        Exception? failure = null;
+        _videoGate.Wait();
+        try
+        {
+            var restoreHwdec = "auto";
+            var reconfigRevision = 0L;
+            var deadline = 0L;
+            try
+            {
+                _filterGate.Wait();
+                try
+                {
+                    lock (_stateLock)
+                    {
+                        previous = _softwareDecodeCompatibility;
+                        noChange = enabled == previous;
+                        noMedia = string.IsNullOrWhiteSpace(_currentMediaPath);
+                        ticket = _revisions.Snapshot();
+                        restoreHwdec = _softwareDecodeRestoreHwdec ??
+                            _pendingHwdecRestore ??
+                            "auto";
+                    }
+                    if (!noChange && !noMedia)
+                    {
+                        if (!_revisions.IsCurrentMediaSession(ticket) ||
+                            enabled && !UsesGpuNext())
+                        {
+                            throw new InvalidOperationException(
+                                "Для совместимости Dolby Vision нужен рендерер gpu-next.");
+                        }
+                        var desired = enabled ? "no" : restoreHwdec;
+                        previousHwdec = GetRequiredPropertyString("hwdec");
+                        reconfigRevision = Volatile.Read(ref _videoReconfigRevision);
+                        deadline = VideoDeadline();
+                        SetAndVerifyProperty("hwdec", desired);
+                        Player.CommandV("video-reload");
+                    }
+                }
+                finally
+                {
+                    _filterGate.Release();
+                }
+
+                if (!noChange && !noMedia)
+                {
+                    if (!WaitForVideoReconfig(reconfigRevision, ticket, deadline) ||
+                        !_revisions.IsCurrentMediaSession(ticket))
+                    {
+                        throw new TimeoutException("mpv не подтвердил перезапуск видеодекодера.");
+                    }
+                    if (enabled &&
+                        !WaitForHwdec("no", ticket, deadline))
+                    {
+                        throw new InvalidOperationException(
+                            "mpv продолжил использовать аппаратное декодирование.");
+                    }
+                    lock (_stateLock)
+                    {
+                        if (!_revisions.IsCurrentMediaSession(ticket))
+                            throw new InvalidOperationException("Открыт другой фильм.");
+                        _softwareDecodeCompatibility = enabled;
+                        _softwareDecodeRestoreHwdec = enabled
+                            ? _softwareDecodeRestoreHwdec ??
+                                _pendingHwdecRestore ??
+                                previousHwdec
+                            : null;
+                        if (!enabled && string.Equals(
+                                _pendingHwdecRestore,
+                                restoreHwdec,
+                                StringComparison.Ordinal))
+                        {
+                            _pendingHwdecRestore = null;
+                        }
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+                if (previousHwdec is not null &&
+                    (!previous || _revisions.IsCurrentMediaSession(ticket)))
+                {
+                    _filterGate.Wait();
+                    try
+                    {
+                        SetAndVerifyProperty("hwdec", previousHwdec);
+                        Player.CommandV("video-reload");
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        lock (_stateLock)
+                        {
+                            _pendingHwdecRestore ??= enabled
+                                ? previousHwdec
+                                : restoreHwdec;
+                        }
+                        Terminal.WriteError(rollbackException, LogModule);
+                    }
+                    finally
+                    {
+                        _filterGate.Release();
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _videoGate.Release();
+        }
+
+        if (noChange)
+        {
+            InvokeWindow(window => window.SetSoftwareDecodeCompatibility(previous));
+            return;
+        }
+        if (noMedia)
+        {
+            InvokeWindow(window => window.SetSoftwareDecodeCompatibility(previous));
+            Show("Сначала откройте фильм.");
+            return;
+        }
+        if (failure is not null)
+        {
+            Terminal.WriteError(failure, LogModule);
+            bool actual;
+            lock (_stateLock)
+                actual = _softwareDecodeCompatibility;
+            InvokeWindow(window => window.SetSoftwareDecodeCompatibility(actual));
+            if (_revisions.IsCurrentMediaSession(ticket))
+            {
+                Show($"Не удалось изменить режим совместимости Dolby Vision: {failure.Message} " +
+                    "Возвращена предыдущая настройка.");
+            }
+            return;
+        }
+        InvokeWindow(window => window.SetSoftwareDecodeCompatibility(enabled));
+        Show(enabled
+            ? "Совместимость Dolby Vision включена: программное декодирование."
+            : "Совместимость Dolby Vision выключена: восстановлено декодирование mpv.net.");
+    }
+
+    private Dictionary<string, string> CaptureCurrentVideoOutput()
+    {
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var name in VideoOutputPresets.PropertyNames)
+            values[name] = GetRequiredPropertyString(name);
+        return values;
+    }
+
+    private string GetRequiredPropertyString(string name) =>
+        TryGetPropertyString(name, out var value)
+            ? value
+            : throw new InvalidOperationException($"mpv не сообщил значение {name}.");
+
+    private void SetAndVerifyProperty(string name, string value)
+    {
+        Player.SetPropertyString(name, value);
+        if (!TryGetPropertyString(name, out var actual) ||
+            !actual.Equals(value, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException($"mpv не подтвердил значение {name}.");
+        }
+    }
+
+    private bool UsesGpuNext() =>
+        TryGetPropertyString("current-vo", out var renderer) &&
+        renderer.Equals("gpu-next", StringComparison.OrdinalIgnoreCase);
+
+    private static string VideoModeDisplay(string mode) =>
+        VideoOutputModes.Normalize(mode) switch
+        {
+            VideoOutputModes.SdrId => "SDR (Rec. 709)",
+            VideoOutputModes.HdrId => "HDR (PQ / BT.2020)",
+            _ => "Авто",
+        };
+
+    private bool WaitForVideoTarget(
+        string mode,
+        OperationTicket ticket,
+        long deadline)
+    {
+        do
+        {
+            if (!_revisions.IsCurrentMediaSession(ticket))
+                return false;
+            _filterGate.Wait();
+            try
+            {
+                if (VideoOutputPresets.MatchesTarget(
+                        mode,
+                        TryGetPropertyString("video-target-params/primaries", out var primaries)
+                            ? primaries
+                            : null,
+                        TryGetPropertyString("video-target-params/gamma", out var transfer)
+                            ? transfer
+                            : null))
+                {
+                    return true;
+                }
+            }
+            finally
+            {
+                _filterGate.Release();
+            }
+            Thread.Sleep(25);
+        }
+        while (Stopwatch.GetTimestamp() < deadline);
+        return false;
+    }
+
+    private bool WaitForVideoReconfig(
+        long revision,
+        OperationTicket ticket,
+        long deadline)
+    {
+        while (Stopwatch.GetTimestamp() < deadline)
+        {
+            if (!_revisions.IsCurrentMediaSession(ticket))
+                return false;
+            if (Volatile.Read(ref _videoReconfigRevision) > revision)
+                return true;
+            Thread.Sleep(25);
+        }
+        return false;
+    }
+
+    private bool WaitForHwdec(
+        string expected,
+        OperationTicket ticket,
+        long deadline)
+    {
+        do
+        {
+            if (!_revisions.IsCurrentMediaSession(ticket))
+                return false;
+            _filterGate.Wait();
+            try
+            {
+                if (TryGetPropertyString("hwdec-current", out var current) &&
+                    current.Equals(expected, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+            finally
+            {
+                _filterGate.Release();
+            }
+            Thread.Sleep(25);
+        }
+        while (Stopwatch.GetTimestamp() < deadline);
+        return false;
+    }
+
+    private static long VideoDeadline() =>
+        Stopwatch.GetTimestamp() +
+        (long)(VideoReconfigTimeout.TotalSeconds * Stopwatch.Frequency);
+
     private void ApplyAudioCompressionPreset(AudioCompressionPresetDefinition preset)
     {
         if (!TryGetPropertyString("af", out var filters))
@@ -2229,6 +2830,8 @@ public sealed class Extension : IExtension, IDisposable
                             QueueSafely(() => ChangeBlurPreset(settings));
                         window.AudioCompressionPresetSelected += presetId =>
                             QueueSafely(() => ChangeAudioCompressionPreset(presetId));
+                        window.SoftwareDecodeCompatibilitySelected += enabled =>
+                            QueueSafely(() => ChangeSoftwareDecodeCompatibility(enabled));
                         window.SettingsChanged += settings =>
                             QueueSafely(() => ChangeSettings(settings));
                         window.SaveRequested += (snapshot, mode) =>
@@ -2242,6 +2845,11 @@ public sealed class Extension : IExtension, IDisposable
                         window.PersistenceError += (message, exception) =>
                             QueueSafely(() => ReportWindowPersistenceError(message, exception));
                         window.CurrentTimeRequested = GetCurrentTimeMs;
+                        window.OnlineSearchRequested = SearchOnlineTimingsAsync;
+                        window.OnlineTimingsRequested = LoadOnlineTimingsAsync;
+                        lock (_stateLock)
+                            window.SetSoftwareDecodeCompatibility(
+                                _softwareDecodeCompatibility);
                         window.Shown += (_, _) =>
                         {
                             if (Volatile.Read(ref _stopping) != 0)
@@ -3158,6 +3766,14 @@ public sealed class Extension : IExtension, IDisposable
             CancellationTokenSource cancellation;
             lock (_stateLock)
                 cancellation = _operationCancellation;
+
+            try
+            {
+                _revisions.CancelCurrentSession();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
 
             try
             {

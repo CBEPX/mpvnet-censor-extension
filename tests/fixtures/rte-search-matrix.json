@@ -1,0 +1,23 @@
+[
+  {
+    "id": 301,
+    "title": "Матрица (1999)",
+    "year": "1999",
+    "poster": "https://kinopoiskapiunofficial.tech/images/posters/kp_small/301.jpg",
+    "raw_data": {
+      "film_id": 301,
+      "name_ru": "Матрица",
+      "name_en": "The Matrix",
+      "type": "FILM",
+      "year": "1999",
+      "description": "Жизнь Томаса Андерсона разделена на две части.",
+      "film_length": "02:16",
+      "countries": [{ "country": "США" }],
+      "genres": [{ "genre": "фантастика" }],
+      "rating": "8.5",
+      "rating_vote_count": 808368,
+      "poster_url": "https://kinopoiskapiunofficial.tech/images/posters/kp/301.jpg",
+      "poster_url_preview": "https://kinopoiskapiunofficial.tech/images/posters/kp_small/301.jpg"
+    }
+  }
+]

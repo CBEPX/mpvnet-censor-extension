@@ -17,6 +17,9 @@ public sealed record ExtensionSettings
     public int WatchdogIntervalMs { get; init; } = 1_000;
     public BlurSettings Blur { get; init; } = BlurSettings.Balanced;
     public string AudioCompressionPreset { get; init; } = AudioCompressionPresets.OffId;
+    public string OnlineSource { get; init; } = OnlineSourceModes.DirectRteId;
+    public string? AggregatorBaseUrl { get; init; }
+    public string VideoOutputMode { get; init; } = VideoOutputModes.AutoId;
     public SettingsLimits Limits { get; init; } = new();
     public LoggingSettings Logging { get; init; } = new();
     public string? LastScheduleDirectory { get; init; }
@@ -170,6 +173,20 @@ public static class ExtensionSettingsStore
             warnings.Add("Значение watchdogIntervalMs должно быть от 250 до 60000.");
         if (!AudioCompressionPresets.IsValid(settings.AudioCompressionPreset))
             warnings.Add("Неизвестный пресет audioCompressionPreset.");
+        if (!OnlineSourceModes.IsValid(settings.OnlineSource))
+            warnings.Add("Неизвестное значение onlineSource.");
+        var aggregatorUrlValid = OnlineSourceModes.TryNormalizeBaseUrl(
+            settings.AggregatorBaseUrl,
+            out _);
+        var aggregatorSource = settings.OnlineSource?.Equals(
+            OnlineSourceModes.AggregatorId,
+            StringComparison.OrdinalIgnoreCase) == true;
+        if (aggregatorSource && !aggregatorUrlValid)
+        {
+            warnings.Add("Для onlineSource=aggregator требуется корректный aggregatorBaseUrl.");
+        }
+        if (!VideoOutputModes.IsValid(settings.VideoOutputMode))
+            warnings.Add("Неизвестное значение videoOutputMode.");
         if (settings.Blur is null)
         {
             warnings.Add("Поле blur должно быть объектом.");
@@ -222,6 +239,24 @@ public static class ExtensionSettingsStore
         var defaultLogging = new LoggingSettings();
         var limits = settings.Limits;
         var logging = settings.Logging;
+        var onlineSource = OnlineSourceModes.Normalize(settings.OnlineSource);
+        OnlineSourceModes.TryNormalizeBaseUrl(settings.AggregatorBaseUrl, out var aggregatorBaseUrl);
+        if (aggregatorBaseUrl is null &&
+            onlineSource == OnlineSourceModes.DirectRteId &&
+            !string.IsNullOrWhiteSpace(settings.AggregatorBaseUrl))
+        {
+            aggregatorBaseUrl = settings.AggregatorBaseUrl.Trim();
+            if (aggregatorBaseUrl.Length > OnlineSourceModes.MaxBaseUrlLength)
+            {
+                var length = OnlineSourceModes.MaxBaseUrlLength;
+                if (char.IsHighSurrogate(aggregatorBaseUrl[length - 1]) &&
+                    char.IsLowSurrogate(aggregatorBaseUrl[length]))
+                {
+                    length--;
+                }
+                aggregatorBaseUrl = aggregatorBaseUrl[..length];
+            }
+        }
         return settings with
         {
             LeadInMs = ValidMilliseconds(settings.LeadInMs) ? settings.LeadInMs : defaults.LeadInMs,
@@ -238,6 +273,9 @@ public static class ExtensionSettingsStore
                 : defaults.WatchdogIntervalMs,
             AudioCompressionPreset = AudioCompressionPresets
                 .Find(settings.AudioCompressionPreset)?.Id ?? defaults.AudioCompressionPreset,
+            OnlineSource = onlineSource,
+            AggregatorBaseUrl = aggregatorBaseUrl,
+            VideoOutputMode = VideoOutputModes.Normalize(settings.VideoOutputMode),
             Blur = settings.Blur is not null &&
                 double.IsFinite(settings.Blur.Sigma) &&
                 settings.Blur.Sigma is >= 0.01 and <= 1_024 &&
