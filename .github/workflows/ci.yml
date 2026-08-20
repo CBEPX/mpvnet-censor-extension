@@ -187,15 +187,10 @@ jobs:
           -MpvNetPath (Get-ChildItem artifacts/windows/stage/*/mpvnet.com).FullName
           -VerifyAudioWatchdog
 
-      - name: Upload extension build evidence
+      - name: Upload Windows test package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: CensorExtension-windows-x64
+          name: CensorPlayer-windows-x64
           if-no-files-found: error
-          path: |
-            src/Censor.MpvNet.Extension/bin/Release/CensorExtension.dll
-            artifacts/windows/release/CensorPlayer-*-project-source.zip
-            LICENSE
-            THIRD_PARTY_NOTICES.md
-            examples/input.conf
+          path: artifacts/windows/release/*
           retention-days: 30
